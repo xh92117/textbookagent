@@ -11,6 +11,7 @@ from typing import Optional, List
 from agent.protocol import Agent
 from agent.tools import ToolManager
 from common.log import logger
+from common.utils import expand_path
 
 
 class AgentInitializer:

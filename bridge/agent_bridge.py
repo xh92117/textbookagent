@@ -3,6 +3,7 @@ Agent Bridge - Integrates Agent system with existing COW bridge
 """
 
 import os
+import time
 from typing import Optional, List
 
 from agent.protocol import Agent, LLMModel, LLMRequest

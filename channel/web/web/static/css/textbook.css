@@ -76,7 +76,15 @@ select option {
     display: grid;
     grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
     gap: 16px;
+    align-items: start;
     margin-bottom: 20px;
+}
+
+.settings-side-column {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
 }
 
 .settings-block {
@@ -98,6 +106,31 @@ select option {
 
 .settings-block-agent::before {
     background: linear-gradient(90deg, var(--phase-outline), var(--phase-review));
+}
+
+.settings-block-agent {
+    padding: 16px;
+}
+
+.settings-block-agent h3 {
+    margin-bottom: 10px !important;
+}
+
+.settings-block-agent .detail-section {
+    margin-bottom: 10px;
+}
+
+.settings-block-agent .detail-label {
+    margin-bottom: 4px;
+}
+
+.settings-block-agent input[type="number"] {
+    min-height: 34px;
+    padding: 6px 10px !important;
+}
+
+.settings-block-agent .detail-section:last-child {
+    margin-bottom: 0;
 }
 
 .settings-block-workspace::before {
