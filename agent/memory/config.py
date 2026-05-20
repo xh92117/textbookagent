@@ -22,6 +22,8 @@ class MemoryConfig:
     
     # Storage paths (default: ~/cow)
     workspace_root: str = field(default_factory=_default_workspace)
+    # Business workspace indexed by memory. When unset, use workspace_root.
+    project_workspace_root: Optional[str] = None
     
     # Embedding config
     embedding_provider: str = "openai"  # "openai" | "local"
@@ -51,6 +53,10 @@ class MemoryConfig:
     def get_workspace(self) -> Path:
         """Get workspace root directory"""
         return Path(self.workspace_root)
+
+    def get_project_workspace(self) -> Path:
+        """Get business workspace directory used for knowledge/textbook indexing."""
+        return Path(self.project_workspace_root or self.workspace_root)
     
     def get_memory_dir(self) -> Path:
         """Get memory files directory"""

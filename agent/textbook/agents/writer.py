@@ -1,11 +1,16 @@
 from .base import TextbookBaseAgent
 from ..prompts.writer_prompts import WRITER_SYSTEM_PROMPT, WRITER_USER_PROMPT_TEMPLATE
 
+import json
 import re
 
 
 _CHART_MARKER_RE = re.compile(r'\[(?:图表|图|Chart|chart)\s*[:：]\s*([^\]]+?)\]')
 _IMAGE_MARKER_RE = re.compile(r'\[(?:插图|图片|Image|image|Illustration|illustration)\s*[:：]\s*([^\]]+?)\]')
+_VISUAL_JSON_RE = re.compile(
+    r'###\s*VISUAL_ASSETS\s*```(?:json)?\s*([\s\S]*?)```',
+    re.IGNORECASE,
+)
 
 
 class WriterAgent(TextbookBaseAgent):
@@ -39,6 +44,29 @@ class WriterAgent(TextbookBaseAgent):
         img_reqs = []
         seen_charts = set()
         seen_images = set()
+
+        for asset in self._parse_visual_assets(llm_output):
+            asset_type = str(asset.get("type", "")).lower()
+            desc = str(asset.get("description", "")).strip()
+            if not desc:
+                continue
+            if asset_type in ("chart", "diagram", "graph", "table_visual"):
+                if desc not in seen_charts:
+                    chart_reqs.append({
+                        'description': desc,
+                        'chart_type': asset.get('chart_type', 'auto') or 'auto',
+                        'insert_after': asset.get('insert_after', ''),
+                    })
+                    seen_charts.add(desc)
+            elif asset_type in ("image", "illustration", "photo", "screenshot"):
+                if desc not in seen_images:
+                    img_reqs.append({
+                        'description': desc,
+                        'image_type': asset.get('image_type', 'illustration') or 'illustration',
+                        'insert_after': asset.get('insert_after', ''),
+                    })
+                    seen_images.add(desc)
+
         for match in _CHART_MARKER_RE.finditer(content):
             desc = match.group(1).strip()
             if desc and desc not in seen_charts:
@@ -58,3 +86,19 @@ class WriterAgent(TextbookBaseAgent):
             'image_requirements': img_reqs,
             'word_count': len(content),
         }
+
+    def _parse_visual_assets(self, llm_output: str) -> list:
+        match = _VISUAL_JSON_RE.search(llm_output or "")
+        if not match:
+            return []
+        try:
+            payload = json.loads(match.group(1).strip())
+        except Exception:
+            return []
+        if isinstance(payload, dict):
+            assets = payload.get("visual_assets", [])
+        elif isinstance(payload, list):
+            assets = payload
+        else:
+            assets = []
+        return [item for item in assets if isinstance(item, dict)]

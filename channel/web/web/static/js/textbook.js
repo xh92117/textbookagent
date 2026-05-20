@@ -872,6 +872,11 @@ function startChatSSE(requestId, externalAssistantEl, externalBubbleEl, userMess
 
     upsertStatusItem('agent-working', chapterWorkLabel(userMessage), '进行中', '等待模型输出或工具事件...', 'running');
 
+    function isNearBottom(el) {
+        if (!el) return true;
+        return (el.scrollHeight - el.scrollTop - el.clientHeight) < 96;
+    }
+
     function replaceLast(haystack, needle, replacement) {
         var idx = haystack.lastIndexOf(needle);
         if (idx < 0) return haystack;
@@ -887,7 +892,14 @@ function startChatSSE(requestId, externalAssistantEl, externalBubbleEl, userMess
     }
 
     function flushOutput() {
-        var html = frozenHtml;
+        var messages = document.getElementById('chatMessages');
+        var shouldAutoScroll = isNearBottom(messages);
+        var statusHtml = Object.keys(statusItems).map(function(k) { return statusItems[k]; }).join('');
+        var html = '';
+        if (statusHtml) {
+            html += '<div class="agent-status-sticky"><div class="agent-tool-calls agent-status-calls">' + statusHtml + '</div></div>';
+        }
+        html += frozenHtml;
         if (reasoningHtml) {
             html += '<div class="agent-reasoning">' + reasoningHtml + '</div>';
         }
@@ -895,15 +907,13 @@ function startChatSSE(requestId, externalAssistantEl, externalBubbleEl, userMess
             var rendered = renderMarkdown(accumulatedText);
             html += rendered || ('<p>' + escapeHtml(accumulatedText) + '</p>');
         }
-        var statusHtml = Object.keys(statusItems).map(function(k) { return statusItems[k]; }).join('');
-        if (statusHtml || toolCallsHtml) {
-            html += '<div class="agent-tool-calls">' + statusHtml + toolCallsHtml + '</div>';
+        if (toolCallsHtml) {
+            html += '<div class="agent-tool-calls">' + toolCallsHtml + '</div>';
         }
         if (html) {
             bubbleEl.innerHTML = html;
         }
-        var messages = document.getElementById('chatMessages');
-        if (messages) messages.scrollTop = messages.scrollHeight;
+        if (messages && shouldAutoScroll) messages.scrollTop = messages.scrollHeight;
     }
 
     function freezeCurrentOutput() {
@@ -915,14 +925,12 @@ function startChatSSE(requestId, externalAssistantEl, externalBubbleEl, userMess
             var rendered = renderMarkdown(accumulatedText);
             chunk += rendered || ('<p>' + escapeHtml(accumulatedText) + '</p>');
         }
-        var statusHtml = Object.keys(statusItems).map(function(k) { return statusItems[k]; }).join('');
-        if (statusHtml || toolCallsHtml) {
-            chunk += '<div class="agent-tool-calls">' + statusHtml + toolCallsHtml + '</div>';
+        if (toolCallsHtml) {
+            chunk += '<div class="agent-tool-calls">' + toolCallsHtml + '</div>';
         }
         if (chunk) frozenHtml += chunk;
         accumulatedText = '';
         toolCallsHtml = '';
-        statusItems = {};
         reasoningHtml = '';
     }
 
@@ -2128,8 +2136,10 @@ function uploadBookKnowledgeDoc() {
 function loadKnowledgeGraph(bookId, containerId) {
     var container = document.getElementById(containerId);
     if (!container) return;
-    var url = API_BASE + '/api/knowledge/knowledge-graph';
-    if (bookId) url += '?book_id=' + encodeURIComponent(bookId);
+    var params = new URLSearchParams();
+    params.set('limit', '140');
+    if (bookId) params.set('book_id', bookId);
+    var url = API_BASE + '/api/knowledge/knowledge-graph?' + params.toString();
     fetch(url)
         .then(function(r) { return r.json(); })
         .then(function(data) {

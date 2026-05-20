@@ -318,10 +318,12 @@ class MemoryManager:
                 
                 await self._sync_file(file_path, "memory", scope, user_id)
 
+        project_workspace_dir = self.config.get_project_workspace()
+
         # Scan knowledge directory (structured knowledge wiki)
         from config import conf
         if conf().get("knowledge", True):
-            knowledge_dir = Path(workspace_dir) / "knowledge"
+            knowledge_dir = Path(project_workspace_dir) / "knowledge"
             if knowledge_dir.exists():
                 for file_path in knowledge_dir.rglob("*.md"):
                     await self._sync_file(file_path, "knowledge", "shared", None)
@@ -329,7 +331,7 @@ class MemoryManager:
         # Scan textbook truth files and generated chapters. This lets agents
         # recall textbook status/outline/summaries through memory_search
         # without loading the whole workspace into context.
-        textbooks_dir = Path(workspace_dir) / "textbooks"
+        textbooks_dir = Path(project_workspace_dir) / "textbooks"
         if textbooks_dir.exists():
             for file_path in self._iter_textbook_memory_files(textbooks_dir):
                 await self._sync_file(file_path, "textbook", "shared", None)
@@ -363,7 +365,11 @@ class MemoryManager:
         
         # Get relative path
         workspace_dir = self.config.get_workspace()
-        rel_path = file_path.relative_to(workspace_dir).as_posix()
+        try:
+            rel_path = file_path.relative_to(workspace_dir).as_posix()
+        except ValueError:
+            project_workspace_dir = self.config.get_project_workspace()
+            rel_path = file_path.relative_to(project_workspace_dir).as_posix()
         
         # Check if file changed
         stored_hash = self.storage.get_file_hash(rel_path)

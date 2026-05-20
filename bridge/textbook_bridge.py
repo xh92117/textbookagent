@@ -33,51 +33,23 @@ def get_bridge():
 class _LightweightLLM:
     def __init__(self, role: str = "writer"):
         from config import conf
+        from models.model_registry import ModelRegistry
+
         c = conf()
         role = role or "writer"
-        model_key = f"{role}_model" if role in ("review", "image", "knowledge") else "model"
-        bot_type_key = f"{role}_bot_type" if role in ("review", "image", "knowledge") else "bot_type"
-        bot_type = c.get(bot_type_key) or c.get("bot_type", "openai")
-        if bot_type == "openai":
-            bot_type = "chatGPT"
-
-        if bot_type == "custom":
-            api_key = c.get(f"{role}_api_key", "") or c.get("custom_api_key", "")
-            api_base = c.get(f"{role}_api_base", "") or c.get("custom_api_base", "https://api.openai.com/v1")
-        elif bot_type in ("claude", "anthropic", "claudeAPI"):
-            api_key = c.get("claude_api_key", "")
-            api_base = c.get("claude_api_base", "https://api.anthropic.com/v1")
-        elif bot_type == "dashscope":
-            api_key = c.get("dashscope_api_key", "")
-            api_base = c.get("dashscope_api_base", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-        elif bot_type == "deepseek":
-            api_key = c.get("deepseek_api_key", "")
-            api_base = c.get("deepseek_api_base", "https://api.deepseek.com/v1")
-        elif bot_type == "zhipu":
-            api_key = c.get("zhipu_ai_api_key", "")
-            api_base = c.get("zhipu_ai_api_base", "https://open.bigmodel.cn/api/paas/v4")
-        elif bot_type == "qianfan":
-            api_key = c.get("qianfan_api_key", "")
-            api_base = c.get("qianfan_api_base", "https://qianfan.baidubce.com/v2")
-        elif bot_type == "moonshot":
-            api_key = c.get("moonshot_api_key", "")
-            api_base = c.get("moonshot_base_url", "https://api.moonshot.cn/v1")
-        elif bot_type == "doubao":
-            api_key = c.get("ark_api_key", "")
-            api_base = c.get("ark_base_url", "https://ark.cn-beijing.volces.com/api/v3")
-        else:
-            api_key = c.get("open_ai_api_key", "")
-            api_base = c.get("open_ai_api_base", "https://api.openai.com/v1")
-
-        self._model = c.get(model_key) or c.get("model", "gpt-3.5-turbo")
-        self._bot_type = bot_type
+        profile = ModelRegistry(c).resolve(role)
+        self._model = profile.model or c.get("model", "gpt-3.5-turbo")
+        self._bot_type = profile.runtime_bot_type
         self._role = role
-        self._api_key = api_key
-        self._api_base = api_base.rstrip("/")
+        self._api_key = profile.api_key
+        self._api_base = (profile.api_base or "https://api.openai.com/v1").rstrip("/")
         self._proxy = c.get("proxy")
 
         if not self._api_key:
-            logger.warning(f"[TextbookBridge] API key is empty for bot_type={bot_type}, LLM calls will fail")
+            logger.warning(
+                f"[TextbookBridge] API key is empty for role={role}, "
+                f"provider={profile.provider}, model={self._model}; LLM calls will fail"
+            )
 
     def call(self, messages, cancel_event=None, **kwargs):
         logger.info(f"[TextbookBridge] _LightweightLLM.call() invoked, role={self._role}, model={self._model}, api_base={self._api_base}, has_key={bool(self._api_key)}, messages_count={len(messages)}")
@@ -614,9 +586,12 @@ class TextbookBridge:
             if content:
                 for match in re.finditer(r'!\[([^\]]*)\]\(([^)]+)\)', content):
                     img_path = match.group(2)
-                    if os.path.exists(img_path):
-                        resized_path = os.path.join(img_output_dir, os.path.basename(img_path))
-                        ImageHandler.resize_image(img_path, resized_path)
+                    resolved_img_path = img_path
+                    if not re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*:', img_path) and not os.path.isabs(img_path):
+                        resolved_img_path = os.path.join(self._book_dir(book_id), img_path.replace("/", os.sep))
+                    if os.path.exists(resolved_img_path):
+                        resized_path = os.path.join(img_output_dir, os.path.basename(resolved_img_path))
+                        ImageHandler.resize_image(resolved_img_path, resized_path)
                         content = content.replace(img_path, resized_path)
                 converter.convert_markdown(content)
 
@@ -811,14 +786,14 @@ class TextbookBridge:
             parts = []
             outline = mgr.read("outline") or ""
             if outline:
-                parts.append(f"【大纲】\n{outline}")
+                parts.append(f"【大纲】\n{outline[:6000]}")
             chapters = mgr.list_chapters()
             for fname in chapters:
                 try:
                     num = int(fname.replace("chapter_", "").replace(".md", ""))
                     ch_content = mgr.read_chapter(num) or ""
                     if ch_content:
-                        parts.append(f"【第{num}章】\n{ch_content}")
+                        parts.append(f"【第{num}章摘要】\n{self._chapter_review_digest(ch_content)}")
                 except ValueError:
                     pass
             review_content_text = "\n\n".join(parts)
@@ -895,6 +870,28 @@ class TextbookBridge:
             self._save_config(config)
             self.textbooks[book_id] = config
         return {"preferences": preferences}
+
+    def _chapter_review_digest(self, content: str, max_chars: int = 1800) -> str:
+        """Build a bounded chapter digest for full-book review prompts."""
+        text = content or ""
+        heading = ""
+        for line in text.splitlines():
+            if line.startswith("#"):
+                heading = line.strip()
+                break
+        summary = ""
+        match = re.search(r"(?ms)^##\s*本章小结\s*(.*?)(?=^##\s+|\Z)", text)
+        if match:
+            summary = match.group(1).strip()
+        exercises = ""
+        ex_match = re.search(r"(?ms)^##\s*本章习题\s*(.*?)(?=^##\s+|\Z)", text)
+        if ex_match:
+            exercises = ex_match.group(1).strip()
+        body = re.sub(r"```[\s\S]*?```", "[代码示例略]", text)
+        body = re.sub(r"\n{3,}", "\n\n", body).strip()
+        digest_parts = [part for part in [heading, "小结:\n" + summary if summary else "", "习题概览:\n" + exercises[:500] if exercises else "", "正文摘录:\n" + body[:900]] if part]
+        digest = "\n\n".join(digest_parts)
+        return digest[:max_chars].rstrip()
 
     def get_preferences(self, book_id: str) -> dict:
         pref_path = os.path.join(self._book_dir(book_id), "preferences.json")

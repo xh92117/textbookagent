@@ -434,6 +434,9 @@ class AgentStreamExecutor:
                         if is_error:
                             # For errors, provide clear error message
                             result_content = f"Error: {result.get('result', 'Unknown error')}"
+                            error_hint = self._build_error_memory_context()
+                            if error_hint:
+                                result_content += "\n\n" + error_hint
                         elif isinstance(result.get('result'), dict):
                             # For dict results, use JSON format
                             result_content = json.dumps(result.get('result'), ensure_ascii=False)
@@ -1031,6 +1034,12 @@ class AgentStreamExecutor:
                 "execution_time": 0
             }
             self._record_tool_result(tool_name, arguments, False)
+            self._capture_tool_error_memory(
+                tool_name,
+                result["result"],
+                arguments,
+                "parse_error",
+            )
             return result
 
         # Check for consecutive failures (retry protection)
@@ -1053,6 +1062,12 @@ class AgentStreamExecutor:
                     "result": f"{stop_reason}\n\n当前方法行不通，请尝试完全不同的方法或向用户询问更多信息。",
                     "execution_time": 0
                 }
+            self._capture_tool_error_memory(
+                tool_name,
+                result["result"],
+                arguments,
+                "retry_protection",
+            )
             return result
 
         self._emit_event("tool_execution_start", {
@@ -1084,6 +1099,14 @@ class AgentStreamExecutor:
             # Record tool result for failure tracking
             success = result.status == "success"
             self._record_tool_result(tool_name, arguments, success)
+            if not success:
+                self._capture_tool_error_memory(
+                    tool_name,
+                    result.result,
+                    arguments,
+                    "tool_result_error",
+                    execution_time=execution_time,
+                )
 
             # Auto-refresh skills after skill creation
             if tool_name == "bash" and result.status == "success":
@@ -1111,6 +1134,12 @@ class AgentStreamExecutor:
                 "execution_time": 0
             }
             self._record_tool_result(tool_name, arguments, False)
+            self._capture_tool_error_memory(
+                tool_name,
+                str(e),
+                arguments,
+                "exception",
+            )
             
             self._emit_event("tool_execution_end", {
                 "tool_call_id": tool_id,
@@ -1121,6 +1150,43 @@ class AgentStreamExecutor:
             self._record_work_state(tool_name, arguments, "error", str(e))
 
             return error_result
+
+    def _capture_tool_error_memory(
+            self,
+            tool_name: str,
+            detail,
+            arguments: dict,
+            error_type: str,
+            execution_time: float = 0.0,
+    ) -> None:
+        try:
+            from agent.memory import record_tool_error
+
+            record_tool_error(
+                tool_name,
+                detail,
+                {
+                    "tool": tool_name,
+                    "arguments": arguments or {},
+                    "error_type": error_type,
+                    "execution_time": execution_time,
+                    "agent_name": getattr(self.agent, "name", ""),
+                    "model": getattr(self.model, "model", ""),
+                    "session_id": getattr(self.model, "session_id", ""),
+                    "channel_type": getattr(self.model, "channel_type", ""),
+                },
+            )
+        except Exception as exc:
+            logger.debug(f"Tool error memory capture skipped: {exc}")
+
+    def _build_error_memory_context(self) -> str:
+        try:
+            from agent.memory import build_error_memory_context
+
+            return build_error_memory_context(max_items=3, max_detail_chars=220)
+        except Exception as exc:
+            logger.debug(f"Error memory context skipped: {exc}")
+            return ""
 
     def _record_work_state(self, tool_name: str, arguments: dict, status: str, result: str):
         try:

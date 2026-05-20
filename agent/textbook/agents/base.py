@@ -50,6 +50,13 @@ class TextbookBaseAgent(ABC):
                 if result and isinstance(result, str) and result.startswith('[CANCELLED]'):
                     self.emit_event('agent_result', {'status': 'cancelled', 'error': 'LLM call cancelled'})
                     return {'error': 'Cancelled', 'status': 'cancelled'}
+                if not result or not str(result).strip():
+                    error = 'LLM returned empty response'
+                    self.emit_event('agent_result', {'status': 'error', 'error': error})
+                    return {'error': error, 'status': 'failed'}
+                if isinstance(result, str) and result.startswith('[ERROR]'):
+                    self.emit_event('agent_result', {'status': 'error', 'error': result})
+                    return {'error': result, 'status': 'failed'}
                 output = self._parse_output(result, input_data)
                 self.emit_event('agent_result', {'status': 'success', 'output_summary': str(output)[:200]})
                 return output
@@ -78,7 +85,7 @@ class TextbookBaseAgent(ABC):
             except Exception as e:
                 _logger.error(f"[{self.name}] LLM call exception: {e}", exc_info=True)
                 self.emit_event('agent_result', {'status': 'error', 'error': str(e)})
-                return ""
+                return f"[ERROR] LLM call exception: {e}"
         _logger.warning(f"[{self.name}] No LLM model with 'call' method available")
         return ""
 

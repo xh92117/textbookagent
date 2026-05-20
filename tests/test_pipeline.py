@@ -189,6 +189,34 @@ def test_context_builder_keeps_global_outline_and_all_previous_summaries():
         assert "知识库证据" in context
 
 
+def test_context_builder_extracts_chapter_plan():
+    outline = "\n".join([
+        "## 第2章 智能体工具调用",
+        "- 教学目标: 理解工具调用的决策流程",
+        "- 关键结果: 能设计一个可恢复的工具链",
+        "- 认知层次: 分析",
+        "- 前置知识: Python 基础、HTTP API",
+        "- 核心概念: 工具调用、状态机、错误恢复",
+        "### 2.1 工具协议",
+    ])
+
+    plan = ContextPackageBuilder().extract_chapter_plan(outline, 2)
+
+    assert plan.title == "智能体工具调用"
+    assert plan.objective == "理解工具调用的决策流程"
+    assert plan.key_results == "能设计一个可恢复的工具链"
+    assert plan.cognitive_level == "分析"
+    assert "HTTP API" in plan.prerequisites
+    assert plan.key_concepts == ["工具调用", "状态机", "错误恢复"]
+
+
+def test_runner_quality_gate_can_skip_polish():
+    runner = PipelineRunner(llm_model=object())
+
+    assert runner._should_polish_chapter("合格正文" * 200, {"score": 90, "issues": []}, "学术") is False
+    assert runner._should_polish_chapter("正文" * 1000, {"score": 75, "issues": [{"level": "warning"}]}, "学术") is True
+
+
 def test_chapter_orchestrator_plans_semantic_actions_and_checkpoints():
     actions = ChapterOrchestrator().plan(3, outline_text="## 第3章", has_knowledge=True)
     names = [a.name for a in actions]

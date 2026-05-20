@@ -342,6 +342,21 @@ class Agent:
                 # Print tool execution result in the desired format
                 self.output(f"\n🛠️ {tool.name}: {json.dumps(result.result)}")
             else:
+                try:
+                    from agent.memory import record_tool_error
+                    record_tool_error(
+                        tool.name,
+                        result.result,
+                        {
+                            "tool": tool.name,
+                            "arguments": {},
+                            "error_type": "post_process_tool_error",
+                            "execution_time": execution_time,
+                            "agent_name": getattr(self, "name", ""),
+                        },
+                    )
+                except Exception as exc:
+                    logger.debug(f"Post-process tool error memory capture skipped: {exc}")
                 # Print failure in print mode
                 self.output(f"\n🛠️ {tool.name}: {json.dumps({'status': 'error', 'message': str(result.result)})}")
 

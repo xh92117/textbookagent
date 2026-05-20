@@ -1166,6 +1166,10 @@ body {
     flex-shrink: 0;
 }
 
+#view-chat .chat-header {
+    display: none;
+}
+
 .chat-messages {
     flex: 1;
     overflow-y: auto;
@@ -1215,6 +1219,7 @@ body {
     font-size: 13.5px;
     line-height: 1.6;
     max-width: 600px;
+    position: relative;
 }
 
 .chat-msg.user .chat-bubble {
@@ -1651,7 +1656,7 @@ body {
 .attach-menu {
     position: absolute;
     bottom: 100%;
-    left: 0;
+    right: 50px;
     margin-bottom: 8px;
     background: white;
     border: 1px solid var(--border, #e2e8f0);
@@ -1660,6 +1665,21 @@ body {
     padding: 4px;
     z-index: 100;
     min-width: 160px;
+}
+
+.agent-status-sticky {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    margin: -14px -18px 12px;
+    padding: 0 0 8px;
+    background: linear-gradient(180deg, var(--card) 0%, var(--card) 78%, transparent 100%);
+}
+
+.agent-status-sticky .agent-tool-calls {
+    margin: 0;
+    border-radius: var(--radius-md);
+    box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
 }
 
 .attach-menu.hidden {

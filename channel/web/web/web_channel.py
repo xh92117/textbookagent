@@ -1027,6 +1027,7 @@ class StreamHandler:
 
 class ChatHandler:
     def GET(self):
+        web.header('Content-Type', 'text/html; charset=utf-8')
         web.header('Cache-Control', 'no-cache, no-store, must-revalidate')
         web.header('Pragma', 'no-cache')
         file_path = os.path.join(os.path.dirname(__file__), 'chat.html')
@@ -1040,10 +1041,16 @@ class ChatHandler:
 
 class TextbookPageHandler:
     def GET(self):
+        web.header('Content-Type', 'text/html; charset=utf-8')
         web.header('Cache-Control', 'no-cache, no-store, must-revalidate')
+        web.header('Pragma', 'no-cache')
         file_path = os.path.join(os.path.dirname(__file__), 'textbook.html')
         with open(file_path, 'r', encoding='utf-8') as f:
-            return f.read()
+            html = f.read()
+        cache_bust = str(int(time.time()))
+        html = html.replace('assets/js/textbook.js', f'assets/js/textbook.js?v={cache_bust}')
+        html = html.replace('assets/css/textbook.css', f'assets/css/textbook.css?v={cache_bust}')
+        return html
 
 
 class ConfigHandler:
@@ -1213,11 +1220,15 @@ class ConfigHandler:
         return pinfo.get("api_key_field"), pinfo.get("api_base_key")
 
     def _runtime_bot_type_for_model(self, model_item: dict) -> str:
-        provider = model_item.get("provider", "")
-        api_base = (model_item.get("api_base") or "").lower()
-        if provider == "dashscope" and api_base:
-            return "custom"
-        return self._provider_to_bot_type(provider)
+        try:
+            from models.model_registry import ModelRegistry
+
+            return ModelRegistry._runtime_bot_type(
+                model_item.get("provider", ""),
+                model_item.get("api_base", ""),
+            )
+        except Exception:
+            return self._provider_to_bot_type(model_item.get("provider", ""))
 
     def _configured_chat_models(self, local_config: dict) -> list:
         models = local_config.get("ai_chat_models")
@@ -1380,13 +1391,21 @@ class ConfigHandler:
                     if not model_name:
                         continue
                     item_id = str(raw.get("id") or uuid.uuid4().hex[:10])
-                    clean_models.append({
+                    clean_item = {
                         "id": item_id,
                         "name": str(raw.get("name") or model_name).strip(),
                         "provider": provider,
                         "model": model_name,
                         "api_base": str(raw.get("api_base", "") or "").strip(),
-                    })
+                    }
+                    raw_key = str(raw.get("api_key", "") or "").strip()
+                    # Preserve model-instance credentials when the UI sends a
+                    # real key. Ignore masked display values such as sk-***1234.
+                    if raw_key and "*" not in raw_key:
+                        clean_item["api_key"] = raw_key
+                    elif item_id in old_by_id and old_by_id[item_id].get("api_key"):
+                        clean_item["api_key"] = old_by_id[item_id]["api_key"]
+                    clean_models.append(clean_item)
                 local_config["ai_chat_models"] = clean_models
                 applied["ai_chat_models"] = clean_models
 
@@ -2800,9 +2819,16 @@ class KnowledgeGraphHandler:
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.knowledge.service import KnowledgeService
-            params = web.input(book_id='')
+            params = web.input(book_id='', limit='140', focus_id='', depth='1', query='', min_confidence='0')
             svc = KnowledgeService(_get_workspace_root())
-            return json.dumps(svc.build_graph(book_id=params.book_id), ensure_ascii=False)
+            return json.dumps(svc.build_graph(
+                book_id=params.book_id,
+                limit=int(params.limit or 140),
+                focus_id=params.focus_id,
+                depth=int(params.depth or 1),
+                query=params.query,
+                min_confidence=float(params.min_confidence or 0),
+            ), ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Knowledge graph error: {e}")
             return json.dumps({"nodes": [], "links": []})
@@ -3026,9 +3052,16 @@ class KnowledgeKnowledgeGraphHandler:
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.knowledge.service import KnowledgeService
-            params = web.input(book_id='')
+            params = web.input(book_id='', limit='140', focus_id='', depth='1', query='', min_confidence='0')
             svc = KnowledgeService(_get_workspace_root())
-            result = svc.get_knowledge_graph(book_id=params.book_id)
+            result = svc.get_knowledge_graph(
+                book_id=params.book_id,
+                limit=int(params.limit or 140),
+                focus_id=params.focus_id,
+                depth=int(params.depth or 1),
+                query=params.query,
+                min_confidence=float(params.min_confidence or 0),
+            )
             return json.dumps({"status": "success", **result}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Knowledge knowledge-graph error: {e}")

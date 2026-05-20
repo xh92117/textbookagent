@@ -443,6 +443,16 @@ class AgentBridge:
             except Exception as mem_err:
                 logger.debug(f"[AgentBridge] realtime process memory start skipped: {mem_err}")
 
+            try:
+                from agent.memory import record_user_correction_if_needed
+                record_user_correction_if_needed(query, {
+                    "session_id": session_id or "default",
+                    "channel_type": (context.get("channel_type") or "") if context else "",
+                    "source": "agent_bridge",
+                })
+            except Exception as mem_err:
+                logger.debug(f"[AgentBridge] user correction memory skipped: {mem_err}")
+
             def process_event_handler(event):
                 event_handler.handle_event(event)
                 if not process_recorder:
@@ -544,6 +554,16 @@ class AgentBridge:
                     process_recorder.finish_process(process_id, status="error", error=str(e))
             except Exception:
                 pass
+            try:
+                from agent.memory import record_agent_error
+                record_agent_error(str(e), {
+                    "session_id": session_id or "default",
+                    "channel_type": (context.get("channel_type") or "") if context else "",
+                    "source": "agent_bridge",
+                    "query": query[:1000] if isinstance(query, str) else "",
+                })
+            except Exception as mem_err:
+                logger.debug(f"[AgentBridge] agent error memory skipped: {mem_err}")
             # If the agent cleared its messages due to format error / overflow,
             # also purge the DB so the next request starts clean.
             if session_id and agent:

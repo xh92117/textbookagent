@@ -58,6 +58,7 @@ class AgentInitializer:
         
         # Initialize workspace
         from agent.prompt import ensure_workspace, load_context_files, PromptBuilder
+        from agent.prompt.builder import ContextFile
         workspace_files = ensure_workspace(workspace_root, create_templates=True)
         
         if session_id is None:
@@ -72,8 +73,15 @@ class AgentInitializer:
         # Initialize scheduler if needed
         self._initialize_scheduler(tools, session_id)
         
-        # Load context files
-        context_files = load_context_files(workspace_root)
+        # Load project context files. Long-term memory is injected as a
+        # compact one-time bootstrap, not by loading all memory files.
+        context_files = load_context_files(
+            workspace_root,
+            files_to_load=["AGENT.md", "USER.md", "RULE.md", "BOOTSTRAP.md"],
+        )
+        memory_bootstrap = self._build_memory_bootstrap_context(workspace_root, session_id)
+        if memory_bootstrap:
+            context_files.append(ContextFile(path="SYSTEM_MEMORY_BOOTSTRAP.md", content=memory_bootstrap))
         
         # Initialize skill manager
         skill_manager = self._initialize_skill_manager(workspace_root, session_id)
@@ -269,9 +277,10 @@ class AgentInitializer:
         memory_tools = []
         
         try:
-            from agent.memory import MemoryManager, MemoryConfig, create_embedding_provider
+            from agent.memory import MemoryManager, MemoryConfig, create_embedding_provider, set_global_memory_config
             from agent.tools import MemorySearchTool, MemoryGetTool
             from config import conf
+            from common.app_paths import system_dir
             
             # Initialize embedding provider (prefer OpenAI, fallback to LinkAI)
             embedding_provider = None
@@ -308,7 +317,16 @@ class AgentInitializer:
                         logger.warning(f"[AgentInitializer] LinkAI embedding failed: {e}")
             
             # Create memory manager
-            memory_config = MemoryConfig(workspace_root=workspace_root)
+            memory_config = MemoryConfig(
+                workspace_root=system_dir(),
+                project_workspace_root=workspace_root,
+            )
+            set_global_memory_config(memory_config)
+            try:
+                from agent.memory import MemoryBootstrap
+                MemoryBootstrap(system_dir(), project_workspace=workspace_root).ensure_layout()
+            except Exception as e:
+                logger.debug(f"[AgentInitializer] Memory bootstrap layout skipped: {e}")
             memory_manager = MemoryManager(memory_config, embedding_provider=embedding_provider)
             
             # Sync memory
@@ -327,6 +345,16 @@ class AgentInitializer:
             logger.warning(f"[AgentInitializer] Memory system not available: {e}")
         
         return memory_manager, memory_tools
+
+    def _build_memory_bootstrap_context(self, workspace_root: str, session_id: Optional[str] = None) -> str:
+        try:
+            from agent.memory import MemoryBootstrap
+            from common.app_paths import system_dir
+            bootstrap = MemoryBootstrap(system_dir(), project_workspace=workspace_root)
+            return bootstrap.build_startup_context(session_id=session_id or "")
+        except Exception as e:
+            logger.warning(f"[AgentInitializer] Failed to build memory bootstrap: {e}")
+            return ""
     
     def _sync_memory(self, memory_manager, session_id: Optional[str] = None):
         """Sync memory database"""

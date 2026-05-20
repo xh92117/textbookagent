@@ -94,7 +94,15 @@ class KnowledgeService:
             content = f.read()
         return {"content": content, "path": rel_path}
 
-    def build_graph(self, book_id: str = "") -> dict:
+    def build_graph(
+        self,
+        book_id: str = "",
+        limit: int = 140,
+        focus_id: str = "",
+        depth: int = 1,
+        query: str = "",
+        min_confidence: float = 0.0,
+    ) -> dict:
         base = self._resolve_book_dir(book_id)
         knowledge_path = Path(base)
         if not knowledge_path.is_dir():
@@ -105,7 +113,16 @@ class KnowledgeService:
                 with open(wiki_graph, "r", encoding="utf-8") as f:
                     graph = json.load(f)
                 edges = graph.get("edges") or graph.get("links") or []
-                return {"nodes": graph.get("nodes", []), "edges": edges, "links": edges}
+                return self._project_graph(
+                    graph.get("nodes", []),
+                    edges,
+                    limit=limit,
+                    focus_id=focus_id,
+                    depth=depth,
+                    query=query,
+                    min_confidence=min_confidence,
+                    include_links=True,
+                )
             except Exception:
                 pass
         nodes = {}
@@ -143,7 +160,16 @@ class KnowledgeService:
             if key not in seen:
                 seen.add(key)
                 deduped.append(l)
-        return {"nodes": list(nodes.values()), "edges": deduped, "links": deduped}
+        return self._project_graph(
+            list(nodes.values()),
+            deduped,
+            limit=limit,
+            focus_id=focus_id,
+            depth=depth,
+            query=query,
+            min_confidence=min_confidence,
+            include_links=True,
+        )
 
     def upload_document(self, source_path: str, category: str = "sources", book_id: str = "") -> dict:
         if not source_path or ".." in source_path:
@@ -1742,7 +1768,15 @@ class KnowledgeService:
             logger.warning(f"[KnowledgeService] failed to write cross references: {e}")
         return len(edges)
 
-    def build_knowledge_graph(self, book_id: str = "") -> dict:
+    def build_knowledge_graph(
+        self,
+        book_id: str = "",
+        limit: int = 140,
+        focus_id: str = "",
+        depth: int = 1,
+        query: str = "",
+        min_confidence: float = 0.0,
+    ) -> dict:
         base = self._resolve_book_dir(book_id)
         knowledge_path = Path(base)
         if not knowledge_path.is_dir():
@@ -1751,7 +1785,16 @@ class KnowledgeService:
         if os.path.isfile(wiki_graph):
             try:
                 with open(wiki_graph, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    graph = json.load(f)
+                    return self._project_graph(
+                        graph.get("nodes", []),
+                        graph.get("edges") or graph.get("links") or [],
+                        limit=limit,
+                        focus_id=focus_id,
+                        depth=depth,
+                        query=query,
+                        min_confidence=min_confidence,
+                    )
             except Exception:
                 pass
         nodes = []
@@ -1828,10 +1871,150 @@ class KnowledgeService:
                             edges.append({"source": source_id, "target": target_id, "label": "引用"})
             except Exception:
                 pass
-        return {"nodes": nodes, "edges": edges}
+        return self._project_graph(
+            nodes,
+            edges,
+            limit=limit,
+            focus_id=focus_id,
+            depth=depth,
+            query=query,
+            min_confidence=min_confidence,
+        )
 
-    def get_knowledge_graph(self, book_id: str = "") -> dict:
-        return self.build_knowledge_graph(book_id)
+    def get_knowledge_graph(
+        self,
+        book_id: str = "",
+        limit: int = 140,
+        focus_id: str = "",
+        depth: int = 1,
+        query: str = "",
+        min_confidence: float = 0.0,
+    ) -> dict:
+        return self.build_knowledge_graph(
+            book_id=book_id,
+            limit=limit,
+            focus_id=focus_id,
+            depth=depth,
+            query=query,
+            min_confidence=min_confidence,
+        )
+
+    def _project_graph(
+        self,
+        nodes: list,
+        edges: list,
+        limit: int = 140,
+        focus_id: str = "",
+        depth: int = 1,
+        query: str = "",
+        min_confidence: float = 0.0,
+        include_links: bool = False,
+    ) -> dict:
+        """Return a small graph projection suitable for interactive UI rendering."""
+        limit = max(20, min(int(limit or 140), 500))
+        depth = max(1, min(int(depth or 1), 3))
+        node_map = {str(n.get("id", "")): n for n in (nodes or []) if n.get("id")}
+        filtered_edges = []
+        for edge in edges or []:
+            source = str(edge.get("source", ""))
+            target = str(edge.get("target", ""))
+            if source not in node_map or target not in node_map or source == target:
+                continue
+            try:
+                confidence = float(edge.get("confidence", 1.0))
+            except Exception:
+                confidence = 1.0
+            if confidence < min_confidence:
+                continue
+            filtered_edges.append(edge)
+
+        adjacency = {}
+        degree = {node_id: 0 for node_id in node_map}
+        for edge in filtered_edges:
+            source = str(edge.get("source", ""))
+            target = str(edge.get("target", ""))
+            adjacency.setdefault(source, set()).add(target)
+            adjacency.setdefault(target, set()).add(source)
+            degree[source] = degree.get(source, 0) + 1
+            degree[target] = degree.get(target, 0) + 1
+
+        selected_ids = set()
+        query = (query or "").strip().lower()
+        if focus_id and focus_id in node_map:
+            frontier = {focus_id}
+            selected_ids.add(focus_id)
+            for _ in range(depth):
+                next_frontier = set()
+                for node_id in frontier:
+                    next_frontier.update(adjacency.get(node_id, set()))
+                selected_ids.update(next_frontier)
+                frontier = next_frontier
+        elif query:
+            for node_id, node in node_map.items():
+                haystack = " ".join(
+                    str(node.get(k, "")) for k in ("id", "label", "name", "category", "summary")
+                ).lower()
+                if query in haystack:
+                    selected_ids.add(node_id)
+                    selected_ids.update(adjacency.get(node_id, set()))
+        else:
+            ranked = sorted(
+                node_map.keys(),
+                key=lambda node_id: (
+                    degree.get(node_id, 0),
+                    1 if str(node_map[node_id].get("category", "")).lower() in ("page", "chunk") else 0,
+                    str(node_map[node_id].get("label", node_id)),
+                ),
+                reverse=True,
+            )
+            selected_ids.update(ranked[:limit])
+
+        if len(selected_ids) > limit:
+            selected_ids = set(
+                sorted(
+                    selected_ids,
+                    key=lambda node_id: (degree.get(node_id, 0), str(node_map[node_id].get("label", node_id))),
+                    reverse=True,
+                )[:limit]
+            )
+
+        projected_edges = [
+            edge for edge in filtered_edges
+            if str(edge.get("source", "")) in selected_ids and str(edge.get("target", "")) in selected_ids
+        ]
+        projected_nodes = []
+        for node_id in selected_ids:
+            node = dict(node_map[node_id])
+            node["degree"] = degree.get(node_id, 0)
+            if len(str(node.get("summary", ""))) > 240:
+                node["summary"] = str(node.get("summary", ""))[:240].rstrip() + "..."
+            projected_nodes.append(node)
+        projected_nodes.sort(key=lambda n: (n.get("degree", 0), str(n.get("label", n.get("id", "")))), reverse=True)
+
+        category_counts = {}
+        for node in nodes or []:
+            category = node.get("category") or node.get("type") or "node"
+            category_counts[category] = category_counts.get(category, 0) + 1
+        clusters = [
+            {"category": category, "count": count}
+            for category, count in sorted(category_counts.items(), key=lambda item: item[1], reverse=True)
+        ]
+
+        result = {
+            "nodes": projected_nodes,
+            "edges": projected_edges,
+            "total_nodes": len(node_map),
+            "total_edges": len(filtered_edges),
+            "returned_nodes": len(projected_nodes),
+            "returned_edges": len(projected_edges),
+            "has_more": len(node_map) > len(projected_nodes),
+            "mode": "focus" if focus_id else ("search" if query else "summary"),
+            "focus_id": focus_id,
+            "clusters": clusters[:20],
+        }
+        if include_links:
+            result["links"] = projected_edges
+        return result
 
     def link_to_skill(self, skill_name: str, source_paths: list) -> dict:
         if not skill_name or ".." in skill_name or "/" in skill_name or "\\" in skill_name:

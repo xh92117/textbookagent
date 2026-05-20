@@ -59,6 +59,16 @@ class ChatService:
         except Exception as e:
             logger.debug(f"[ChatService] realtime process memory start skipped: {e}")
 
+        try:
+            from agent.memory import record_user_correction_if_needed
+            record_user_correction_if_needed(query, {
+                "session_id": session_id,
+                "channel_type": channel_type,
+                "source": "chat_service",
+            })
+        except Exception as e:
+            logger.debug(f"[ChatService] user correction memory skipped: {e}")
+
         # State shared between the event callback and this method
         state = _StreamState()
 
@@ -212,6 +222,16 @@ class ChatService:
                     logger.info("[ChatService] Cleared agent message history after executor recovery")
             if process_recorder:
                 process_recorder.finish_process(process_id, status="error", error="Agent execution failed")
+            try:
+                from agent.memory import record_agent_error
+                record_agent_error("Agent execution failed", {
+                    "session_id": session_id,
+                    "channel_type": channel_type,
+                    "source": "chat_service",
+                    "query": query[:1000] if isinstance(query, str) else "",
+                })
+            except Exception as e:
+                logger.debug(f"[ChatService] agent error memory skipped: {e}")
             raise
 
         # Sync executor messages back to agent (thread-safe).

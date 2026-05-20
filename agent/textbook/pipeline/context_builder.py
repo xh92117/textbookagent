@@ -1,6 +1,22 @@
 import os
 import re
-from typing import Dict
+from dataclasses import dataclass, field
+from typing import Dict, List
+
+
+@dataclass
+class ChapterPlan:
+    number: int
+    title: str = ""
+    objective: str = ""
+    key_results: str = ""
+    cognitive_level: str = ""
+    prerequisites: str = ""
+    key_concepts: List[str] = field(default_factory=list)
+    raw_outline: str = ""
+
+    def key_concepts_text(self) -> str:
+        return "、".join(self.key_concepts)
 
 
 class ContextPackageBuilder:
@@ -91,6 +107,56 @@ class ContextPackageBuilder:
         next_match = re.search(r"(?m)^##\s*(?:第\s*\d+\s*章|第[一二三四五六七八九十百]+章|Chapter\s+\d+\b)", outline_text[start + 1:], re.I)
         end = start + 1 + next_match.start() if next_match else len(outline_text)
         return outline_text[start:end].strip()
+
+    def extract_chapter_plan(self, outline_text: str, chapter_number: int) -> ChapterPlan:
+        raw = self._current_chapter_outline(outline_text, chapter_number)
+        plan = ChapterPlan(number=chapter_number, raw_outline=raw)
+        if not raw:
+            plan.title = f"第{chapter_number}章"
+            return plan
+
+        lines = [line.rstrip() for line in raw.splitlines()]
+        heading = next((line.strip() for line in lines if line.lstrip().startswith("##")), "")
+        if heading:
+            title = re.sub(r"^#+\s*", "", heading).strip()
+            title = re.sub(rf"^第\s*{chapter_number}\s*章\s*[:：、.-]?\s*", "", title).strip() or title
+            title = re.sub(rf"^Chapter\s+{chapter_number}\b\s*[:：、.-]?\s*", "", title, flags=re.I).strip() or title
+            plan.title = title
+        else:
+            plan.title = f"第{chapter_number}章"
+
+        field_patterns = {
+            "objective": ("教学目标", "学习目标", "目标"),
+            "key_results": ("关键结果", "学习成果", "预期成果", "产出"),
+            "cognitive_level": ("认知层次", "能力层次", "布鲁姆"),
+            "prerequisites": ("前置知识", "先修知识", "基础要求"),
+            "key_concepts": ("核心概念", "关键概念", "重点概念", "术语"),
+        }
+        for line in lines:
+            stripped = line.strip().lstrip("-*0123456789.、 ").strip()
+            for field_name, labels in field_patterns.items():
+                label_re = "|".join(re.escape(label) for label in labels)
+                match = re.match(rf"^(?:{label_re})\s*[:：]\s*(.+)$", stripped)
+                if not match:
+                    continue
+                value = match.group(1).strip()
+                if field_name == "key_concepts":
+                    plan.key_concepts.extend(self._split_concepts(value))
+                else:
+                    setattr(plan, field_name, value)
+
+        if not plan.key_concepts:
+            concept_terms = []
+            for line in lines:
+                for match in re.finditer(r"\*\*([^*]{2,30})\*\*", line):
+                    concept_terms.append(match.group(1).strip())
+            plan.key_concepts = list(dict.fromkeys(concept_terms))[:12]
+        return plan
+
+    @staticmethod
+    def _split_concepts(value: str) -> List[str]:
+        parts = re.split(r"[、,，;/；]\s*", value or "")
+        return [p.strip(" -_*`") for p in parts if p.strip(" -_*`")][:20]
 
     def _previous_summaries(self, book_id: str, chapter_number: int) -> str:
         mgr = self._truth(book_id)

@@ -115,6 +115,28 @@ def test_agent_no_llm():
     assert result['status'] == 'no_llm'
 
 
+def test_agent_empty_llm_response_is_failed():
+    class EmptyLLM:
+        def call(self, messages, cancel_event=None):
+            return ""
+
+    agent = OutlinerAgent(llm_model=EmptyLLM())
+    result = asyncio.run(agent.run({'title': '测试'}))
+    assert result['status'] == 'failed'
+    assert 'empty response' in result['error']
+
+
+def test_agent_error_response_is_failed():
+    class ErrorLLM:
+        def call(self, messages, cancel_event=None):
+            return "[ERROR] upstream failed"
+
+    agent = OutlinerAgent(llm_model=ErrorLLM())
+    result = asyncio.run(agent.run({'title': '测试'}))
+    assert result['status'] == 'failed'
+    assert 'upstream failed' in result['error']
+
+
 def test_agent_emit_event():
     events = []
 

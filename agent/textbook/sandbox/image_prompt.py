@@ -190,6 +190,16 @@ class ImagePromptEngineer:
 
     def _resolve_image_model_config(self) -> dict:
         try:
+            from models.model_registry import ModelRegistry
+
+            profile = ModelRegistry().resolve("image")
+            if profile.model:
+                return {
+                    "provider": profile.provider,
+                    "model": profile.model,
+                    "api_key": profile.api_key,
+                    "api_base": profile.api_base,
+                }
             from config import conf
             c = conf()
         except Exception:

@@ -89,8 +89,12 @@ class MemoryGetTool(BaseTool):
             if not normalized_path.startswith(root_prefixes) and not is_absolute and path != 'MEMORY.md':
                 path = f'memory/{path}'
             
-            file_path = Path(path).resolve() if is_absolute else (workspace_dir / path).resolve()
-            workspace_resolved = workspace_dir.resolve()
+            base_dir = workspace_dir
+            if normalized_path.startswith(('knowledge/', 'textbooks/')) and hasattr(self.memory_manager.config, "get_project_workspace"):
+                base_dir = self.memory_manager.config.get_project_workspace()
+
+            file_path = Path(path).resolve() if is_absolute else (base_dir / path).resolve()
+            workspace_resolved = base_dir.resolve()
             
             try:
                 file_path.relative_to(workspace_resolved)

@@ -123,6 +123,23 @@ class PipelineRunner:
         except Exception:
             return ""
 
+    def _chapter_retrieval_query(self, book_config: TextbookConfig, chapter_number: int, outline_text: str) -> str:
+        """Build a compact retrieval query without dumping the whole outline."""
+        current = ContextPackageBuilder()._current_chapter_outline(outline_text, chapter_number)
+        current = re.sub(r"\s+", " ", current or "").strip()
+        if len(current) > 1200:
+            current = current[:1200].rstrip() + "..."
+        return " ".join(
+            part for part in [
+                book_config.title,
+                book_config.subject,
+                book_config.level,
+                f"第{chapter_number}章",
+                current,
+            ]
+            if part
+        )
+
     def _read_wiki_chunk_excerpt(self, wiki_dir: str, rel_path: str, max_chars: int = 900) -> str:
         if not rel_path or ".." in rel_path:
             return ""
@@ -170,6 +187,26 @@ class PipelineRunner:
             self._emit('pipeline_error', {'phase': phase, 'error': 'Cancelled'})
             return True
         return False
+
+    def _ensure_agent_result(self, result: dict, agent_name: str, phase: str):
+        status = (result or {}).get("status", "")
+        if status in ("failed", "cancelled"):
+            error = (result or {}).get("error", f"{agent_name} failed")
+            raise RuntimeError(f"{phase}: {agent_name} failed: {error}")
+        return result or {}
+
+    def _should_polish_chapter(self, content: str, review_result: dict, style: str) -> bool:
+        """Skip an expensive polish pass when the chapter already passed cleanly."""
+        if not self.llm_model:
+            return False
+        score = review_result.get("score", 0) or 0
+        issues = review_result.get("issues") or []
+        has_non_info_issue = any(str(issue.get("level", "")).lower() in ("critical", "warning") for issue in issues if isinstance(issue, dict))
+        if score >= 88 and not has_non_info_issue:
+            return False
+        if len(content or "") < 1200 and score >= 82 and not has_non_info_issue:
+            return False
+        return True
 
     async def run_full_pipeline(self, book_config: TextbookConfig, requirement: str = "", resume_from: str = "") -> dict:
         self.pipeline_id = str(uuid.uuid4())
@@ -225,6 +262,7 @@ class PipelineRunner:
                     part for part in [book_config.curriculum_standard, research_evidence] if part
                 ),
             })
+            outline_result = self._ensure_agent_result(outline_result, "OutlinerAgent", "outline")
             results['outline'] = outline_result
             self._emit('phase_complete', {'phase': 'outline', 'result_summary': '大纲生成完成'})
 
@@ -251,6 +289,7 @@ class PipelineRunner:
                 'content': outline_text,
                 'outline_context': '',
             })
+            review_result = self._ensure_agent_result(review_result, "ReviewerAgent", "review_outline")
             results['review_outline'] = review_result
             self._emit('phase_complete', {'phase': 'review_outline', 'score': review_result.get('score', 0)})
 
@@ -264,6 +303,12 @@ class PipelineRunner:
         workspace_root = getattr(self.memory_manager, "workspace_root", self.memory_manager.workspace_dir) if self.memory_manager else os.path.dirname(os.path.dirname(book_dir))
         persistence = ChapterPersistence(book_dir) if book_dir else None
         context_builder = ContextPackageBuilder(self.memory_manager)
+        if book_config.chapter_word_count:
+            scale = 0.85 if book_config.chapter_word_count <= 3000 else 1.15 if book_config.chapter_word_count >= 8000 else 1.0
+            context_builder.budgets = {
+                key: max(800, int(value * scale))
+                for key, value in context_builder.budgets.items()
+            }
         orchestrator = ChapterOrchestrator()
         checkpoint_store = PipelineCheckpointStore(book_dir) if book_dir else None
 
@@ -312,7 +357,7 @@ class PipelineRunner:
             })
 
             terminology = self.memory_manager.get_terminology(book_id) if self.memory_manager else {}
-            chapter_hint = f"{book_config.title} {book_config.subject} chapter {i} {outline_text}"
+            chapter_hint = self._chapter_retrieval_query(book_config, i, outline_text)
             PipelineCheckpointStore.mark(actions, "read_outline", "completed", "outline loaded")
             if checkpoint_store:
                 checkpoint_store.save(i, actions, {"stage": "read_outline"})
@@ -349,6 +394,7 @@ class PipelineRunner:
                 "pipeline_id": self.pipeline_id,
                 "context_chars": len(context_package),
             })
+            chapter_plan = context_builder.extract_chapter_plan(outline_text, i)
 
             if await self._check_pause_cancel('compose', {}):
                 break
@@ -363,16 +409,17 @@ class PipelineRunner:
             PipelineCheckpointStore.mark(actions, "write_chapter", "running")
             write_result = await self.writer.run({
                 'chapter_number': i,
-                'chapter_title': f'第{i}章',
-                'objective': '',
-                'key_results': '',
-                'cognitive_level': '应用',
-                'prerequisites': '',
-                'key_concepts': '',
+                'chapter_title': chapter_plan.title or f'第{i}章',
+                'objective': chapter_plan.objective,
+                'key_results': chapter_plan.key_results,
+                'cognitive_level': chapter_plan.cognitive_level or '应用',
+                'prerequisites': chapter_plan.prerequisites,
+                'key_concepts': chapter_plan.key_concepts_text(),
                 'target_words': book_config.chapter_word_count,
                 'context': context_package,
                 'terminology': terminology,
             })
+            write_result = self._ensure_agent_result(write_result, "WriterAgent", "write_chapter")
             PipelineCheckpointStore.mark(actions, "write_chapter", "completed", f"{len(write_result.get('content', ''))} chars")
             if checkpoint_store:
                 checkpoint_store.save(i, actions, {"stage": "write_chapter"})
@@ -384,6 +431,7 @@ class PipelineRunner:
             chart_reqs = write_result.get('chart_requirements', [])
             image_reqs = write_result.get('image_requirements', [])
             chart_files = {}
+            visual_decisions = []
             PipelineCheckpointStore.mark(actions, "route_visual_assets", "running")
             if (chart_reqs or image_reqs) and book_dir:
                 router = VisualAssetRouter(
@@ -394,6 +442,7 @@ class PipelineRunner:
                 for idx, req in enumerate(chart_reqs, start=1):
                     desc = req.get('description', '')
                     decision = router.resolve_chart(desc, i, idx, chart_type=req.get('chart_type', 'auto'))
+                    visual_decisions.append(decision.__dict__)
                     if decision.status == 'success' and decision.path:
                         chart_files[desc] = decision.path
                     else:
@@ -401,13 +450,18 @@ class PipelineRunner:
                 for idx, req in enumerate(image_reqs, start=1):
                     desc = req.get('description', '')
                     decision = router.resolve_image(desc, i, idx, image_type=req.get('image_type', 'illustration'))
+                    visual_decisions.append(decision.__dict__)
                     if decision.status == 'success' and decision.path:
                         chart_files[desc] = decision.path
                     else:
                         logger.warning(f"Visual image routing failed for chapter {i}: {desc} - {decision.reason}")
             PipelineCheckpointStore.mark(actions, "route_visual_assets", "completed", f"{len(chart_files)} assets")
             if checkpoint_store:
-                checkpoint_store.save(i, actions, {"stage": "route_visual_assets", "asset_count": len(chart_files)})
+                checkpoint_store.save(i, actions, {
+                    "stage": "route_visual_assets",
+                    "asset_count": len(chart_files),
+                    "visual_decisions": visual_decisions,
+                })
             update_book_status(i, "route_visual_assets", "running", {
                 "pipeline_id": self.pipeline_id,
                 "asset_count": len(chart_files),
@@ -451,6 +505,7 @@ class PipelineRunner:
                 'content': write_result.get('content', ''),
                 'outline_context': outline_text,
             })
+            chapter_review = self._ensure_agent_result(chapter_review, "ReviewerAgent", "review_chapter")
             PipelineCheckpointStore.mark(actions, "review_chapter", "completed", f"score={chapter_review.get('score', 0)}")
             if checkpoint_store:
                 checkpoint_store.save(i, actions, {"stage": "review_chapter", "score": chapter_review.get('score', 0)})
@@ -478,6 +533,7 @@ class PipelineRunner:
                     'mode': 'spot-fix',
                     'chapter_number': i,
                 })
+                revise_result = self._ensure_agent_result(revise_result, "ReviserAgent", "revise_chapter")
                 content = revise_result.get('revised_content', content)
                 PipelineCheckpointStore.mark(actions, "revise_chapter", "completed", f"{len(content)} chars")
             else:
@@ -485,21 +541,26 @@ class PipelineRunner:
             if checkpoint_store:
                 checkpoint_store.save(i, actions, {"stage": "revise_chapter"})
 
-            self._emit('phase_progress', {
-                'phase': 'revise',
-                'current_item': i,
-                'total_items': total_chapters,
-                'item_label': f'第{i}章 润色',
-            })
+            if self._should_polish_chapter(content, chapter_review, book_config.style):
+                self._emit('phase_progress', {
+                    'phase': 'revise',
+                    'current_item': i,
+                    'total_items': total_chapters,
+                    'item_label': f'第{i}章 润色',
+                })
 
-            PipelineCheckpointStore.mark(actions, "polish_chapter", "running")
-            polish_result = await self.polisher.run({
-                'content': content,
-                'style': book_config.style,
-                'chapter_number': i,
-            })
-            final_content = polish_result.get('polished_content', content)
-            PipelineCheckpointStore.mark(actions, "polish_chapter", "completed", f"{len(final_content)} chars")
+                PipelineCheckpointStore.mark(actions, "polish_chapter", "running")
+                polish_result = await self.polisher.run({
+                    'content': content,
+                    'style': book_config.style,
+                    'chapter_number': i,
+                })
+                polish_result = self._ensure_agent_result(polish_result, "PolisherAgent", "polish_chapter")
+                final_content = polish_result.get('polished_content', content)
+                PipelineCheckpointStore.mark(actions, "polish_chapter", "completed", f"{len(final_content)} chars")
+            else:
+                final_content = content
+                PipelineCheckpointStore.mark(actions, "polish_chapter", "skipped", "review quality gate passed")
             if checkpoint_store:
                 checkpoint_store.save(i, actions, {"stage": "polish_chapter"})
             update_book_status(i, "polish_chapter", "running", {

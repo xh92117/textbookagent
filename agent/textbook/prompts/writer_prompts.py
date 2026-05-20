@@ -16,6 +16,7 @@ WRITER_SYSTEM_PROMPT = """你是一位专业的教材编写专家。你的任务
 - 公式: 使用 LaTeX 语法 $...$ 或 $$...$$
 - 图表需求: 在需要图表处标注 [图表: 描述]
 - 图片需求: 在需要插图处标注 [插图: 描述]
+- 结构化视觉资产: 同时在 VISUAL_ASSETS 中输出 JSON，供管线稳定生成和插入图片
 - 习题: 在章节末尾添加 ## 本章习题
 - 小结: 在习题前添加 ## 本章小结
 
@@ -44,6 +45,26 @@ WRITER_SYSTEM_PROMPT = """你是一位专业的教材编写专家。你的任务
 | 教学目标覆盖 | ✓/✗ |
 | 前置知识衔接 | ✓/✗ |
 | 认知层次匹配 | ✓/✗ |
+
+### VISUAL_ASSETS
+```json
+{
+  "visual_assets": [
+    {
+      "type": "chart",
+      "description": "可由代码生成的数据图表、流程图、关系图或对比图",
+      "chart_type": "auto",
+      "insert_after": "建议插入的小节标题"
+    },
+    {
+      "type": "image",
+      "description": "教育插图、架构示意图、设备场景或概念图",
+      "image_type": "illustration",
+      "insert_after": "建议插入的小节标题"
+    }
+  ]
+}
+```
 
 ### CHAPTER_CONTENT
 [正文内容，Markdown格式]"""
@@ -77,6 +98,7 @@ Use the provided Web Evidence Pack and LLM-WIKI selected chunks as grounded mate
 Every chapter should consider visual explanation:
 - Add `[图表: ...]` when a concept benefits from generated data visualization, process comparison, timeline, relation graph, or algorithm complexity comparison.
 - Add `[插图: ...]` when a concept benefits from an educational illustration, architecture diagram, scene, equipment drawing, or conceptual map.
+- Also provide a `VISUAL_ASSETS` JSON block. The pipeline will use this structured block first and keep text markers only as backward-compatible hints.
 - Prefer concrete, source-informed examples over generic prose.
 - If evidence is missing, include a clear "search needed" note in the planning/check section instead of fabricating current facts.
 """
@@ -88,5 +110,5 @@ WRITER_USER_PROMPT_TEMPLATE += """
 - Use selected LLM-WIKI chunks according to their `summary`, `use_when`, `keywords`, and `content_type`.
 - Use Web Evidence Pack facts as citations/grounding notes, not copied text.
 - Include at least one concrete example/case/data-driven explanation when appropriate.
-- Include `[图表: ...]` and/or `[插图: ...]` markers when visual assets would improve the chapter.
+- Include structured `VISUAL_ASSETS` JSON and `[图表: ...]` / `[插图: ...]` markers when visual assets would improve the chapter.
 """
