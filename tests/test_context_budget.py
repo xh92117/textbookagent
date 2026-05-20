@@ -1,47 +1,30 @@
-from agent.protocol.agent_stream import AgentStreamExecutor
+import os
+import sys
+from types import SimpleNamespace
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+import config
+from agent.protocol.agent import Agent
 
 
-class _DummyAgent:
-    max_context_tokens = 5_000_000
+def test_context_window_and_reserve_can_be_configured(monkeypatch):
+    monkeypatch.setattr(config, "config", config.Config({
+        "agent_model_context_window": 120000,
+        "agent_context_reserve_tokens": 12000,
+    }))
+    agent = Agent(system_prompt="", model=SimpleNamespace(model="deepseek-v4-pro"))
 
-    def _get_model_context_window(self):
-        return 128_000
-
-    def _get_context_reserve_tokens(self):
-        return 20_000
-
-    def _estimate_message_tokens(self, message):
-        content = message.get("content", "")
-        if isinstance(content, str):
-            return len(content)
-        return 1
+    assert agent._get_model_context_window() == 120000
+    assert agent._get_context_reserve_tokens() == 12000
 
 
-def test_effective_context_budget_clamps_oversized_config():
-    executor = AgentStreamExecutor(
-        agent=_DummyAgent(),
-        model=None,
-        system_prompt="system",
-        tools=[],
-    )
+def test_deepseek_default_reserve_is_not_overly_conservative(monkeypatch):
+    monkeypatch.setattr(config, "config", config.Config({
+        "agent_model_context_window": 0,
+        "agent_context_reserve_tokens": 0,
+    }))
+    agent = Agent(system_prompt="", model=SimpleNamespace(model="deepseek-v4-pro"))
 
-    max_allowed, reserve = executor._effective_context_budget()
-
-    assert reserve == 20_000
-    assert max_allowed == 108_000
-
-
-def test_effective_context_budget_respects_smaller_config():
-    agent = _DummyAgent()
-    agent.max_context_tokens = 50_000
-    executor = AgentStreamExecutor(
-        agent=agent,
-        model=None,
-        system_prompt="system",
-        tools=[],
-    )
-
-    max_allowed, reserve = executor._effective_context_budget()
-
-    assert reserve == 20_000
-    assert max_allowed == 50_000
+    assert agent._get_model_context_window() == 64000
+    assert agent._get_context_reserve_tokens() == 6400

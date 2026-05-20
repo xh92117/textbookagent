@@ -40,6 +40,18 @@ class KnowledgeRetriever:
         tokens = re.findall(r"[\u4e00-\u9fffA-Za-z0-9_-]{2,}", text or "")
         return [t.lower() for t in tokens if t.strip()]
 
+    @staticmethod
+    def _normalized_terms(text: str) -> List[str]:
+        terms = []
+        seen = set()
+        for token in KnowledgeRetriever._tokens(text):
+            normalized = re.sub(r"[_\-\s]+", "", token.lower())
+            if len(normalized) < 2 or normalized in seen:
+                continue
+            seen.add(normalized)
+            terms.append(normalized)
+        return terms
+
     def _chunk_text_for_scoring(self, chunk: dict) -> str:
         return " ".join([
             str(chunk.get("title", "")),
@@ -48,6 +60,7 @@ class KnowledgeRetriever:
             str(chunk.get("use_when", "")),
             str(chunk.get("content_type", "")),
             " ".join(str(k) for k in (chunk.get("keywords") or [])),
+            " ".join(str(k) for k in (chunk.get("normalized_terms") or [])),
             " ".join(str(e) for e in (chunk.get("related_entities") or [])),
             str(chunk.get("source_quote", "")),
         ])
@@ -106,19 +119,22 @@ class KnowledgeRetriever:
 
     def _metadata_scores(self, query: str) -> Dict[str, float]:
         query_terms = set(self._tokens(query))
+        normalized_query_terms = set(self._normalized_terms(query))
         scores = defaultdict(float)
-        if not query_terms:
+        if not query_terms and not normalized_query_terms:
             return scores
         for chunk in self.index.get("chunks", []):
             chunk_id = chunk.get("id", "")
             title_terms = set(self._tokens(chunk.get("title", "")))
             section_terms = set(self._tokens(chunk.get("section", "")))
             keyword_terms = set(self._tokens(" ".join(chunk.get("keywords") or [])))
+            normalized_terms = set(str(t).lower() for t in (chunk.get("normalized_terms") or []))
             entity_terms = set(self._tokens(" ".join(chunk.get("related_entities") or [])))
             summary_terms = set(self._tokens(chunk.get("summary", "")))
             scores[chunk_id] += len(query_terms & title_terms) * 3.0
             scores[chunk_id] += len(query_terms & section_terms) * 2.5
             scores[chunk_id] += len(query_terms & keyword_terms) * 2.0
+            scores[chunk_id] += len(normalized_query_terms & normalized_terms) * 1.8
             scores[chunk_id] += len(query_terms & entity_terms) * 1.5
             scores[chunk_id] += len(query_terms & summary_terms) * 1.0
             if chunk.get("content_type") == "evidence":

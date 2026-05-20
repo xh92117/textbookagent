@@ -14,6 +14,7 @@ from bridge.context import Context
 from bridge.reply import Reply, ReplyType
 from common import const
 from common.log import logger
+from common.stream_guard import iter_with_idle_guard
 from common.utils import expand_path
 from config import conf
 from models.openai_compatible_bot import OpenAICompatibleBot
@@ -250,7 +251,7 @@ class AgentLLMModel(LLMModel):
                 stream = self.bot.call_with_tools(**kwargs)
                 
                 # Convert stream format to our expected format
-                for chunk in stream:
+                for chunk in self._iter_stream_with_idle_guard(stream):
                     yield self._format_stream_chunk(chunk)
             else:
                 bot_type = type(self.bot).__name__
@@ -259,6 +260,33 @@ class AgentLLMModel(LLMModel):
         except Exception as e:
             logger.error(f"AgentLLMModel call_stream error: {e}", exc_info=True)
             raise
+
+    def _iter_stream_with_idle_guard(self, stream):
+        """
+        Consume provider streams without letting a half-closed SSE connection block
+        the agent loop forever after useful deltas have already arrived.
+
+        Some providers keep the socket open or miss the final [DONE] frame. Without
+        this guard, tool calls are not executed until the HTTP generator eventually
+        returns or the process is interrupted.
+        """
+        try:
+            idle_timeout = float(conf().get("agent_stream_idle_timeout", 30) or 30)
+        except (TypeError, ValueError):
+            idle_timeout = 30.0
+        try:
+            first_chunk_timeout = float(
+                conf().get("agent_stream_first_chunk_timeout", conf().get("request_timeout", 180)) or 180
+            )
+        except (TypeError, ValueError):
+            first_chunk_timeout = 180.0
+        yield from iter_with_idle_guard(
+            stream,
+            idle_timeout=idle_timeout,
+            first_chunk_timeout=first_chunk_timeout,
+            logger=logger,
+            label="AgentBridge LLM stream",
+        )
     
     def _format_response(self, response):
         """Format Claude response to our expected format"""

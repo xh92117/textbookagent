@@ -47,7 +47,16 @@
   "agent": true,
   "agent_max_context_tokens": 50000,
   "agent_max_context_turns": 20,
+  "agent_model_context_window": 0,
+  "agent_context_reserve_tokens": 0,
   "agent_max_steps": 20,
   "enable_thinking": false,
-  "knowledge": true
+  "knowledge": true,
+  "knowledge_organize_mode": "auto",
+  "knowledge_fast_chunk_threshold": 20,
+  "knowledge_extract_assets": true,
+  "knowledge_skip_logo_watermark_assets": true,
+  "knowledge_min_asset_width": 120,
+  "knowledge_min_asset_height": 120,
+  "knowledge_min_asset_area": 20000
 }

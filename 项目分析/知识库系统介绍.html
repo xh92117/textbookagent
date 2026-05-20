@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TextBookAgent 知识库系统深度解析</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700;900&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0f172a;--surface:#1e293b;--surface2:#334155;--border:#475569;
+  --text:#f1f5f9;--text2:#94a3b8;--text3:#64748b;
+  --blue:#3b82f6;--blue-bg:rgba(59,130,246,.12);
+  --cyan:#06b6d4;--cyan-bg:rgba(6,182,212,.12);
+  --green:#10b981;--green-bg:rgba(16,185,129,.12);
+  --purple:#8b5cf6;--purple-bg:rgba(139,92,246,.12);
+  --orange:#f59e0b;--orange-bg:rgba(245,158,11,.12);
+  --pink:#ec4899;--pink-bg:rgba(236,72,153,.12);
+  --red:#ef4444;
+  --radius:16px;--radius-sm:10px;
+}
+html{scroll-behavior:smooth;font-size:18px}
+body{
+  font-family:'Noto Sans SC',-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  background:var(--bg);color:var(--text);line-height:1.7;
+  -webkit-font-smoothing:antialiased;overflow-x:hidden;
+}
+a{color:var(--cyan);text-decoration:none}
+
+/* ── NAV ── */
+.topnav{
+  position:sticky;top:0;z-index:100;
+  background:rgba(15,23,42,.85);backdrop-filter:blur(16px);
+  border-bottom:1px solid var(--surface2);
+  padding:0 32px;display:flex;align-items:center;gap:28px;height:56px;
+}
+.topnav .brand{font-weight:700;font-size:1rem;color:var(--blue);white-space:nowrap}
+.topnav .links{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
+.topnav .links::-webkit-scrollbar{display:none}
+.topnav .links a{
+  font-size:.82rem;padding:6px 14px;border-radius:8px;color:var(--text2);
+  white-space:nowrap;transition:.2s;
+}
+.topnav .links a:hover,.topnav .links a.active{background:var(--blue-bg);color:var(--blue)}
+
+/* ── HERO ── */
+.hero{
+  position:relative;padding:80px 32px 64px;text-align:center;overflow:hidden;
+}
+.hero::before{
+  content:'';position:absolute;inset:0;
+  background:radial-gradient(ellipse 80% 60% at 50% 0%,rgba(59,130,246,.18),transparent 70%),
+             radial-gradient(ellipse 60% 40% at 80% 20%,rgba(6,182,212,.12),transparent 60%);
+}
+.hero h1{font-size:2.8rem;font-weight:900;position:relative;letter-spacing:-.02em;
+  background:linear-gradient(135deg,#60a5fa,#06b6d4,#34d399);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+}
+.hero p{font-size:1.15rem;color:var(--text2);max-width:720px;margin:16px auto 0;position:relative}
+.hero .chips{display:flex;gap:10px;justify-content:center;margin-top:28px;position:relative;flex-wrap:wrap}
+.hero .chip{
+  padding:7px 18px;border-radius:20px;font-size:.82rem;font-weight:600;
+  border:1px solid var(--surface2);color:var(--text2);background:var(--surface);
+  display:flex;align-items:center;gap:6px;
+}
+.hero .chip .dot{width:7px;height:7px;border-radius:50%;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* ── LAYOUT ── */
+.wrap{max-width:1280px;margin:0 auto;padding:0 32px}
+.section{padding:56px 0}
+.section-title{
+  font-size:1.65rem;font-weight:800;margin-bottom:8px;
+  display:flex;align-items:center;gap:12px;
+}
+.section-title .ico{
+  width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;
+  font-size:1.1rem;flex-shrink:0;
+}
+.section-desc{color:var(--text2);font-size:1rem;margin-bottom:32px;max-width:800px}
+
+/* ── BENTO GRID ── */
+.bento{display:grid;gap:16px}
+.bento-2{grid-template-columns:1fr 1fr}
+.bento-3{grid-template-columns:1fr 1fr 1fr}
+.bento-2-1{grid-template-columns:2fr 1fr}
+.bento-1-2{grid-template-columns:1fr 2fr}
+.bento-span2{grid-column:span 2}
+@media(max-width:900px){
+  .bento-2,.bento-3,.bento-2-1,.bento-1-2{grid-template-columns:1fr}
+  .bento-span2{grid-column:span 1}
+  .hero h1{font-size:2rem}
+  html{font-size:16px}
+}
+
+/* ── CARD ── */
+.card{
+  background:var(--surface);border:1px solid var(--surface2);border-radius:var(--radius);
+  padding:28px;transition:.25s;
+}
+.card:hover{border-color:var(--blue);box-shadow:0 0 24px rgba(59,130,246,.08)}
+.card h3{font-size:1.15rem;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.card p,.card li{font-size:.92rem;color:var(--text2);line-height:1.65}
+.card ul{list-style:none}
+.card ul li{padding:5px 0;display:flex;align-items:flex-start;gap:8px}
+.card ul li::before{content:'→';color:var(--blue);font-weight:700;flex-shrink:0;margin-top:1px}
+
+/* ── STAT ROW ── */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:40px}
+@media(max-width:900px){.stats{grid-template-columns:repeat(2,1fr)}}
+.stat{
+  background:var(--surface);border:1px solid var(--surface2);border-radius:var(--radius);
+  padding:24px;text-align:center;
+}
+.stat .val{
+  font-size:2.4rem;font-weight:900;
+  background:linear-gradient(135deg,var(--blue),var(--cyan));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+}
+.stat .lab{font-size:.85rem;color:var(--text3);margin-top:4px}
+
+/* ── SVG DIAGRAMS ── */
+.diagram-box{
+  background:var(--surface);border:1px solid var(--surface2);border-radius:var(--radius);
+  padding:32px;overflow:hidden;
+}
+.diagram-box svg{width:100%;height:auto;display:block}
+
+/* ── CODE ── */
+.code{
+  background:#0c1222;border:1px solid var(--surface2);border-radius:var(--radius-sm);
+  padding:20px 24px;font-family:'JetBrains Mono','Fira Code',Consolas,monospace;
+  font-size:.82rem;line-height:1.85;color:#e2e8f0;overflow-x:auto;white-space:pre;
+}
+.code .cm{color:#64748b}.code .kw{color:#c084fc}.code .str{color:#34d399}.code .ty{color:#38bdf8}.code .fn{color:#fbbf24}
+
+/* ── TABLE ── */
+.tbl{width:100%;border-collapse:collapse;font-size:.9rem}
+.tbl th{background:var(--surface2);color:var(--text);padding:12px 16px;text-align:left;font-weight:600}
+.tbl th:first-child{border-radius:8px 0 0 0}.tbl th:last-child{border-radius:0 8px 0 0}
+.tbl td{padding:10px 16px;border-bottom:1px solid var(--surface2);color:var(--text2)}
+.tbl tr:hover td{background:rgba(59,130,246,.04)}
+.tag{display:inline-block;padding:2px 10px;border-radius:8px;font-size:.75rem;font-weight:600}
+.tag-blue{background:var(--blue-bg);color:var(--blue)}
+.tag-cyan{background:var(--cyan-bg);color:var(--cyan)}
+.tag-green{background:var(--green-bg);color:var(--green)}
+.tag-purple{background:var(--purple-bg);color:var(--purple)}
+.tag-orange{background:var(--orange-bg);color:var(--orange)}
+.tag-pink{background:var(--pink-bg);color:var(--pink)}
+
+/* ── FEATURE ROW ── */
+.feat{display:flex;gap:14px;padding:14px 0;border-bottom:1px solid var(--surface2)}
+.feat:last-child{border-bottom:none}
+.feat .fi{
+  width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;
+  font-size:.95rem;font-weight:700;flex-shrink:0;
+}
+.feat .ft h4{font-size:.95rem;font-weight:600;margin-bottom:2px}
+.feat .ft p{font-size:.85rem;color:var(--text2);line-height:1.5}
+
+/* ── FLOW ANIM ── */
+@keyframes flowDash{to{stroke-dashoffset:-20}}
+@keyframes nodeAppear{from{opacity:0;transform:scale(.7)}to{opacity:1;transform:scale(1)}}
+@keyframes edgeGrow{from{stroke-dashoffset:100}to{stroke-dashoffset:0}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+.anim-node{animation:nodeAppear .5s ease-out both}
+.anim-edge{stroke-dasharray:100;animation:edgeGrow .8s ease-out both}
+.anim-flow{stroke-dasharray:8 6;animation:flowDash .8s linear infinite}
+.fade-up{animation:fadeUp .5s ease-out both}
+
+/* ── RETRIEVAL VISUAL ── */
+.retrieval-lanes{display:flex;gap:0;align-items:stretch;border-radius:var(--radius);overflow:hidden}
+.lane{flex:1;padding:24px 20px;text-align:center}
+.lane h4{font-size:1rem;font-weight:700;margin-bottom:6px}
+.lane p{font-size:.82rem;line-height:1.5}
+.lane-blue{background:var(--blue-bg);color:var(--blue)}
+.lane-cyan{background:var(--cyan-bg);color:var(--cyan)}
+.lane-green{background:var(--green-bg);color:var(--green)}
+.lane-purple{background:var(--purple-bg);color:var(--purple)}
+.lane-plus{display:flex;align-items:center;font-size:1.5rem;font-weight:900;color:var(--text3);padding:0 6px;background:var(--surface)}
+
+/* ── FOOTER ── */
+.footer{border-top:1px solid var(--surface2);padding:40px 32px;text-align:center;color:var(--text3);font-size:.85rem}
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="brand">TextBookAgent</div>
+  <div class="links">
+    <a href="#overview">概览</a>
+    <a href="#arch">架构</a>
+    <a href="#pipeline">管线</a>
+    <a href="#wiki">LLM-WIKI</a>
+    <a href="#retrieval">检索</a>
+    <a href="#graph">图谱</a>
+    <a href="#capture">捕获</a>
+    <a href="#memory">记忆</a>
+    <a href="#source">源码</a>
+  </div>
+</nav>
+
+<div class="hero">
+  <h1>知识库系统深度解析</h1>
+  <p>面向教材编制场景的智能知识管理引擎 —— 从文档摄入到结构化检索的完整技术架构</p>
+  <div class="chips">
+    <div class="chip"><span class="dot" style="background:var(--blue)"></span>KnowledgeService</div>
+    <div class="chip"><span class="dot" style="background:var(--cyan)"></span>LLM-WIKI</div>
+    <div class="chip"><span class="dot" style="background:var(--green)"></span>BM25 + Graph</div>
+    <div class="chip"><span class="dot" style="background:var(--purple)"></span>Embedding Ready</div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<div class="stats">
+  <div class="stat"><div class="val">6+</div><div class="lab">文档格式支持</div></div>
+  <div class="stat"><div class="val">3</div><div class="lab">融合检索策略</div></div>
+  <div class="stat"><div class="val">5</div><div class="lab">核心服务模块</div></div>
+  <div class="stat"><div class="val">∞</div><div class="lab">增量索引能力</div></div>
+</div>
+
+<!-- ═══════════ 1. OVERVIEW ═══════════ -->
+<div id="overview" class="section">
+  <div class="section-title"><div class="ico" style="background:var(--blue-bg);color:var(--blue)">🎯</div>知识库全景概览</div>
+  <div class="section-desc">TextBookAgent 知识库是教材编制智能体的"记忆大脑"，负责从用户上传的论文、文档和资料中提取、组织和检索知识，为教材编写提供精准证据支撑。</div>
+  <div class="bento bento-2">
+    <div class="card">
+      <h3>🎯 设计目标</h3>
+      <ul>
+        <li>让教材编写过程能检索用户上传的论文、文档、资料和图片资产</li>
+        <li>控制进入模型上下文的长度，避免全量注入导致 token 浪费</li>
+        <li>支持增量整理，只处理未整理或已变更的文件</li>
+        <li>为每个知识分块生成结构化元数据，实现精准匹配</li>
+        <li>构建实体关系图谱，支持关联推理和扩展检索</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>📐 核心设计原则</h3>
+      <ul>
+        <li><strong style="color:var(--blue)">本地优先</strong> — 无需外部向量数据库，BM25+元数据+图谱三路检索</li>
+        <li><strong style="color:var(--cyan)">Embedding Ready</strong> — 预留向量索引结构，商业化时平滑升级</li>
+        <li><strong style="color:var(--green)">LLM-WIKI 范式</strong> — 每个 chunk 携带 use_when 场景描述</li>
+        <li><strong style="color:var(--purple)">增量索引</strong> — 基于内容哈希判断变更，跳过已索引文件</li>
+        <li><strong style="color:var(--orange)">双模式整理</strong> — Fast（本地规则）/ Deep（LLM 提取）可切换</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 2. ARCHITECTURE ═══════════ -->
+<div id="arch" class="section">
+  <div class="section-title"><div class="ico" style="background:var(--cyan-bg);color:var(--cyan)">🏗️</div>分层架构设计</div>
+  <div class="section-desc">四层架构从 API 调度到底层存储各司其职，模块间通过清晰接口解耦。</div>
+  <div class="diagram-box">
+    <svg viewBox="0 0 1100 520" xmlns="http://www.w3.org/2000/svg">
+      <!-- Layer 1: API -->
+      <rect x="40" y="20" width="1020" height="100" rx="14" fill="rgba(59,130,246,.08)" stroke="var(--blue)" stroke-width="2"/>
+      <text x="60" y="50" fill="var(--blue)" font-size="14" font-weight="700" letter-spacing="1">API 调度层</text>
+      <rect x="80" y="65" width="240" height="42" rx="8" fill="var(--blue-bg)" stroke="rgba(59,130,246,.3)" stroke-width="1"/>
+      <text x="200" y="92" fill="var(--blue)" font-size="14" font-weight="600" text-anchor="middle">KnowledgeService.dispatch()</text>
+      <rect x="360" y="65" width="220" height="42" rx="8" fill="var(--blue-bg)" stroke="rgba(59,130,246,.3)" stroke-width="1"/>
+      <text x="470" y="92" fill="var(--blue)" font-size="14" font-weight="600" text-anchor="middle">Web API Endpoints</text>
+      <rect x="620" y="65" width="220" height="42" rx="8" fill="var(--blue-bg)" stroke="rgba(59,130,246,.3)" stroke-width="1"/>
+      <text x="730" y="92" fill="var(--blue)" font-size="14" font-weight="600" text-anchor="middle">KnowledgeCapture Tool</text>
+
+      <!-- Arrow 1→2 -->
+      <line x1="550" y1="120" x2="550" y2="150" stroke="var(--text3)" stroke-width="2" marker-end="url(#arrow)"/>
+      <defs><marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="var(--text3)"/></marker></defs>
+
+      <!-- Layer 2: Core -->
+      <rect x="40" y="150" width="1020" height="100" rx="14" fill="rgba(6,182,212,.08)" stroke="var(--cyan)" stroke-width="2"/>
+      <text x="60" y="180" fill="var(--cyan)" font-size="14" font-weight="700" letter-spacing="1">核心服务层</text>
+      <rect x="80" y="195" width="240" height="42" rx="8" fill="var(--cyan-bg)" stroke="rgba(6,182,212,.3)" stroke-width="1"/>
+      <text x="200" y="222" fill="var(--cyan)" font-size="14" font-weight="600" text-anchor="middle">KnowledgeService</text>
+      <rect x="360" y="195" width="240" height="42" rx="8" fill="var(--cyan-bg)" stroke="rgba(6,182,212,.3)" stroke-width="1"/>
+      <text x="480" y="222" fill="var(--cyan)" font-size="14" font-weight="600" text-anchor="middle">KnowledgeRetriever</text>
+      <rect x="640" y="195" width="220" height="42" rx="8" fill="var(--cyan-bg)" stroke="rgba(6,182,212,.3)" stroke-width="1"/>
+      <text x="750" y="222" fill="var(--cyan)" font-size="14" font-weight="600" text-anchor="middle">MemoryManager</text>
+
+      <!-- Arrow 2→3 -->
+      <line x1="550" y1="250" x2="550" y2="280" stroke="var(--text3)" stroke-width="2" marker-end="url(#arrow)"/>
+
+      <!-- Layer 3: Data -->
+      <rect x="40" y="280" width="1020" height="100" rx="14" fill="rgba(16,185,129,.08)" stroke="var(--green)" stroke-width="2"/>
+      <text x="60" y="310" fill="var(--green)" font-size="14" font-weight="700" letter-spacing="1">数据处理层</text>
+      <rect x="60" y="325" width="180" height="42" rx="8" fill="var(--green-bg)" stroke="rgba(16,185,129,.3)" stroke-width="1"/>
+      <text x="150" y="352" fill="var(--green)" font-size="13" font-weight="600" text-anchor="middle">PDF/DOCX 提取器</text>
+      <rect x="260" y="325" width="180" height="42" rx="8" fill="var(--green-bg)" stroke="rgba(16,185,129,.3)" stroke-width="1"/>
+      <text x="350" y="352" fill="var(--green)" font-size="13" font-weight="600" text-anchor="middle">Markdown 分块器</text>
+      <rect x="460" y="325" width="180" height="42" rx="8" fill="var(--green-bg)" stroke="rgba(16,185,129,.3)" stroke-width="1"/>
+      <text x="550" y="352" fill="var(--green)" font-size="13" font-weight="600" text-anchor="middle">LLM 元数据提取</text>
+      <rect x="660" y="325" width="180" height="42" rx="8" fill="var(--green-bg)" stroke="rgba(16,185,129,.3)" stroke-width="1"/>
+      <text x="750" y="352" fill="var(--green)" font-size="13" font-weight="600" text-anchor="middle">图谱构建器</text>
+
+      <!-- Arrow 3→4 -->
+      <line x1="550" y1="380" x2="550" y2="410" stroke="var(--text3)" stroke-width="2" marker-end="url(#arrow)"/>
+
+      <!-- Layer 4: Infra -->
+      <rect x="40" y="410" width="1020" height="100" rx="14" fill="rgba(139,92,246,.08)" stroke="var(--purple)" stroke-width="2"/>
+      <text x="60" y="440" fill="var(--purple)" font-size="14" font-weight="700" letter-spacing="1">存储基础设施层</text>
+      <rect x="60" y="455" width="200" height="42" rx="8" fill="var(--purple-bg)" stroke="rgba(139,92,246,.3)" stroke-width="1"/>
+      <text x="160" y="482" fill="var(--purple)" font-size="13" font-weight="600" text-anchor="middle">LLM-WIKI 文件索引</text>
+      <rect x="280" y="455" width="180" height="42" rx="8" fill="var(--purple-bg)" stroke="rgba(139,92,246,.3)" stroke-width="1"/>
+      <text x="370" y="482" fill="var(--purple)" font-size="13" font-weight="600" text-anchor="middle">SQLite + FTS5</text>
+      <rect x="480" y="455" width="220" height="42" rx="8" fill="var(--purple-bg)" stroke="rgba(139,92,246,.3)" stroke-width="1"/>
+      <text x="590" y="482" fill="var(--purple)" font-size="13" font-weight="600" text-anchor="middle">Embedding 向量库 (预留)</text>
+      <rect x="720" y="455" width="160" height="42" rx="8" fill="var(--purple-bg)" stroke="rgba(139,92,246,.3)" stroke-width="1"/>
+      <text x="800" y="482" fill="var(--purple)" font-size="13" font-weight="600" text-anchor="middle">磁盘缓存</text>
+
+      <!-- Animated data flow lines -->
+      <path d="M550 120 L550 150" class="anim-flow" stroke="var(--blue)" stroke-width="2" fill="none" stroke-dasharray="8 6"/>
+      <path d="M550 250 L550 280" class="anim-flow" stroke="var(--cyan)" stroke-width="2" fill="none" stroke-dasharray="8 6"/>
+      <path d="M550 380 L550 410" class="anim-flow" stroke="var(--green)" stroke-width="2" fill="none" stroke-dasharray="8 6"/>
+    </svg>
+  </div>
+</div>
+
+<!-- ═══════════ 3. PIPELINE ═══════════ -->
+<div id="pipeline" class="section">
+  <div class="section-title"><div class="ico" style="background:var(--green-bg);color:var(--green)">⚙️</div>文档处理管线</div>
+  <div class="section-desc">从用户上传文件到生成可检索的知识索引，经历六个关键阶段。</div>
+
+  <div class="diagram-box" style="margin-bottom:20px">
+    <svg viewBox="0 0 1100 200" xmlns="http://www.w3.org/2000/svg">
+      <!-- Step 1 -->
+      <rect x="20" y="40" width="150" height="120" rx="12" fill="var(--blue-bg)" stroke="var(--blue)" stroke-width="1.5" class="anim-node" style="animation-delay:0s"/>
+      <text x="95" y="72" fill="var(--blue)" font-size="28" font-weight="800" text-anchor="middle">1</text>
+      <text x="95" y="100" fill="var(--text)" font-size="14" font-weight="700" text-anchor="middle">文档摄入</text>
+      <text x="95" y="120" fill="var(--text2)" font-size="11" text-anchor="middle">PDF/DOCX/MD</text>
+      <text x="95" y="136" fill="var(--text2)" font-size="11" text-anchor="middle">TXT/CSV/JSON</text>
+      <!-- Arrow -->
+      <line x1="170" y1="100" x2="200" y2="100" stroke="var(--text3)" stroke-width="2" marker-end="url(#arrow)" class="anim-flow"/>
+      <!-- Step 2 -->
+      <rect x="200" y="40" width="150" height="120" rx="12" fill="var(--cyan-bg)" stroke="var(--cyan)" stroke-width="1.5" class="anim-node" style="animation-delay:.15s"/>
+      <text x="275" y="72" fill="var(--cyan)" font-size="28" font-weight="800" text-anchor="middle">2</text>
+      <text x="275" y="100" fill="var(--text)" font-size="14" font-weight="700" text-anchor="middle">文本提取</text>
+      <text x="275" y="120" fill="var(--text2)" font-size="11" text-anchor="middle">表格→MD / LaTeX</text>
+      <text x="275" y="136" fill="var(--text2)" font-size="11" text-anchor="middle">图片资产抽取</text>
+      <line x1="350" y1="100" x2="380" y2="100" stroke="var(--text3)" stroke-width="2" marker-end="url(#arrow)" class="anim-flow"/>
+      <!-- Step 3 -->
+      <rect x="380" y="40" width="150" height="120" rx="12" fill="var(--green-bg)" stroke="var(--green)" stroke-width="1.5" class="anim-node" style="animation-delay:.3s"/>
+      <text x="455" y="72" fill="var(--green)" font-size="28" font-weight="800" text-anchor="middle">3</text>
+      <text x="455" y="100" fill="var(--text)" font-size="14" font-weight="700" text-anchor="middle">智能分块</text>
+      <text x="455" y="120" fill="var(--text2)" font-size="11" text-anchor="middle">章节切分</text>
+      <text x="455" y="136" fill="var(--text2)" font-size="11" text-anchor="middle">重叠窗口拼接</text>
+      <line x1="530" y1="100" x2="560" y2="100" stroke="var(--text3)" stroke-width="2" marker-end="url(#arrow)" class="anim-flow"/>
+      <!-- Step 4 -->
+      <rect x="560" y="40" width="150" height="120" rx="12" fill="var(--purple-bg)" stroke="var(--purple)" stroke-width="1.5" class="anim-node" style="animation-delay:.45s"/>
+      <text x="635" y="72" fill="var(--purple)" font-size="28" font-weight="800" text-anchor="middle">4</text>
+      <text x="635" y="100" fill="var(--text)" font-size="14" font-weight="700" text-anchor="middle">元数据提取</text>
+      <text x="635" y="120" fill="var(--text2)" font-size="11" text-anchor="middle">LLM/规则双模式</text>
+      <text x="635" y="136" fill="var(--text2)" font-size="11" text-anchor="middle">use_when / keywords</text>
+      <line x1="710" y1="100" x2="740" y2="100" stroke="var(--text3)" stroke-width="2" marker-end="url(#arrow)" class="anim-flow"/>
+      <!-- Step 5 -->
+      <rect x="740" y="40" width="150" height="120" rx="12" fill="var(--orange-bg)" stroke="var(--orange)" stroke-width="1.5" class="anim-node" style="animation-delay:.6s"/>
+      <text x="815" y="72" fill="var(--orange)" font-size="28" font-weight="800" text-anchor="middle">5</text>
+      <text x="815" y="100" fill="var(--text)" font-size="14" font-weight="700" text-anchor="middle">图谱构建</text>
+      <text x="815" y="120" fill="var(--text2)" font-size="11" text-anchor="middle">实体/关系抽取</text>
+      <text x="815" y="136" fill="var(--text2)" font-size="11" text-anchor="middle">交叉引用生成</text>
+      <line x1="890" y1="100" x2="920" y2="100" stroke="var(--text3)" stroke-width="2" marker-end="url(#arrow)" class="anim-flow"/>
+      <!-- Step 6 -->
+      <rect x="920" y="40" width="160" height="120" rx="12" fill="var(--pink-bg)" stroke="var(--pink)" stroke-width="1.5" class="anim-node" style="animation-delay:.75s"/>
+      <text x="1000" y="72" fill="var(--pink)" font-size="28" font-weight="800" text-anchor="middle">6</text>
+      <text x="1000" y="100" fill="var(--text)" font-size="14" font-weight="700" text-anchor="middle">索引持久化</text>
+      <text x="1000" y="120" fill="var(--text2)" font-size="11" text-anchor="middle">LLM-WIKI 索引</text>
+      <text x="1000" y="136" fill="var(--text2)" font-size="11" text-anchor="middle">Embedding 清单</text>
+    </svg>
+  </div>
+
+  <div class="bento bento-2">
+    <div class="card">
+      <h3>📄 文档提取能力</h3>
+      <div class="feat"><div class="fi" style="background:var(--blue-bg);color:var(--blue)">PDF</div><div class="ft"><h4>PDF 双引擎提取</h4><p>优先 pdfplumber（保留表格），回退 pypdf。PyMuPDF 抽取图片，自动过滤 logo/水印/小图标</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--cyan-bg);color:var(--cyan)">DOCX</div><div class="ft"><h4>Word 文档解析</h4><p>python-docx 提取段落和表格，从 ZIP 媒体文件夹抽取嵌入图片，过滤 banner 长条图</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--green-bg);color:var(--green)">MD</div><div class="ft"><h4>Markdown 原生支持</h4><p>直接读取，保留完整结构信息，是 LLM-WIKI 核心存储格式</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--purple-bg);color:var(--purple)">fx</div><div class="ft"><h4>公式规范化</h4><p>自动识别含数学符号的行并包裹 <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;font-size:.82rem">$$...$$</code> LaTeX 定界符</p></div></div>
+    </div>
+    <div class="card">
+      <h3>✂️ 智能分块策略</h3>
+      <div class="feat"><div class="fi" style="background:var(--blue-bg);color:var(--blue)">H1</div><div class="ft"><h4>Markdown 标题切分</h4><p>识别 #~###### 标题和中文章节标题（"第X章"），按章节边界切分</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--cyan-bg);color:var(--cyan)">CN</div><div class="ft"><h4>中文编号标题识别</h4><p>识别 1.2.3 格式的中文编号标题，作为二级切分依据</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--green-bg);color:var(--green)">↔</div><div class="ft"><h4>重叠窗口</h4><p>大段落按 ~900 token 切分，相邻块保留 ~90 token 重叠，防止语义断裂</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--purple-bg);color:var(--purple)">🧩</div><div class="ft"><h4>原子块保护</h4><p>Markdown 表格和 $$ 公式块作为原子单元，不会被截断拆分</p></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 4. LLM-WIKI ═══════════ -->
+<div id="wiki" class="section">
+  <div class="section-title"><div class="ico" style="background:var(--purple-bg);color:var(--purple)">📦</div>LLM-WIKI 索引结构</div>
+  <div class="section-desc">LLM-WIKI 是知识库的核心存储范式，借鉴 Agent Skill 元数据思路，让每个知识分块携带"何时使用"的场景描述。</div>
+
+  <div class="bento bento-2">
+    <div class="card">
+      <h3>📁 目录布局</h3>
+      <div class="code"><span class="cm">knowledge/{book_id}/</span>
+├── <span class="ty">sources/</span>            <span class="cm">← 用户上传的原始文件</span>
+│   └── <span class="str">web_xxx_hash.md</span>  <span class="cm">← 网页捕获 Markdown</span>
+├── <span class="kw">_llm_wiki/</span>           <span class="cm">← 核心索引区</span>
+│   ├── <span class="kw">index.json</span>      <span class="cm">← 主索引</span>
+│   ├── <span class="kw">graph.json</span>      <span class="cm">← 知识图谱</span>
+│   ├── <span class="ty">chunks/</span>          <span class="cm">← 分块原文+YAML元数据</span>
+│   ├── <span class="ty">pages/</span>           <span class="cm">← 合成 Wiki 页面</span>
+│   ├── <span class="ty">embeddings/</span>      <span class="cm">← 向量索引(预留)</span>
+│   ├── <span class="ty">assets/</span>          <span class="cm">← 抽取的图片资产</span>
+│   ├── <span class="ty">cache/</span>           <span class="cm">← 检索结果缓存</span>
+│   └── <span class="ty">tasks/</span>           <span class="cm">← 整理任务状态</span>
+├── <span class="str">index.json</span>            <span class="cm">← 兼容性索引</span>
+└── <span class="str">cross_references.md</span>   <span class="cm">← 交叉引用</span></div>
+    </div>
+    <div class="card">
+      <h3>📋 index.json 核心字段</h3>
+      <table class="tbl">
+        <tr><th>字段</th><th>说明</th></tr>
+        <tr><td><code style="background:var(--surface2);padding:1px 6px;border-radius:4px;font-size:.82rem">sources</code></td><td>已索引源文件记录</td></tr>
+        <tr><td><code style="background:var(--surface2);padding:1px 6px;border-radius:4px;font-size:.82rem">chunks</code></td><td>知识分块（title/summary/use_when/keywords/content_type）</td></tr>
+        <tr><td><code style="background:var(--surface2);padding:1px 6px;border-radius:4px;font-size:.82rem">pages</code></td><td>合成 Wiki 页面</td></tr>
+        <tr><td><code style="background:var(--surface2);padding:1px 6px;border-radius:4px;font-size:.82rem">entities</code></td><td>提取的实体</td></tr>
+        <tr><td><code style="background:var(--surface2);padding:1px 6px;border-radius:4px;font-size:.82rem">relations</code></td><td>实体间关系</td></tr>
+        <tr><td><code style="background:var(--surface2);padding:1px 6px;border-radius:4px;font-size:.82rem">embedding</code></td><td>向量索引配置</td></tr>
+      </table>
+      <div style="margin-top:16px">
+        <h3>🏷️ content_type 分类</h3>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
+          <span class="tag tag-blue">📖 concept 定义/概念</span>
+          <span class="tag tag-cyan">🔧 procedure 步骤/方法</span>
+          <span class="tag tag-green">📊 evidence 数据/公式</span>
+          <span class="tag tag-purple">📚 reference 通用参考</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h3>🏷️ Chunk 元数据示例（YAML Front Matter）</h3>
+    <div class="code">---
+<span class="kw">id</span>: source_hash_chunk_001
+<span class="kw">source</span>: 教材原文.pdf
+<span class="kw">title</span>: 结构力学基本原理
+<span class="kw">section</span>: 第三章 结构分析
+<span class="kw">summary</span>: <span class="str">介绍了结构力学的基本假设与分析方法...</span>
+<span class="kw">use_when</span>: <span class="str">Use this chunk when the task needs evidence,
+  definitions, examples, or source details about 结构力学、受力分析.</span>
+<span class="kw">content_type</span>: concept
+<span class="kw">keywords</span>:
+  - 结构力学
+  - 受力分析
+  - 平衡条件
+<span class="kw">related_entities</span>:
+  - 弯矩
+  - 剪力
+---</div>
+  </div>
+</div>
+
+<!-- ═══════════ 5. RETRIEVAL ═══════════ -->
+<div id="retrieval" class="section">
+  <div class="section-title"><div class="ico" style="background:var(--orange-bg);color:var(--orange)">🔍</div>多策略检索引擎</div>
+  <div class="section-desc">KnowledgeRetriever 实现三路融合检索，无需外部向量数据库即可提供高质量知识召回。</div>
+
+  <div class="diagram-box" style="margin-bottom:20px">
+    <svg viewBox="0 0 1100 340" xmlns="http://www.w3.org/2000/svg">
+      <!-- Query input -->
+      <rect x="420" y="10" width="260" height="48" rx="24" fill="var(--surface2)" stroke="var(--text3)" stroke-width="1.5"/>
+      <text x="550" y="40" fill="var(--text)" font-size="15" font-weight="600" text-anchor="middle">🔍 用户查询 Query</text>
+
+      <!-- Branch lines -->
+      <line x1="470" y1="58" x2="180" y2="110" stroke="var(--blue)" stroke-width="2" class="anim-flow"/>
+      <line x1="550" y1="58" x2="550" y2="110" stroke="var(--cyan)" stroke-width="2" class="anim-flow"/>
+      <line x1="630" y1="58" x2="920" y2="110" stroke="var(--green)" stroke-width="2" class="anim-flow"/>
+
+      <!-- BM25 -->
+      <rect x="40" y="110" width="280" height="130" rx="14" fill="var(--blue-bg)" stroke="var(--blue)" stroke-width="1.5" class="anim-node" style="animation-delay:.1s"/>
+      <text x="180" y="142" fill="var(--blue)" font-size="18" font-weight="800" text-anchor="middle">BM25 评分</text>
+      <text x="180" y="168" fill="var(--text2)" font-size="12" text-anchor="middle">词频 + 逆文档频率</text>
+      <text x="180" y="188" fill="var(--text2)" font-size="12" text-anchor="middle">title / section / summary</text>
+      <text x="180" y="208" fill="var(--text2)" font-size="12" text-anchor="middle">keywords / entities</text>
+      <text x="180" y="228" fill="var(--blue)" font-size="11" font-weight="600" text-anchor="middle">k1=1.4  b=0.72</text>
+
+      <!-- Metadata -->
+      <rect x="380" y="110" width="340" height="130" rx="14" fill="var(--cyan-bg)" stroke="var(--cyan)" stroke-width="1.5" class="anim-node" style="animation-delay:.2s"/>
+      <text x="550" y="142" fill="var(--cyan)" font-size="18" font-weight="800" text-anchor="middle">元数据加权匹配</text>
+      <text x="550" y="168" fill="var(--text2)" font-size="12" text-anchor="middle">title×3.0  section×2.5  keywords×2.0</text>
+      <text x="550" y="188" fill="var(--text2)" font-size="12" text-anchor="middle">normalized_terms×1.8  entities×1.5</text>
+      <text x="550" y="208" fill="var(--text2)" font-size="12" text-anchor="middle">summary×1.0  evidence+0.25</text>
+      <text x="550" y="228" fill="var(--cyan)" font-size="11" font-weight="600" text-anchor="middle">结构化字段精确匹配</text>
+
+      <!-- Graph -->
+      <rect x="780" y="110" width="280" height="130" rx="14" fill="var(--green-bg)" stroke="var(--green)" stroke-width="1.5" class="anim-node" style="animation-delay:.3s"/>
+      <text x="920" y="142" fill="var(--green)" font-size="18" font-weight="800" text-anchor="middle">图谱扩展</text>
+      <text x="920" y="168" fill="var(--text2)" font-size="12" text-anchor="middle">实体共现扩展</text>
+      <text x="920" y="188" fill="var(--text2)" font-size="12" text-anchor="middle">关联 chunk +0.75</text>
+      <text x="920" y="208" fill="var(--text2)" font-size="12" text-anchor="middle">关系 chunk +0.50</text>
+      <text x="920" y="228" fill="var(--green)" font-size="11" font-weight="600" text-anchor="middle">语义关联召回</text>
+
+      <!-- Merge lines -->
+      <line x1="180" y1="240" x2="460" y2="280" stroke="var(--blue)" stroke-width="2" class="anim-flow"/>
+      <line x1="550" y1="240" x2="550" y2="280" stroke="var(--cyan)" stroke-width="2" class="anim-flow"/>
+      <line x1="920" y1="240" x2="640" y2="280" stroke="var(--green)" stroke-width="2" class="anim-flow"/>
+
+      <!-- Merge -->
+      <rect x="380" y="280" width="340" height="48" rx="24" fill="var(--purple-bg)" stroke="var(--purple)" stroke-width="2" class="anim-node" style="animation-delay:.5s"/>
+      <text x="550" y="310" fill="var(--purple)" font-size="16" font-weight="800" text-anchor="middle">⚡ 融合排序 → Top-K Evidence Pack</text>
+    </svg>
+  </div>
+
+  <div class="bento bento-2">
+    <div class="card">
+      <h3>📦 Evidence Pack 输出</h3>
+      <ul>
+        <li><strong style="color:var(--cyan)">完整版</strong> — 含 excerpt 原文摘录，适合深度分析</li>
+        <li><strong style="color:var(--blue)">精简版</strong> — metadata-first，仅 Top 匹配含 excerpt，大幅减少 token</li>
+        <li>每个证据包含：chunk_id / score / title / summary / use_when / keywords / entities / citation</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>⚡ 检索缓存机制</h3>
+      <ul>
+        <li>基于 SHA-256 的查询缓存，键由 query + limit + index_mtime 组成</li>
+        <li>索引更新后缓存自动失效，保证结果一致性</li>
+        <li>缓存 JSON 存储在 <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;font-size:.82rem">_llm_wiki/cache/</code> 目录</li>
+        <li>避免重复计算 BM25 和元数据评分，加速高频查询</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 6. GRAPH ═══════════ -->
+<div id="graph" class="section">
+  <div class="section-title"><div class="ico" style="background:var(--pink-bg);color:var(--pink)">🕸️</div>知识图谱构建</div>
+  <div class="section-desc">自动从文档中提取实体和关系，构建可交互的知识图谱，支持聚焦探索和关联推理。</div>
+
+  <div class="diagram-box" style="margin-bottom:20px">
+    <svg viewBox="0 0 1100 300" xmlns="http://www.w3.org/2000/svg">
+      <!-- Animated graph visualization -->
+      <defs>
+        <filter id="glow"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      </defs>
+
+      <!-- Edges (animated) -->
+      <line x1="260" y1="100" x2="460" y2="80" stroke="var(--blue)" stroke-width="1.5" opacity=".5" class="anim-flow"/>
+      <line x1="460" y1="80" x2="660" y2="120" stroke="var(--cyan)" stroke-width="1.5" opacity=".5" class="anim-flow"/>
+      <line x1="660" y1="120" x2="860" y2="90" stroke="var(--green)" stroke-width="1.5" opacity=".5" class="anim-flow"/>
+      <line x1="260" y1="100" x2="460" y2="200" stroke="var(--purple)" stroke-width="1.5" opacity=".5" class="anim-flow"/>
+      <line x1="460" y1="200" x2="660" y2="120" stroke="var(--orange)" stroke-width="1.5" opacity=".5" class="anim-flow"/>
+      <line x1="460" y1="80" x2="460" y2="200" stroke="var(--pink)" stroke-width="1.5" opacity=".5" class="anim-flow"/>
+      <line x1="660" y1="120" x2="860" y2="220" stroke="var(--blue)" stroke-width="1.5" opacity=".5" class="anim-flow"/>
+      <line x1="860" y1="90" x2="860" y2="220" stroke="var(--cyan)" stroke-width="1.5" opacity=".5" class="anim-flow"/>
+      <line x1="260" y1="100" x2="160" y2="200" stroke="var(--green)" stroke-width="1.5" opacity=".5" class="anim-flow"/>
+      <line x1="160" y1="200" x2="460" y2="200" stroke="var(--purple)" stroke-width="1.5" opacity=".5" class="anim-flow"/>
+
+      <!-- Nodes -->
+      <circle cx="260" cy="100" r="32" fill="var(--blue-bg)" stroke="var(--blue)" stroke-width="2" filter="url(#glow)" class="anim-node" style="animation-delay:0s"/>
+      <text x="260" y="96" fill="var(--blue)" font-size="11" font-weight="700" text-anchor="middle">结构</text>
+      <text x="260" y="112" fill="var(--blue)" font-size="11" font-weight="700" text-anchor="middle">力学</text>
+
+      <circle cx="460" cy="80" r="28" fill="var(--cyan-bg)" stroke="var(--cyan)" stroke-width="2" filter="url(#glow)" class="anim-node" style="animation-delay:.1s"/>
+      <text x="460" y="76" fill="var(--cyan)" font-size="11" font-weight="700" text-anchor="middle">弯矩</text>
+      <text x="460" y="92" fill="var(--cyan)" font-size="11" font-weight="700" text-anchor="middle">分析</text>
+
+      <circle cx="660" cy="120" r="30" fill="var(--green-bg)" stroke="var(--green)" stroke-width="2" filter="url(#glow)" class="anim-node" style="animation-delay:.2s"/>
+      <text x="660" y="116" fill="var(--green)" font-size="11" font-weight="700" text-anchor="middle">剪力</text>
+      <text x="660" y="132" fill="var(--green)" font-size="11" font-weight="700" text-anchor="middle">计算</text>
+
+      <circle cx="860" cy="90" r="26" fill="var(--purple-bg)" stroke="var(--purple)" stroke-width="2" filter="url(#glow)" class="anim-node" style="animation-delay:.3s"/>
+      <text x="860" y="94" fill="var(--purple)" font-size="11" font-weight="700" text-anchor="middle">平衡条件</text>
+
+      <circle cx="460" cy="200" r="28" fill="var(--orange-bg)" stroke="var(--orange)" stroke-width="2" filter="url(#glow)" class="anim-node" style="animation-delay:.4s"/>
+      <text x="460" y="196" fill="var(--orange)" font-size="11" font-weight="700" text-anchor="middle">桁架</text>
+      <text x="460" y="212" fill="var(--orange)" font-size="11" font-weight="700" text-anchor="middle">分析</text>
+
+      <circle cx="860" cy="220" r="26" fill="var(--pink-bg)" stroke="var(--pink)" stroke-width="2" filter="url(#glow)" class="anim-node" style="animation-delay:.5s"/>
+      <text x="860" y="224" fill="var(--pink)" font-size="11" font-weight="700" text-anchor="middle">荷载组合</text>
+
+      <circle cx="160" cy="200" r="24" fill="var(--blue-bg)" stroke="var(--blue)" stroke-width="2" filter="url(#glow)" class="anim-node" style="animation-delay:.6s"/>
+      <text x="160" y="204" fill="var(--blue)" font-size="11" font-weight="700" text-anchor="middle">强度</text>
+
+      <!-- Edge labels -->
+      <text x="350" y="78" fill="var(--text3)" font-size="10" text-anchor="middle" transform="rotate(-8,350,78)">mentions</text>
+      <text x="560" y="88" fill="var(--text3)" font-size="10" text-anchor="middle" transform="rotate(8,560,88)">contains</text>
+      <text x="760" y="92" fill="var(--text3)" font-size="10" text-anchor="middle" transform="rotate(-5,760,92)">depends</text>
+      <text x="340" y="160" fill="var(--text3)" font-size="10" text-anchor="middle" transform="rotate(25,340,160)">applies</text>
+      <text x="570" y="170" fill="var(--text3)" font-size="10" text-anchor="middle" transform="rotate(-15,570,170)">uses</text>
+
+      <!-- Legend -->
+      <rect x="30" y="250" width="300" height="40" rx="8" fill="var(--surface2)" opacity=".8"/>
+      <circle cx="60" cy="270" r="6" fill="var(--blue-bg)" stroke="var(--blue)" stroke-width="1.5"/>
+      <text x="74" y="275" fill="var(--text2)" font-size="11">Page 节点</text>
+      <circle cx="160" cy="270" r="6" fill="var(--cyan-bg)" stroke="var(--cyan)" stroke-width="1.5"/>
+      <text x="174" y="275" fill="var(--text2)" font-size="11">Entity 节点</text>
+      <line x1="250" y1="270" x2="280" y2="270" stroke="var(--text3)" stroke-width="1.5" stroke-dasharray="4 3"/>
+      <text x="286" y="275" fill="var(--text2)" font-size="11">关系边</text>
+    </svg>
+  </div>
+
+  <div class="bento bento-2">
+    <div class="card">
+      <h3>🔗 图谱构建流程</h3>
+      <div class="feat"><div class="fi" style="background:var(--blue-bg);color:var(--blue)">1</div><div class="ft"><h4>实体抽取</h4><p>LLM 模式由大模型提取领域实体；Fast 模式从关键词自动生成概念实体</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--cyan-bg);color:var(--cyan)">2</div><div class="ft"><h4>关系推理</h4><p>LLM 提取语义关系（包含/依赖/引用），附带置信度和证据文本</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--green-bg);color:var(--green)">3</div><div class="ft"><h4>图谱投影</h4><p>聚焦模式（BFS 扩展）/ 搜索模式（关键词匹配）/ 概览模式（度排序 Top-N）</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--purple-bg);color:var(--purple)">4</div><div class="ft"><h4>交叉引用</h4><p>自动建立知识条目间交叉引用，生成 cross_references.md</p></div></div>
+    </div>
+    <div class="card">
+      <h3>🎯 投影参数</h3>
+      <table class="tbl">
+        <tr><th>参数</th><th>范围</th><th>说明</th></tr>
+        <tr><td><code style="background:var(--surface2);padding:1px 6px;border-radius:4px;font-size:.82rem">limit</code></td><td>20~500</td><td>返回节点数上限</td></tr>
+        <tr><td><code style="background:var(--surface2);padding:1px 6px;border-radius:4px;font-size:.82rem">depth</code></td><td>1~3</td><td>聚焦扩展深度</td></tr>
+        <tr><td><code style="background:var(--surface2);padding:1px 6px;border-radius:4px;font-size:.82rem">focus_id</code></td><td>节点 ID</td><td>聚焦起点</td></tr>
+        <tr><td><code style="background:var(--surface2);padding:1px 6px;border-radius:4px;font-size:.82rem">query</code></td><td>文本</td><td>搜索关键词</td></tr>
+        <tr><td><code style="background:var(--surface2);padding:1px 6px;border-radius:4px;font-size:.82rem">min_confidence</code></td><td>0.0~1.0</td><td>最低置信度</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 7. CAPTURE ═══════════ -->
+<div id="capture" class="section">
+  <div class="section-title"><div class="ico" style="background:var(--orange-bg);color:var(--orange)">🌐</div>知识捕获工具</div>
+  <div class="section-desc">KnowledgeCapture 是 Agent Tool，允许智能体在浏览网页时将有价值的来源自动保存到知识库。</div>
+
+  <div class="bento bento-2">
+    <div class="card">
+      <h3>📋 输入参数</h3>
+      <table class="tbl">
+        <tr><th>参数</th><th>必填</th><th>说明</th></tr>
+        <tr><td>url</td><td><span class="tag tag-green">必填</span></td><td>原始来源 URL</td></tr>
+        <tr><td>content</td><td><span class="tag tag-green">必填</span></td><td>提取的网页内容</td></tr>
+        <tr><td>reason</td><td><span class="tag tag-green">必填</span></td><td>为何有用（≥12字符）</td></tr>
+        <tr><td>title</td><td><span class="tag tag-blue">可选</span></td><td>来源标题</td></tr>
+        <tr><td>book_id</td><td><span class="tag tag-blue">可选</span></td><td>目标教材 ID</td></tr>
+        <tr><td>tags</td><td><span class="tag tag-blue">可选</span></td><td>主题标签数组</td></tr>
+        <tr><td>force</td><td><span class="tag tag-blue">可选</span></td><td>跳过质量检查</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h3>🛡️ 五重质量守卫</h3>
+      <div class="feat"><div class="fi" style="background:var(--orange-bg);color:var(--orange)">🔒</div><div class="ft"><h4>URL 协议检查</h4><p>仅接受 http/https，拒绝本地路径</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--orange-bg);color:var(--orange)">🚫</div><div class="ft"><h4>搜索引擎过滤</h4><p>自动拒绝 Google/Baidu/Bing 搜索结果页</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--orange-bg);color:var(--orange)">📏</div><div class="ft"><h4>内容长度检查</h4><p>少于 180 字符的来源判定为信息不足</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--orange-bg);color:var(--orange)">✍️</div><div class="ft"><h4>理由充分性</h4><p>保存理由需 ≥12 字符，确保未来可追溯</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--orange-bg);color:var(--orange)">🔄</div><div class="ft"><h4>去重机制</h4><p>基于 URL+内容 SHA-256 哈希去重</p></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 8. MEMORY ═══════════ -->
+<div id="memory" class="section">
+  <div class="section-title"><div class="ico" style="background:var(--green-bg);color:var(--green)">🧠</div>记忆系统协同</div>
+  <div class="section-desc">知识库与记忆系统深度集成，形成"长期知识 + 工作记忆"的双层记忆架构。</div>
+
+  <div class="diagram-box" style="margin-bottom:20px">
+    <svg viewBox="0 0 1100 260" xmlns="http://www.w3.org/2000/svg">
+      <!-- Knowledge System -->
+      <rect x="40" y="30" width="460" height="200" rx="14" fill="var(--blue-bg)" stroke="var(--blue)" stroke-width="1.5"/>
+      <text x="270" y="60" fill="var(--blue)" font-size="16" font-weight="800" text-anchor="middle">知识库 KnowledgeService</text>
+      <rect x="60" y="75" width="200" height="36" rx="8" fill="var(--surface2)"/>
+      <text x="160" y="98" fill="var(--text2)" font-size="12" font-weight="600" text-anchor="middle">LLM-WIKI 文件索引</text>
+      <rect x="280" y="75" width="200" height="36" rx="8" fill="var(--surface2)"/>
+      <text x="380" y="98" fill="var(--text2)" font-size="12" font-weight="600" text-anchor="middle">BM25+元数据+图谱</text>
+      <rect x="60" y="125" width="200" height="36" rx="8" fill="var(--surface2)"/>
+      <text x="160" y="148" fill="var(--text2)" font-size="12" font-weight="600" text-anchor="middle">用户上传文档</text>
+      <rect x="280" y="125" width="200" height="36" rx="8" fill="var(--surface2)"/>
+      <text x="380" y="148" fill="var(--text2)" font-size="12" font-weight="600" text-anchor="middle">网页捕获来源</text>
+      <text x="270" y="195" fill="var(--text3)" font-size="11" text-anchor="middle">Embedding 预留 · 增量索引 · 证据包输出</text>
+
+      <!-- Sync arrows -->
+      <line x1="500" y1="100" x2="600" y2="100" stroke="var(--cyan)" stroke-width="2.5" marker-end="url(#arrow)" class="anim-flow"/>
+      <text x="550" y="90" fill="var(--cyan)" font-size="11" font-weight="600" text-anchor="middle">sync()</text>
+      <line x1="600" y1="160" x2="500" y2="160" stroke="var(--orange)" stroke-width="2.5" marker-end="url(#arrow)" class="anim-flow"/>
+      <text x="550" y="180" fill="var(--orange)" font-size="11" font-weight="600" text-anchor="middle">mark_dirty()</text>
+
+      <!-- Memory System -->
+      <rect x="600" y="30" width="460" height="200" rx="14" fill="var(--green-bg)" stroke="var(--green)" stroke-width="1.5"/>
+      <text x="830" y="60" fill="var(--green)" font-size="16" font-weight="800" text-anchor="middle">记忆系统 MemoryManager</text>
+      <rect x="620" y="75" width="200" height="36" rx="8" fill="var(--surface2)"/>
+      <text x="720" y="98" fill="var(--text2)" font-size="12" font-weight="600" text-anchor="middle">SQLite + FTS5</text>
+      <rect x="840" y="75" width="200" height="36" rx="8" fill="var(--surface2)"/>
+      <text x="940" y="98" fill="var(--text2)" font-size="12" font-weight="600" text-anchor="middle">向量+关键词混合</text>
+      <rect x="620" y="125" width="200" height="36" rx="8" fill="var(--surface2)"/>
+      <text x="720" y="148" fill="var(--text2)" font-size="12" font-weight="600" text-anchor="middle">对话历史/进程记忆</text>
+      <rect x="840" y="125" width="200" height="36" rx="8" fill="var(--surface2)"/>
+      <text x="940" y="148" fill="var(--text2)" font-size="12" font-weight="600" text-anchor="middle">用户画像/时间衰减</text>
+      <text x="830" y="195" fill="var(--text3)" font-size="11" text-anchor="middle">OpenAI Embedding · 半衰期30天 · 权重0.7/0.3</text>
+    </svg>
+  </div>
+
+  <div class="card">
+    <h3>🗄️ 存储架构对比</h3>
+    <table class="tbl">
+      <tr><th>维度</th><th>知识库 (KnowledgeService)</th><th>记忆系统 (MemoryManager)</th></tr>
+      <tr><td>存储格式</td><td>LLM-WIKI 文件索引 (JSON + MD)</td><td>SQLite + FTS5 + 文件系统</td></tr>
+      <tr><td>检索策略</td><td>BM25 + 元数据加权 + 图谱扩展</td><td>向量余弦 + FTS5/LIKE + 时间衰减</td></tr>
+      <tr><td>数据来源</td><td>用户上传文档 + 网页捕获</td><td>对话历史 + 进程记忆 + 用户画像</td></tr>
+      <tr><td>核心用途</td><td>为教材编写提供证据支撑</td><td>恢复上下文、记住偏好</td></tr>
+      <tr><td>Embedding</td><td>预留结构，待商业化启用</td><td>已集成 OpenAI/LinkAI</td></tr>
+      <tr><td>增量更新</td><td>基于内容哈希的增量索引</td><td>基于文件哈希的变更检测</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════ 9. SOURCE NAV ═══════════ -->
+<div id="source" class="section">
+  <div class="section-title"><div class="ico" style="background:var(--blue-bg);color:var(--blue)">🗺️</div>端到端数据流 & 源码导航</div>
+  <div class="section-desc">从上传到检索的完整流转路径，以及核心源码文件索引。</div>
+
+  <div class="diagram-box" style="margin-bottom:20px">
+    <svg viewBox="0 0 1100 120" xmlns="http://www.w3.org/2000/svg">
+      <!-- Data flow pipeline -->
+      <rect x="10" y="30" width="110" height="56" rx="10" fill="var(--blue-bg)" stroke="var(--blue)" stroke-width="1.5" class="anim-node" style="animation-delay:0s"/>
+      <text x="65" y="55" fill="var(--blue)" font-size="12" font-weight="700" text-anchor="middle">📤 上传文档</text>
+      <text x="65" y="72" fill="var(--text3)" font-size="10" text-anchor="middle">PDF/DOCX/MD</text>
+      <line x1="120" y1="58" x2="145" y2="58" stroke="var(--text3)" stroke-width="1.5" marker-end="url(#arrow)" class="anim-flow"/>
+
+      <rect x="145" y="30" width="110" height="56" rx="10" fill="var(--cyan-bg)" stroke="var(--cyan)" stroke-width="1.5" class="anim-node" style="animation-delay:.1s"/>
+      <text x="200" y="55" fill="var(--cyan)" font-size="12" font-weight="700" text-anchor="middle">⚙️ AI 整理</text>
+      <text x="200" y="72" fill="var(--text3)" font-size="10" text-anchor="middle">分块+元数据</text>
+      <line x1="255" y1="58" x2="280" y2="58" stroke="var(--text3)" stroke-width="1.5" marker-end="url(#arrow)" class="anim-flow"/>
+
+      <rect x="280" y="30" width="110" height="56" rx="10" fill="var(--green-bg)" stroke="var(--green)" stroke-width="1.5" class="anim-node" style="animation-delay:.2s"/>
+      <text x="335" y="55" fill="var(--green)" font-size="12" font-weight="700" text-anchor="middle">📦 LLM-WIKI</text>
+      <text x="335" y="72" fill="var(--text3)" font-size="10" text-anchor="middle">索引持久化</text>
+      <line x1="390" y1="58" x2="415" y2="58" stroke="var(--text3)" stroke-width="1.5" marker-end="url(#arrow)" class="anim-flow"/>
+
+      <rect x="415" y="30" width="110" height="56" rx="10" fill="var(--purple-bg)" stroke="var(--purple)" stroke-width="1.5" class="anim-node" style="animation-delay:.3s"/>
+      <text x="470" y="55" fill="var(--purple)" font-size="12" font-weight="700" text-anchor="middle">🕸️ 图谱构建</text>
+      <text x="470" y="72" fill="var(--text3)" font-size="10" text-anchor="middle">实体+关系</text>
+      <line x1="525" y1="58" x2="550" y2="58" stroke="var(--text3)" stroke-width="1.5" marker-end="url(#arrow)" class="anim-flow"/>
+
+      <rect x="550" y="30" width="110" height="56" rx="10" fill="var(--orange-bg)" stroke="var(--orange)" stroke-width="1.5" class="anim-node" style="animation-delay:.4s"/>
+      <text x="605" y="55" fill="var(--orange)" font-size="12" font-weight="700" text-anchor="middle">🧠 记忆同步</text>
+      <text x="605" y="72" fill="var(--text3)" font-size="10" text-anchor="middle">SQLite+FTS5</text>
+      <line x1="660" y1="58" x2="685" y2="58" stroke="var(--text3)" stroke-width="1.5" marker-end="url(#arrow)" class="anim-flow"/>
+
+      <rect x="685" y="30" width="110" height="56" rx="10" fill="var(--pink-bg)" stroke="var(--pink)" stroke-width="1.5" class="anim-node" style="animation-delay:.5s"/>
+      <text x="740" y="55" fill="var(--pink)" font-size="12" font-weight="700" text-anchor="middle">✍️ 教材编写</text>
+      <text x="740" y="72" fill="var(--text3)" font-size="10" text-anchor="middle">章节生成</text>
+      <line x1="795" y1="58" x2="820" y2="58" stroke="var(--text3)" stroke-width="1.5" marker-end="url(#arrow)" class="anim-flow"/>
+
+      <rect x="820" y="30" width="110" height="56" rx="10" fill="var(--blue-bg)" stroke="var(--blue)" stroke-width="1.5" class="anim-node" style="animation-delay:.6s"/>
+      <text x="875" y="55" fill="var(--blue)" font-size="12" font-weight="700" text-anchor="middle">🔍 知识检索</text>
+      <text x="875" y="72" fill="var(--text3)" font-size="10" text-anchor="middle">三路融合</text>
+      <line x1="930" y1="58" x2="955" y2="58" stroke="var(--text3)" stroke-width="1.5" marker-end="url(#arrow)" class="anim-flow"/>
+
+      <rect x="955" y="30" width="130" height="56" rx="10" fill="var(--green-bg)" stroke="var(--green)" stroke-width="2" class="anim-node" style="animation-delay:.7s"/>
+      <text x="1020" y="55" fill="var(--green)" font-size="12" font-weight="700" text-anchor="middle">📋 Evidence</text>
+      <text x="1020" y="72" fill="var(--text3)" font-size="10" text-anchor="middle">注入上下文</text>
+    </svg>
+  </div>
+
+  <div class="card">
+    <h3>🗺️ 核心源码导航</h3>
+    <table class="tbl">
+      <tr><th>模块</th><th>文件路径</th><th>职责</th></tr>
+      <tr><td><span class="tag tag-blue">知识服务</span></td><td>agent/knowledge/service.py</td><td>文档处理、LLM-WIKI 构建、图谱生成、统一调度</td></tr>
+      <tr><td><span class="tag tag-cyan">知识检索</span></td><td>agent/knowledge/retriever.py</td><td>BM25 + 元数据 + 图谱三路融合检索</td></tr>
+      <tr><td><span class="tag tag-orange">知识捕获</span></td><td>agent/tools/knowledge_capture/</td><td>网页内容保存为知识来源</td></tr>
+      <tr><td><span class="tag tag-green">记忆管理</span></td><td>agent/memory/manager.py</td><td>混合检索、文件同步、记忆刷写</td></tr>
+      <tr><td><span class="tag tag-purple">记忆存储</span></td><td>agent/memory/storage.py</td><td>SQLite + FTS5 存储层</td></tr>
+      <tr><td><span class="tag tag-blue">文本分块</span></td><td>agent/memory/chunker.py</td><td>通用文本分块器</td></tr>
+      <tr><td><span class="tag tag-cyan">Embedding</span></td><td>agent/memory/embedding.py</td><td>OpenAI/LinkAI 向量生成</td></tr>
+      <tr><td><span class="tag tag-orange">整理技能</span></td><td>skills/knowledge_organizer/</td><td>SKILL.md + organize.py 脚本</td></tr>
+      <tr><td><span class="tag tag-green">记忆查询</span></td><td>agent/memory/query_service.py</td><td>统一查询 API（画像/进程/历史）</td></tr>
+    </table>
+  </div>
+</div>
+
+</div>
+
+<div class="footer">
+  <p>TextBookAgent 知识库系统技术解析 · 基于项目源码深度分析生成</p>
+  <p style="margin-top:6px">KnowledgeService · KnowledgeRetriever · KnowledgeCapture · MemoryManager</p>
+</div>
+
+<script>
+const nav=document.querySelector('.topnav .links');
+const links=nav.querySelectorAll('a');
+const sections=document.querySelectorAll('.section[id]');
+const obs=new IntersectionObserver(entries=>{
+  entries.forEach(e=>{
+    if(e.isIntersecting){
+      links.forEach(l=>l.classList.remove('active'));
+      const a=nav.querySelector(`a[href="#${e.target.id}"]`);
+      if(a)a.classList.add('active');
+    }
+  });
+},{threshold:.3});
+sections.forEach(s=>obs.observe(s));
+</script>
+</body>
+</html>

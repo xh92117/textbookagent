@@ -53,6 +53,7 @@ class Agent:
         self.enable_skills = enable_skills  # Skills enabled flag
         self.runtime_info = runtime_info  # Runtime info for dynamic time update
         self._cancel_event = threading.Event()  # Cancellation signal
+        self._memory_bootstrap_consumed = False
         
         # Initialize skill manager
         self.skill_manager = None
@@ -109,11 +110,22 @@ class Agent:
         """
         try:
             from agent.prompt import load_context_files, PromptBuilder
+            from agent.prompt.builder import ContextFile
 
             if self.skill_manager:
                 self.skill_manager.refresh_skills()
 
-            context_files = load_context_files(self.workspace_dir) if self.workspace_dir else None
+            context_files = None
+            if self.workspace_dir:
+                context_files = load_context_files(
+                    self.workspace_dir,
+                    files_to_load=["AGENT.md", "USER.md", "RULE.md", "BOOTSTRAP.md"],
+                )
+                if not self._memory_bootstrap_consumed:
+                    memory_bootstrap = self._build_memory_bootstrap_context()
+                    if memory_bootstrap:
+                        context_files.append(ContextFile(path="SYSTEM_MEMORY_BOOTSTRAP.md", content=memory_bootstrap))
+                    self._memory_bootstrap_consumed = True
 
             builder = PromptBuilder(workspace_dir=self.workspace_dir or "", language="zh")
             return builder.build(
@@ -126,6 +138,20 @@ class Agent:
         except Exception as e:
             logger.warning(f"Failed to rebuild system prompt, using cached version: {e}")
             return self.system_prompt
+
+    def _build_memory_bootstrap_context(self) -> str:
+        if not self.memory_manager:
+            return ""
+        try:
+            from agent.memory import MemoryBootstrap
+            from common.app_paths import system_dir
+
+            session_id = getattr(self.model, "session_id", "") if self.model else ""
+            bootstrap = MemoryBootstrap(system_dir(), project_workspace=self.workspace_dir or "")
+            return bootstrap.build_startup_context(session_id=session_id)
+        except Exception as e:
+            logger.debug(f"Memory bootstrap context skipped: {e}")
+            return ""
 
     def refresh_skills(self):
         """Refresh the loaded skills."""
@@ -158,6 +184,14 @@ class Agent:
         
         :return: Context window size in tokens
         """
+        try:
+            from config import conf
+            configured_window = int(conf().get("agent_model_context_window", 0) or 0)
+            if configured_window > 0:
+                return configured_window
+        except Exception:
+            pass
+
         if self.model and hasattr(self.model, 'model'):
             model_name = self.model.model.lower()
 
@@ -217,11 +251,19 @@ class Agent:
         """
         if self.context_reserve_tokens is not None:
             return self.context_reserve_tokens
+        try:
+            from config import conf
+            configured_reserve = int(conf().get("agent_context_reserve_tokens", 0) or 0)
+            if configured_reserve > 0:
+                return configured_reserve
+        except Exception:
+            pass
 
-        # Reserve ~10% of context window, with min 10K and max 200K
+        # Reserve enough room for long chapter drafting while avoiding a
+        # needless 10K minimum on 64K-class models.
         context_window = self._get_model_context_window()
         reserve = int(context_window * 0.1)
-        return max(10000, min(200000, reserve))
+        return max(6000, min(200000, reserve))
 
     def _estimate_message_tokens(self, message: dict) -> int:
         """

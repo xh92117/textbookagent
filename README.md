@@ -163,7 +163,7 @@ TextBookAgent/
   channel/web/             # Web API 与前端页面
   common/                  # 公共工具
   models/                  # 各模型供应商适配
-  plugins/                 # CowAgent 插件
+  plugins/                 # TextbookAgent 插件
   skills/                  # Agent Skill 文档和脚本
   tests/                   # 自动化测试
   app.py                   # 启动入口

@@ -1,0 +1,48 @@
+{
+  "devDependencies": {
+    "docx": "^9.6.1"
+  },
+  "name": "textbookagent",
+  "version": "1.0.0",
+  "description": "TextBookAgent 是一个面向教材、讲义、课程资料与专业知识内容生产的智能体系统。它基于大语言模型、Agent Skill、知识库检索、长任务管线、记忆系统和文档导出能力，支持从“一个教材需求”逐步生成大纲、章节、审查报告、图表、插图和 Word 文档。",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "dependencies": {
+    "core-util-is": "^1.0.3",
+    "hash.js": "^1.1.7",
+    "immediate": "^3.0.6",
+    "inherits": "^2.0.4",
+    "isarray": "^1.0.0",
+    "jszip": "^3.10.1",
+    "lie": "^3.3.0",
+    "minimalistic-assert": "^1.0.1",
+    "nanoid": "^5.1.11",
+    "pako": "^1.0.11",
+    "process-nextick-args": "^2.0.1",
+    "readable-stream": "^2.3.8",
+    "safe-buffer": "^5.1.2",
+    "sax": "^1.6.0",
+    "setimmediate": "^1.0.5",
+    "string_decoder": "^1.1.1",
+    "undici-types": "^7.24.6",
+    "util-deprecate": "^1.0.2",
+    "xml": "^1.0.1",
+    "xml-js": "^1.6.11"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xh92117/textbookagent.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/xh92117/textbookagent/issues"
+  },
+  "homepage": "https://github.com/xh92117/textbookagent#readme"
+}

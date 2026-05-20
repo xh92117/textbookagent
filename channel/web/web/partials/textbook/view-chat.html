@@ -1,0 +1,41 @@
+<div class="view-page" id="view-chat">
+                    <div class="chat-container">
+                        <div class="chat-terminal-title">Agent 对话</div>
+                        <div class="chat-messages" id="chatMessages">
+                        </div>
+                        <div class="chat-input-area">
+                            <div id="attachment-preview" class="attachment-preview hidden"></div>
+                            <div class="chat-input-wrapper">
+                                <input type="file" id="chatFileInput" class="hidden" multiple
+                                       accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json,.xml,.zip,.rar,.7z,.py,.js,.ts,.java,.c,.cpp,.go,.rs,.md">
+                                <div id="attachMenu" class="attach-menu hidden">
+                                    <button class="attach-menu-item" onclick="triggerFileUpload()">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+                                        <span>上传文件</span>
+                                    </button>
+                                </div>
+                                <button class="chat-model-btn" id="chatModelBtn" onclick="toggleModelMenu(event)" title="切换模型">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+                                        <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                                        <path d="M2 17l10 5 10-5"/>
+                                        <path d="M2 12l10 5 10-5"/>
+                                    </svg>
+                                </button>
+                                <div id="modelMenu" class="model-menu hidden"></div>
+                                <div id="slashMenu" class="slash-menu hidden"></div>
+                                <textarea class="chat-input" rows="1" id="chatInput" placeholder="输入消息，粘贴文件或图片..."></textarea>
+                                <button class="chat-attach-btn" id="chatAttachBtn" onclick="toggleAttachMenu(event)" title="上传文件">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+                                    </svg>
+                                </button>
+                                <button class="chat-send-btn" onclick="sendChatMessage()">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="22" y1="2" x2="11" y2="13"/>
+                                        <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>

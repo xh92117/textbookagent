@@ -6,6 +6,7 @@ Supports:
 - Document files (PDF, Word, TXT, Markdown, etc.): downloads to workspace/tmp and parses content
 """
 
+import json
 import os
 import re
 import uuid
@@ -21,6 +22,8 @@ from common.log import logger
 
 DEFAULT_TIMEOUT = 30
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+WEBPAGE_MAX_LINES = 240
+WEBPAGE_MAX_BYTES = 12 * 1024
 
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
@@ -80,7 +83,8 @@ class WebFetch(BaseTool):
     description: str = (
         "Fetch content from a http/https URL. For web pages, extracts readable text. "
         "For document files (PDF, Word, TXT, Markdown, Excel, PPT), downloads and parses the file content. "
-        "Supported file types: .pdf, .docx, .txt, .md, .csv, .xls, .xlsx, .ppt, .pptx"
+        "Supported file types: .pdf, .docx, .txt, .md, .csv, .xls, .xlsx, .ppt, .pptx. "
+        "When fetching useful original web sources for textbook research, call knowledge_capture immediately after each credible source instead of postponing all saves."
     )
 
     params: dict = {
@@ -130,7 +134,8 @@ class WebFetch(BaseTool):
         except requests.ConnectionError:
             return ToolResult.fail(f"Error: Failed to connect to {parsed.netloc}")
         except requests.HTTPError as e:
-            return ToolResult.fail(f"Error: HTTP {e.response.status_code} for URL: {url}")
+            status_code = e.response.status_code if e.response is not None else "unknown"
+            return ToolResult.fail(self._format_http_error(url, status_code))
         except Exception as e:
             return ToolResult.fail(f"Error: Failed to fetch URL: {e}")
 
@@ -138,12 +143,146 @@ class WebFetch(BaseTool):
         if self._is_binary_content_type(content_type) and not _is_document_url(url):
             return self._handle_download_by_content_type(url, response, content_type)
 
+        if self._is_json_response(url, content_type):
+            json_result = self._format_json_response(url, response)
+            if json_result:
+                return ToolResult.success(json_result)
+
         response.encoding = self._detect_encoding(response)
         html = response.text
         title = self._extract_title(html)
         text = self._extract_text(html)
+        block_reason = self._detect_search_block(url, title, text)
+        if block_reason:
+            return ToolResult.fail(block_reason)
+        text = self._wrap_long_lines(text)
+        truncation = truncate_head(text, max_lines=WEBPAGE_MAX_LINES, max_bytes=WEBPAGE_MAX_BYTES)
+        body = truncation.content
+        header = f"Source URL: {url}\n"
+        if truncation.truncated:
+            header += (
+                f"[Content truncated for web research: showing {truncation.output_lines} "
+                f"of {truncation.total_lines} lines, max {format_size(WEBPAGE_MAX_BYTES)}. "
+                "Open or fetch a more specific source section if needed.]\n"
+            )
 
-        return ToolResult.success(f"Title: {title}\n\nContent:\n{text}")
+        return ToolResult.success(f"Title: {title}\n{header}\nContent:\n{body}")
+
+    @staticmethod
+    def _wrap_long_lines(text: str, width: int = 1200) -> str:
+        """Insert soft line breaks so minified pages still expose useful head content."""
+        if not text:
+            return text
+        wrapped = []
+        for line in text.splitlines():
+            if len(line) <= width:
+                wrapped.append(line)
+                continue
+            wrapped.extend(line[i:i + width] for i in range(0, len(line), width))
+        return "\n".join(wrapped)
+
+    @staticmethod
+    def _format_http_error(url: str, status_code: Any) -> str:
+        message = f"Error: HTTP {status_code} for URL: {url}"
+        parsed = urlparse(url)
+        if status_code == 404 and parsed.netloc.lower() == "raw.githubusercontent.com":
+            parts = [part for part in parsed.path.split("/") if part]
+            if len(parts) >= 3:
+                owner, repo, ref = parts[:3]
+                guessed_dir = "/".join(parts[3:-1])
+                api_url = f"https://api.github.com/repos/{owner}/{repo}/contents"
+                if guessed_dir:
+                    api_url += f"/{guessed_dir}"
+                api_url += f"?ref={ref}"
+                message += (
+                    "\nHint: This GitHub raw path does not exist. Do not keep guessing raw filenames; "
+                    f"fetch the repository contents API instead and use the returned download_url values: {api_url}"
+                )
+        return message
+
+    @staticmethod
+    def _is_json_response(url: str, content_type: str) -> bool:
+        parsed = urlparse(url)
+        return "json" in (content_type or "").lower() or parsed.netloc.lower() == "api.github.com"
+
+    def _format_json_response(self, url: str, response: requests.Response) -> str:
+        try:
+            data = response.json()
+        except Exception:
+            try:
+                data = json.loads(response.text)
+            except Exception:
+                return ""
+
+        body = self._format_github_contents_json(data)
+        title = "GitHub contents API" if body else "JSON API response"
+        if not body:
+            body = json.dumps(data, ensure_ascii=False, indent=2)
+
+        truncation = truncate_head(body, max_lines=300, max_bytes=WEBPAGE_MAX_BYTES)
+        header = f"Title: {title}\nSource URL: {url}\n"
+        if truncation.truncated:
+            header += (
+                f"[Content truncated for web research: showing {truncation.output_lines} "
+                f"of {truncation.total_lines} lines, max {format_size(WEBPAGE_MAX_BYTES)}.]\n"
+            )
+        return f"{header}\nContent:\n{truncation.content}"
+
+    @staticmethod
+    def _format_github_contents_json(data: Any) -> str:
+        if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
+            return ""
+
+        if not any({"name", "path", "type"} <= set(item.keys()) for item in data):
+            return ""
+
+        lines = [
+            "Detected GitHub repository contents listing.",
+            "Use download_url for files and url/html_url for subdirectories; do not guess raw.githubusercontent.com paths.",
+            "",
+        ]
+        for item in data:
+            item_type = item.get("type", "unknown")
+            name = item.get("name", "")
+            path = item.get("path", "")
+            lines.append(f"- [{item_type}] {path or name}")
+            if item.get("download_url"):
+                lines.append(f"  download_url: {item['download_url']}")
+            if item.get("html_url"):
+                lines.append(f"  html_url: {item['html_url']}")
+            if item_type == "dir" and item.get("url"):
+                lines.append(f"  api_url: {item['url']}")
+        return "\n".join(lines).strip()
+
+    def _detect_search_block(self, url: str, title: str, text: str) -> str:
+        parsed = urlparse(url)
+        host = (parsed.netloc or "").lower()
+        if not any(engine in host for engine in ("google.", "baidu.", "duckduckgo.", "bing.", "brave.com")):
+            return ""
+        sample = f"{title}\n{text[:1200]}".lower()
+        blocked_markers = [
+            "please complete the following challenge",
+            "confirm this search was made by",
+            "百度安全验证",
+            "网络不给力，请稍后重试",
+            "if you're having trouble accessing google search",
+            "unusual traffic",
+            "sorry, but your computer or network may be sending automated queries",
+            "captcha",
+            "rate limit",
+            "too many requests",
+        ]
+        if any(marker.lower() in sample for marker in blocked_markers):
+            return (
+                f"Error: Search engine access blocked or challenged for {host}. "
+                "Do not retry the same engine immediately; switch to a different engine or fetch known source URLs directly."
+            )
+        if "google." in host and (title or "").strip().lower() == "google search" and len(text.strip()) < 500:
+            return (
+                "Error: Google returned a redirect/low-signal search page instead of usable results. "
+                "Use Brave/Bing once or fetch known source URLs directly."
+            )
+        return ""
 
     # ---- Document fetching ----
 
@@ -190,7 +329,8 @@ class WebFetch(BaseTool):
         except requests.ConnectionError:
             return ToolResult.fail(f"Error: Failed to connect to {parsed.netloc}")
         except requests.HTTPError as e:
-            return ToolResult.fail(f"Error: HTTP {e.response.status_code} for URL: {url}")
+            status_code = e.response.status_code if e.response is not None else "unknown"
+            return ToolResult.fail(self._format_http_error(url, status_code))
         except Exception as e:
             self._cleanup_file(local_path)
             return ToolResult.fail(f"Error: Failed to download file: {e}")

@@ -1,5 +1,5 @@
 /* =====================================================================
-   CowAgent Console - Main Application Script
+   TextbookAgent Console - Main Application Script
    ===================================================================== */
 
 // =====================================================================
@@ -558,7 +558,7 @@ let pollGeneration = 0;   // incremented on each restart to cancel stale poll lo
 let loadingContainers = {};
 let activeStreams = {};   // request_id -> EventSource
 let isComposing = false;
-let appConfig = { use_agent: false, title: 'CowAgent', subtitle: '', providers: {}, api_bases: {} };
+let appConfig = { use_agent: false, title: 'TextbookAgent', subtitle: '', providers: {}, api_bases: {} };
 
 const SESSION_ID_KEY = 'cow_session_id';
 
@@ -588,7 +588,7 @@ let historyLoading = false;
 fetch('/config').then(r => r.json()).then(data => {
     if (data.status === 'success') {
         appConfig = data;
-        const title = data.title || 'CowAgent';
+        const title = data.title || 'TextbookAgent';
         document.getElementById('welcome-title').textContent = title;
         initConfigView(data);
     }
@@ -676,6 +676,13 @@ function renderAttachmentPreview() {
     }
     attachmentPreview.classList.remove('hidden');
     attachmentPreview.innerHTML = pendingAttachments.map((att, idx) => {
+        if (att._error) {
+            return `<div class="att-chip att-error" data-idx="${idx}" title="${escapeHtml(att._error)}">
+                <i class="fas fa-circle-exclamation"></i>
+                <span class="att-name">${escapeHtml(att.file_name || 'Upload failed')}</span>
+                <button class="att-remove" onclick="removeAttachment(${idx})">&times;</button>
+            </div>`;
+        }
         if (att._uploading) {
             const suffix = att.file_type === 'directory' && att.file_count
                 ? ` (${att.file_count})`
@@ -704,6 +711,25 @@ function renderAttachmentPreview() {
         </div>`;
     }).join('');
     updateSendBtnState();
+}
+
+async function parseUploadResponse(resp) {
+    const text = await resp.text();
+    let data = {};
+    try {
+        data = text ? JSON.parse(text) : {};
+    } catch (e) {
+        throw new Error(text ? text.slice(0, 300) : `HTTP ${resp.status}`);
+    }
+    if (!resp.ok || data.status !== 'success') {
+        throw new Error(data.message || `HTTP ${resp.status}`);
+    }
+    return data;
+}
+
+function markAttachmentUploadFailed(placeholder, error) {
+    placeholder._uploading = false;
+    placeholder._error = error?.message || String(error || 'Upload failed');
 }
 
 function removeAttachment(idx) {
@@ -754,22 +780,25 @@ async function handleFileSelect(files) {
             formData.append('file', file);
             formData.append('session_id', sessionId);
             try {
-                const resp = await fetch('/upload', { method: 'POST', body: formData });
-                const data = await resp.json();
-                if (data.status === 'success') {
-                    placeholder.file_path = data.file_path;
-                    placeholder.file_name = data.file_name;
-                    placeholder.file_type = data.file_type;
-                    placeholder.preview_url = data.preview_url;
-                    delete placeholder._uploading;
-                } else {
-                    const i = pendingAttachments.indexOf(placeholder);
-                    if (i !== -1) pendingAttachments.splice(i, 1);
+                const resp = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'same-origin',
+                    headers: { 'Accept': 'application/json' },
+                });
+                const data = await parseUploadResponse(resp);
+                placeholder.file_path = data.file_path;
+                placeholder.file_name = data.file_name || file.name;
+                placeholder.file_type = data.file_type || 'file';
+                placeholder.preview_url = data.preview_url;
+                delete placeholder._uploading;
+                delete placeholder._error;
+                if (!placeholder.file_path) {
+                    throw new Error('Upload response missing file path');
                 }
             } catch (e) {
                 console.error('Upload failed:', e);
-                const i = pendingAttachments.indexOf(placeholder);
-                if (i !== -1) pendingAttachments.splice(i, 1);
+                markAttachmentUploadFailed(placeholder, e);
             }
             uploadingCount--;
             renderAttachmentPreview();
@@ -821,21 +850,23 @@ async function handleFolderSelect(files) {
                     formData.append('relative_paths', relPath);
                 }
 
-                const resp = await fetch('/upload', { method: 'POST', body: formData });
-                const data = await resp.json();
-                if (data.status !== 'success') {
-                    throw new Error(data.message || 'Upload failed');
-                }
+                const resp = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'same-origin',
+                    headers: { 'Accept': 'application/json' },
+                });
+                const data = await parseUploadResponse(resp);
                 if (!data.root_path) {
                     throw new Error('Directory root path missing');
                 }
                 placeholder.file_path = data.root_path;
                 placeholder.file_name = data.root_name || rootName;
                 delete placeholder._uploading;
+                delete placeholder._error;
             } catch (e) {
                 console.error('Directory upload failed:', e);
-                const i = pendingAttachments.indexOf(placeholder);
-                if (i !== -1) pendingAttachments.splice(i, 1);
+                markAttachmentUploadFailed(placeholder, e);
             } finally {
                 uploadingCount--;
             }
@@ -1258,7 +1289,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo) {
         botEl.className = 'flex gap-3 px-4 sm:px-6 py-3';
         botEl.dataset.requestId = requestId;
         botEl.innerHTML = `
-            <img src="assets/logo.jpg" alt="CowAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
+            <img src="assets/logo.jpg" alt="TextbookAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
             <div class="min-w-0 flex-1 max-w-[85%]">
                 <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-3 text-sm leading-relaxed msg-content text-slate-700 dark:text-slate-200">
                     <div class="agent-steps"></div>
@@ -1303,6 +1334,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo) {
                     // the page to crash on long chains-of-thought.
                     currentReasoningEl.innerHTML = `
                         <div class="thinking-header" onclick="this.parentElement.classList.toggle('expanded')">
+                            <span class="thinking-label">thinking</span>
                             <i class="fas fa-lightbulb text-amber-400 flex-shrink-0"></i>
                             <span class="thinking-summary">${t('thinking_in_progress')}</span>
                             <i class="fas fa-chevron-right thinking-chevron"></i>
@@ -1696,6 +1728,7 @@ function renderThinkingHtml(text) {
     return `
 <div class="agent-step agent-thinking-step">
     <div class="thinking-header" onclick="this.parentElement.classList.toggle('expanded')">
+        <span class="thinking-label">thinking</span>
         <i class="fas fa-lightbulb text-amber-400 flex-shrink-0"></i>
         <span class="thinking-summary">${t('thinking_done')}</span>
         <i class="fas fa-chevron-right thinking-chevron"></i>
@@ -1803,7 +1836,7 @@ function createBotMessageEl(content, timestamp, requestId, msg) {
     }
 
     el.innerHTML = `
-        <img src="assets/logo.jpg" alt="CowAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
+        <img src="assets/logo.jpg" alt="TextbookAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
         <div class="min-w-0 flex-1 max-w-[85%]">
             <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-3 text-sm leading-relaxed msg-content text-slate-700 dark:text-slate-200">
                 ${stepsHtml ? `<div class="agent-steps">${stepsHtml}</div>` : ''}
@@ -1934,7 +1967,7 @@ function addLoadingIndicator() {
     const el = document.createElement('div');
     el.className = 'flex gap-3 px-4 sm:px-6 py-3';
     el.innerHTML = `
-        <img src="assets/logo.jpg" alt="CowAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
+        <img src="assets/logo.jpg" alt="TextbookAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
         <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-3">
             <div class="flex items-center gap-1.5">
                 <span class="w-2 h-2 rounded-full bg-primary-400 animate-pulse-dot" style="animation-delay: 0s"></span>
@@ -1964,8 +1997,8 @@ function newChat() {
     ws.className = 'flex flex-col items-center justify-center h-full px-6 pb-16';
     ws.style.paddingTop = '6vh';
     ws.innerHTML = `
-        <img src="assets/logo.jpg" alt="CowAgent" class="w-16 h-16 rounded-2xl mb-6 shadow-lg shadow-primary-500/20">
-        <h1 class="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-3">${appConfig.title || 'CowAgent'}</h1>
+        <img src="assets/logo.jpg" alt="TextbookAgent" class="w-16 h-16 rounded-2xl mb-6 shadow-lg shadow-primary-500/20">
+        <h1 class="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-3">${appConfig.title || 'TextbookAgent'}</h1>
         <p class="text-slate-500 dark:text-slate-400 text-center max-w-lg mb-10 leading-relaxed" data-i18n="welcome_subtitle">${t('welcome_subtitle')}</p>
         <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 w-full max-w-2xl">
             <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4 cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200">
@@ -3715,7 +3748,7 @@ function connectWeixinAfterQr() {
 // WeCom Bot QR Auth
 // =====================================================================
 const WECOM_BOT_SDK_URL = 'https://wwcdn.weixin.qq.com/node/wework/js/wecom-aibot-sdk@0.1.0.min.js';
-const WECOM_BOT_SOURCE = 'cowagent';
+const WECOM_BOT_SOURCE = 'textbookagent';
 let _wecomSdkLoaded = false;
 
 function ensureWecomSdkLoaded() {
@@ -4876,9 +4909,9 @@ function initApp() {
 
     fetch('/api/version').then(r => r.json()).then(data => {
         APP_VERSION = `v${data.version}`;
-        document.getElementById('sidebar-version').textContent = `CowAgent ${APP_VERSION}`;
+        document.getElementById('sidebar-version').textContent = `TextbookAgent ${APP_VERSION}`;
     }).catch(() => {
-        document.getElementById('sidebar-version').textContent = 'CowAgent';
+        document.getElementById('sidebar-version').textContent = 'TextbookAgent';
     });
     chatInput.focus();
 }

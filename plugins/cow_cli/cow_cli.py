@@ -46,7 +46,7 @@ CHAT_ONLY_COMMANDS = set()  # context is allowed in both, but behaves differentl
     name="cow_cli",
     desc="Handle cow/slash commands in chat messages",
     version="0.1.0",
-    author="CowAgent",
+    author="TextbookAgent",
     desire_priority=1000,
 )
 class CowCliPlugin(Plugin):
@@ -142,7 +142,7 @@ class CowCliPlugin(Plugin):
 
     def _cmd_help(self, args: str, e_context, **_) -> str:
         lines = [
-            "📋 CowAgent 命令列表",
+            "📋 TextbookAgent 命令列表",
             "",
             "  /help          显示此帮助",
             "  /version       查看版本",
@@ -168,7 +168,7 @@ class CowCliPlugin(Plugin):
         return "\n".join(lines)
 
     def _cmd_version(self, args: str, e_context, **_) -> str:
-        return f"CowAgent v{__version__}"
+        return f"TextbookAgent v{__version__}"
 
     # ------------------------------------------------------------------
     # status
@@ -178,7 +178,7 @@ class CowCliPlugin(Plugin):
         from config import conf
 
         cfg = conf()
-        lines = ["📊 CowAgent 运行状态", ""]
+        lines = ["📊 TextbookAgent 运行状态", ""]
 
         lines.append(f"  版本: v{__version__}")
         lines.append(f"  进程: PID {os.getpid()}")
@@ -505,7 +505,7 @@ class CowCliPlugin(Plugin):
                 "❌ 安装未成功结束，请查看上方分段提示或服务器日志；"
                 "也可在终端执行 `cow install-browser`。"
             )
-        return "✅ 安装流程已结束。请重启 CowAgent 后使用 browser 工具（进度见上方消息）。"
+        return "✅ 安装流程已结束。请重启 TextbookAgent 后使用 browser 工具（进度见上方消息）。"
 
     # ------------------------------------------------------------------
     # skill
@@ -663,7 +663,7 @@ class CowCliPlugin(Plugin):
             lines.append(f"💡 /skill list --remote --page {page - 1}  上一页")
         lines.append("💡 /skill install <名称>  安装技能")
         lines.append("💡 /skill search <关键词>  搜索技能")
-        lines.append("🌐 https://skills.cowagent.ai  在线浏览全部技能")
+        lines.append("🌐 https://skills.textbookagent.local  在线浏览全部技能")
         return "\n".join(lines)
 
     def _skill_search(self, query: str) -> str:

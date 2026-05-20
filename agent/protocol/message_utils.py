@@ -14,6 +14,8 @@ and any bot that converts messages to OpenAI format:
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Dict, List, Set
 
 from common.log import logger
@@ -304,6 +306,7 @@ def compress_turn_to_text_only(turn: Dict) -> Dict:
     """
     user_text = ""
     last_assistant_text = ""
+    tool_ledger = _build_tool_progress_ledger(turn)
 
     for msg in turn["messages"]:
         role = msg.get("role")
@@ -331,8 +334,256 @@ def compress_turn_to_text_only(turn: Dict) -> Dict:
             "role": "assistant",
             "content": [{"type": "text", "text": last_assistant_text}]
         })
+    elif tool_ledger:
+        compressed_messages.append({
+            "role": "assistant",
+            "content": [{"type": "text", "text": tool_ledger}]
+        })
 
     return {"messages": compressed_messages}
+
+
+def build_context_state_board(turns: List[Dict], max_events: int = 36) -> str:
+    """
+    Build a compact state board for long-running agent tasks.
+
+    Unlike a conversational summary, this is operational memory: what has
+    already been attempted, which sources/files are available, which failures
+    should not be repeated, and what the agent should do next.
+    """
+    if not turns:
+        return ""
+
+    latest_user = ""
+    assistant_notes = []
+    events = []
+    failed = []
+    saved = []
+    read_paths = []
+    write_paths = []
+
+    for turn in turns:
+        tool_uses = {}
+        for msg in turn.get("messages", []):
+            role = msg.get("role")
+            content = msg.get("content", [])
+            if role == "user":
+                if isinstance(content, list):
+                    has_tool_result = any(
+                        isinstance(b, dict) and b.get("type") == "tool_result"
+                        for b in content
+                    )
+                    if not has_tool_result:
+                        text = _extract_text_from_content(content)
+                        if text:
+                            latest_user = text[:500]
+                    for block in content:
+                        if not isinstance(block, dict) or block.get("type") != "tool_result":
+                            continue
+                        info = tool_uses.get(block.get("tool_use_id", ""), {})
+                        event = _summarize_tool_event(info.get("name", ""), info.get("input", {}), block)
+                        if not event:
+                            continue
+                        events.append(event)
+                        if event.startswith("FAILED"):
+                            failed.append(event)
+                        if event.startswith("SAVED"):
+                            saved.append(event)
+                        if event.startswith("READ"):
+                            read_paths.append(event)
+                        if event.startswith("WROTE"):
+                            write_paths.append(event)
+                elif isinstance(content, str) and content.strip():
+                    latest_user = content.strip()[:500]
+            elif role == "assistant":
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            tool_uses[block.get("id", "")] = {
+                                "name": block.get("name", ""),
+                                "input": block.get("input", {}) if isinstance(block.get("input"), dict) else {},
+                            }
+                text = _extract_text_from_content(content)
+                if text:
+                    assistant_notes.append(_compact_line(text, 260))
+
+    if not any((latest_user, events, assistant_notes)):
+        return ""
+
+    lines = [
+        "[System: Current task state board]",
+        "This compact state survives context compression and is the authority for task progress.",
+        "Do not restart completed planning/search/reading/review steps. Continue from the next unfinished action.",
+    ]
+    if latest_user:
+        lines.append(f"Current user goal: {_compact_line(latest_user, 500)}")
+
+    if assistant_notes:
+        lines.append("Recent decisions/progress:")
+        for note in _dedupe_keep_order(assistant_notes[-6:])[-4:]:
+            lines.append(f"- {note}")
+
+    if read_paths:
+        lines.append("Already read/available files:")
+        for item in _dedupe_keep_order(read_paths)[-10:]:
+            lines.append(f"- {item}")
+
+    if saved:
+        lines.append("Knowledge/source saves:")
+        for item in _dedupe_keep_order(saved)[-8:]:
+            lines.append(f"- {item}")
+
+    if failed:
+        lines.append("Failures to avoid repeating:")
+        for item in _dedupe_keep_order(failed)[-10:]:
+            lines.append(f"- {item}")
+
+    other_events = [
+        e for e in events
+        if not (e.startswith("FAILED") or e.startswith("SAVED") or e.startswith("READ"))
+    ]
+    if other_events:
+        lines.append("Other tool progress:")
+        for item in _dedupe_keep_order(other_events)[-max_events:]:
+            lines.append(f"- {item}")
+
+    if write_paths:
+        lines.append("Written outputs:")
+        for item in _dedupe_keep_order(write_paths)[-8:]:
+            lines.append(f"- {item}")
+
+    lines.append("Loop guard: if an action appears under read/saved/written/progress/failures, treat it as already attempted unless the user explicitly asks to redo it.")
+    lines.append("Next-step rule: if enough chapter evidence has already been gathered, write/save the chapter instead of searching or rereading skills again.")
+    return "\n".join(lines)
+
+
+def _summarize_tool_event(tool_name: str, tool_args: dict, block: Dict) -> str:
+    result = str(block.get("content", "") or "")
+    is_failed = bool(block.get("is_error")) or result.lstrip().lower().startswith("error:")
+    first = _compact_line(result.splitlines()[0] if result.splitlines() else result, 220)
+
+    if tool_name == "web_fetch":
+        url = tool_args.get("url", "")
+        title = _extract_title_from_tool_result(result) or url
+        if is_failed:
+            return f"FAILED web_fetch: {_compact_line(first, 180)} | {url}"
+        return f"FETCHED web_fetch: {_compact_line(title, 180)} | {url}"
+
+    if tool_name == "knowledge_capture":
+        url = tool_args.get("url", "")
+        title = tool_args.get("title", "") or url
+        low = result.lower()
+        if '"useful": true' in low or "'useful': true" in low:
+            return f"SAVED knowledge: {_compact_line(title, 160)} | {url}"
+        return f"FAILED knowledge_capture: {_compact_line(first, 180)} | {url}"
+
+    if tool_name in ("read", "file_read"):
+        path = tool_args.get("path", "")
+        if is_failed:
+            return f"FAILED read: {_compact_line(first, 180)} | {path}"
+        title = _extract_title_from_tool_result(result) or _extract_json_content_title(result) or path
+        return f"READ file: {_compact_line(title, 180)} | {path}"
+
+    if tool_name in ("write", "file_write"):
+        path = tool_args.get("path", "")
+        return f"WROTE file: {path or _compact_line(first, 180)}"
+
+    if tool_name in ("bash", "shell", "command"):
+        command = tool_args.get("command", "")
+        if is_failed or '"exit_code": 1' in result or '"exit_code": 255' in result:
+            return f"FAILED bash: {_compact_line(first, 180)} | {_compact_line(command, 180)}"
+        return f"RAN bash: {_compact_line(command, 180)}"
+
+    if tool_name:
+        status = "FAILED" if is_failed else "DONE"
+        return f"{status} {tool_name}: {_compact_line(first, 180)}"
+    return ""
+
+
+def _extract_json_content_title(content: str) -> str:
+    try:
+        data = json.loads(content)
+    except Exception:
+        return ""
+    if isinstance(data, dict):
+        text = data.get("content") or data.get("output") or ""
+        if isinstance(text, str):
+            for line in text.splitlines()[:8]:
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    return stripped.lstrip("#").strip()
+    return ""
+
+
+def _compact_line(text: str, limit: int = 240) -> str:
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    return text if len(text) <= limit else text[:limit].rstrip() + "..."
+
+
+def _dedupe_keep_order(items: List[str]) -> List[str]:
+    seen = set()
+    out = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+def _build_tool_progress_ledger(turn: Dict) -> str:
+    """Preserve task progress when a tool-heavy turn is compressed.
+
+    Web research and knowledge-capture turns can have little assistant prose but
+    lots of tool results. If compression drops those results entirely, the model
+    may restart from the original task. Keep a compact ledger of completed
+    searches/fetches/captures instead.
+    """
+    tool_uses = {}
+    lines = []
+    for msg in turn.get("messages", []):
+        content = msg.get("content", [])
+        if not isinstance(content, list):
+            continue
+        if msg.get("role") == "assistant":
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    tool_uses[block.get("id", "")] = {
+                        "name": block.get("name", ""),
+                        "input": block.get("input", {}) if isinstance(block.get("input"), dict) else {},
+                    }
+        elif msg.get("role") == "user":
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+                info = tool_uses.get(block.get("tool_use_id", ""), {})
+                tool_name = info.get("name", "")
+                tool_args = info.get("input", {})
+                result = block.get("content", "")
+                if tool_name == "web_fetch":
+                    url = tool_args.get("url", "")
+                    status = "failed" if block.get("is_error") or str(result).lstrip().lower().startswith("error:") else "fetched"
+                    title = _extract_title_from_tool_result(str(result))
+                    lines.append(f"- web_fetch {status}: {title or url} | {url}")
+                elif tool_name == "knowledge_capture":
+                    url = tool_args.get("url", "")
+                    status = "saved" if not block.get("is_error") and '"useful": true' in str(result).lower() else "skipped/failed"
+                    lines.append(f"- knowledge_capture {status}: {tool_args.get('title', '') or url} | {url}")
+    if not lines:
+        return ""
+    return (
+        "[System: compressed tool progress ledger]\n"
+        "The task has already made the following web-research/knowledge-capture attempts. "
+        "Do not restart from the original search plan; continue from unfinished items and avoid repeating failed engines.\n"
+        + "\n".join(lines[:30])
+        + (f"\n... {len(lines) - 30} more tool events omitted" if len(lines) > 30 else "")
+    )
+
+
+def _extract_title_from_tool_result(content: str) -> str:
+    for line in (content or "").splitlines()[:8]:
+        if line.startswith("Title:"):
+            return line.split(":", 1)[1].strip()[:120]
+    return ""
 
 
 def summarize_tool_result_content(content: str, tool_name: str = "", tool_args: dict = None) -> str:
@@ -346,11 +597,46 @@ def summarize_tool_result_content(content: str, tool_name: str = "", tool_args: 
     - For search results: keep file paths and match counts
     - For other tools: keep first 500 chars + truncation notice
     """
-    if not content or len(content) < 300:
+    if not content:
         return content
 
     tool_args = tool_args or {}
     summary_parts = []
+
+    if tool_name == "web_fetch":
+        url = (tool_args or {}).get("url", "")
+        title = _extract_title_from_tool_result(content)
+        if content.lstrip().lower().startswith("error:"):
+            return f"[web_fetch failed]\nURL: {url}\n{content.splitlines()[0][:300]}"
+        if len(content) < 300:
+            return content
+        lines = [f"[web_fetch summary]", f"URL: {url}"]
+        if title:
+            lines.append(f"Title: {title}")
+        text_lines = [line.strip() for line in content.splitlines() if line.strip()]
+        useful = []
+        for line in text_lines:
+            low = line.lower()
+            if line.startswith("Title:") or line == "Content:":
+                continue
+            if any(marker in low for marker in ("http://", "https://", "abstract", "introduction", "summary", "framework", "architecture", "survey", "bim", "rag", "agent")):
+                useful.append(line[:240])
+            if len(useful) >= 8:
+                break
+        if useful:
+            lines.append("Key visible snippets:")
+            lines.extend(f"- {item}" for item in useful)
+        lines.append(f"[original web_fetch result compressed from {len(content)} chars]")
+        return "\n".join(lines)
+
+    if tool_name == "knowledge_capture":
+        url = (tool_args or {}).get("url", "")
+        title = (tool_args or {}).get("title", "")
+        first = content.splitlines()[0][:300] if content else ""
+        return f"[knowledge_capture summary]\nTitle: {title}\nURL: {url}\nResult: {first}"
+
+    if len(content) < 300:
+        return content
 
     if tool_name in ("read", "file_read"):
         path = tool_args.get("path", "")

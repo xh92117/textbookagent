@@ -1,0 +1,45 @@
+<div id="createModal" class="modal-overlay" style="display:none;">
+    <div class="modal-content">
+        <h2>新建教材</h2>
+        <div class="modal-field">
+            <label>教材名称</label>
+            <input type="text" id="createName" placeholder="例：Python程序设计">
+        </div>
+        <div class="modal-field">
+            <label>学科</label>
+            <input type="text" id="createSubject" placeholder="例：计算机科学">
+        </div>
+        <div class="modal-field">
+            <label>目标读者</label>
+            <input type="text" id="createAudience" placeholder="例：本科二年级学生">
+        </div>
+        <div class="modal-field">
+            <label>级别</label>
+            <input type="text" id="createLevel" placeholder="例：本科">
+        </div>
+        <div class="modal-field">
+            <label>章节数量</label>
+            <input type="number" id="createChapterCount" value="12" min="1" max="50">
+        </div>
+        <div class="modal-field">
+            <label>写作风格</label>
+            <select id="createStyle">
+                <option value="academic">学术风格</option>
+                <option value="popular">通俗风格</option>
+                <option value="engineering">工程实践风格</option>
+            </select>
+        </div>
+        <div class="modal-field">
+            <label>每章目标字数</label>
+            <input type="number" id="createWordCount" value="5000" min="1000" max="20000">
+        </div>
+        <div class="modal-field">
+            <label>补充说明（可选）</label>
+            <textarea id="createNotes" placeholder="对教材内容、结构等的补充要求..."></textarea>
+        </div>
+        <div class="modal-actions">
+            <button class="pipeline-btn" onclick="hideCreateModal()">取消</button>
+            <button class="btn-primary" onclick="createTextbook()">创建</button>
+        </div>
+    </div>
+</div>

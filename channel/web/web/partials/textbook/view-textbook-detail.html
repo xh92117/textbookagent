@@ -1,0 +1,199 @@
+<div class="view-page" id="view-textbook-detail">
+                    <div class="workspace-header" style="display:flex;align-items:center;justify-content:space-between;">
+                        <div>
+                            <h1 id="detailBookTitle" style="margin:0;">教材详情</h1>
+                            <div id="detailBookMeta" style="font-size:12px;color:var(--muted-fg);margin-top:4px;">选择一本教材查看详情</div>
+                        </div>
+                        <button class="btn-primary" onclick="navigateToChat('请启动一键编写，按照当前教材配置开始自动编写全部章节')">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                            一键编写
+                        </button>
+                    </div>
+                    <div class="tabs">
+                        <div class="tab active" data-tab="outline-edit" onclick="switchTab(this,'outline-edit')">大纲编辑</div>
+                        <div class="tab" data-tab="chapter-preview" onclick="switchTab(this,'chapter-preview')">章节预览</div>
+                        <div class="tab" data-tab="export" onclick="switchTab(this,'export')">导出</div>
+                        <div class="tab" data-tab="preferences" onclick="switchTab(this,'preferences')">教材偏好</div>
+                    </div>
+                    <div class="tab-panes">
+                        <div class="tab-pane active" id="tab-outline-edit">
+                            <div style="display:flex;gap:8px;margin-bottom:16px;">
+                                <button class="btn-primary" onclick="saveOutlineEdit()">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                                    保存大纲
+                                </button>
+                                <button class="pipeline-btn" onclick="previewOutline()">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                    预览
+                                </button>
+                                <button class="pipeline-btn" onclick="showOutlineHistory()">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                    版本历史
+                                </button>
+                                <button class="btn-primary" style="background:var(--phase-outline);" onclick="aiOptimizeOutline()">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                                    AI优化
+                                </button>
+                                <button class="btn-primary" style="background:var(--phase-review);" onclick="navigateToChat('请审查当前教材的大纲，给出改进建议')">
+                                    <i class="fas fa-search"></i>
+                                    大纲审查
+                                </button>
+                            </div>
+                            <div style="display:flex;gap:16px;flex:1;min-height:0;">
+                                <div style="flex:1;display:flex;flex-direction:column;">
+                                    <textarea id="outlineEditor" style="flex:1;width:100%;padding:12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-mono);resize:none;background:var(--card);color:var(--fg);" placeholder="在此编辑大纲内容..."></textarea>
+                                </div>
+                                <div style="flex:1;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;overflow-y:auto;">
+                                    <div id="outlinePreview" style="font-size:13px;line-height:1.7;color:var(--muted-fg);">大纲预览区域</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tab-pane" id="tab-chapter-preview">
+                            <div style="display:flex;gap:16px;height:calc(100vh - 300px);">
+                                <div style="width:260px;flex-shrink:0;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;overflow-y:auto;">
+                                    <div style="font-size:12px;font-weight:700;color:var(--muted-fg);margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">章节目录</div>
+                                    <div id="chapterTree"></div>
+                                </div>
+                                <div style="flex:1;display:flex;flex-direction:column;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;">
+                                    <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+                                        <div>
+                                            <span id="currentChapterTitle" style="font-weight:700;font-size:14px;">选择章节</span>
+                                            <span id="currentChapterStatus" style="font-size:11px;margin-left:8px;"></span>
+                                        </div>
+                                        <div style="display:flex;gap:8px;">
+                                            <button class="pipeline-btn" id="btnToggleEdit" onclick="toggleChapterEditMode()" style="display:none;">
+                                                <i class="fas fa-edit"></i> 编辑
+                                            </button>
+                                            <button class="pipeline-btn" id="btnSaveChapter" onclick="saveChapterEdit()" style="display:none;background:var(--success);color:white;border-color:var(--success);">
+                                                <i class="fas fa-save"></i> 保存
+                                            </button>
+                                            <button class="pipeline-btn" style="background:var(--phase-review);color:white;border-color:var(--phase-review);" onclick="navigateToChat('请审查当前选中的章节内容，给出改进建议')">
+                                                <i class="fas fa-search"></i> 审查此章节
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div id="chapterContentArea" style="flex:1;padding:20px;overflow-y:auto;">
+                                        <div style="text-align:center;padding:60px 20px;color:var(--muted-fg);">
+                                            <div style="font-size:48px;margin-bottom:12px;">📖</div>
+                                            <div style="font-size:14px;">请从左侧目录选择章节</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tab-pane" id="tab-export">
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
+                                <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px;">
+                                    <h3 style="font-size:14px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px;">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--secondary)" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                                        导出格式
+                                    </h3>
+                                    <div style="display:flex;gap:12px;margin-bottom:16px;">
+                                        <div class="template-card" id="exportFormatWord" onclick="selectExportFormat('word')" style="flex:1;cursor:pointer;text-align:center;padding:16px;border:2px solid var(--primary);background:rgba(37,99,235,0.04);">
+                                            <div style="font-size:28px;margin-bottom:8px;">📄</div>
+                                            <div style="font-size:13px;font-weight:600;">Word (.docx)</div>
+                                        </div>
+                                        <div class="template-card" id="exportFormatPdf" onclick="selectExportFormat('pdf')" style="flex:1;cursor:pointer;text-align:center;padding:16px;">
+                                            <div style="font-size:28px;margin-bottom:8px;">📑</div>
+                                            <div style="font-size:13px;font-weight:600;">PDF</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px;">
+                                    <h3 style="font-size:14px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px;">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--secondary)" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+                                        导出选项
+                                    </h3>
+                                    <div class="detail-section">
+                                        <div class="detail-label">导出范围</div>
+                                        <select id="exportRange" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-sans);background:var(--card);">
+                                            <option value="all">整本教材</option>
+                                            <option value="chapter">指定章节</option>
+                                        </select>
+                                    </div>
+                                    <div class="detail-section" id="exportChapterSelect" style="display:none;">
+                                        <div class="detail-label">选择章节</div>
+                                        <select id="exportChapterNum" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-sans);background:var(--card);">
+                                        </select>
+                                    </div>
+                                    <div class="detail-section">
+                                        <label class="export-toggle" style="margin-bottom:8px;">
+                                            <input type="checkbox" id="exportIncludeGlossary" checked>
+                                            <span class="toggle-switch"></span>
+                                            <span>包含术语表</span>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                            <button class="btn-primary" style="width:100%;justify-content:center;padding:14px;font-size:14px;" onclick="startExport()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                开始导出
+                            </button>
+                            <div id="exportProgress" style="display:none;margin-top:16px;">
+                                <div class="gen-progress-track">
+                                    <div class="gen-progress-fill" id="exportProgressFill" style="width:0%;"></div>
+                                </div>
+                                <div id="exportProgressText" style="text-align:center;font-size:12px;color:var(--muted-fg);margin-top:8px;"></div>
+                            </div>
+                        </div>
+                        
+                        <div class="tab-pane" id="tab-preferences">
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
+                                <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px;">
+                                    <h3 style="font-size:14px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px;">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--secondary)" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                                        内容设置
+                                    </h3>
+                                    <div class="detail-section">
+                                        <div class="detail-label">每章目标字数</div>
+                                        <input type="number" id="prefChapterWordCount" value="5000" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-sans);">
+                                    </div>
+                                    <div class="detail-section">
+                                        <div class="detail-label">写作风格</div>
+                                        <select id="prefStyle" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-sans);background:var(--card);">
+                                            <option>学术风格</option>
+                                            <option>通俗风格</option>
+                                            <option>工程实践风格</option>
+                                        </select>
+                                    </div>
+                                    <div class="detail-section">
+                                        <div class="detail-label">例题数量</div>
+                                        <input type="number" id="prefExampleCount" value="3" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-sans);">
+                                    </div>
+                                </div>
+                                <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px;">
+                                    <h3 style="font-size:14px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px;">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--secondary)" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                                        AI设置
+                                    </h3>
+                                    <div class="detail-section">
+                                        <div class="detail-label">默认模型</div>
+                                        <select id="prefModel" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-sans);background:var(--card);">
+                                            <option>DeepSeek Chat</option>
+                                            <option>GPT-4o</option>
+                                            <option>Claude 3.5 Sonnet</option>
+                                            <option>Qwen Max</option>
+                                        </select>
+                                    </div>
+                                    <div class="detail-section">
+                                        <div class="detail-label">审查严格程度</div>
+                                        <select id="prefReviewStrictness" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-sans);background:var(--card);">
+                                            <option>宽松</option>
+                                            <option>标准</option>
+                                            <option>严格</option>
+                                        </select>
+                                    </div>
+                                    <div class="detail-section">
+                                        <div class="detail-label">自动优化</div>
+                                        <label class="export-toggle">
+                                            <input type="checkbox" id="prefAutoOptimize">
+                                            <span class="toggle-switch"></span>
+                                            <span>启用自动优化</span>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                            <button class="btn-primary" style="width:100%;justify-content:center;padding:12px;font-size:14px;" onclick="saveBookPreferences()">保存教材偏好</button>
+                        </div>
+                    </div>
+                </div>

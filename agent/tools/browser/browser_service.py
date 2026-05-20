@@ -19,8 +19,10 @@ from common.log import logger
 try:
     from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page, Playwright
     _HAS_PLAYWRIGHT = True
-except ImportError:
+    _PLAYWRIGHT_IMPORT_ERROR = ""
+except ImportError as e:
     _HAS_PLAYWRIGHT = False
+    _PLAYWRIGHT_IMPORT_ERROR = str(e)
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +378,14 @@ class BrowserService:
 
     def _launch_browser(self):
         """Launch Chromium on the background thread."""
+        if not _HAS_PLAYWRIGHT:
+            raise RuntimeError(
+                "Playwright is not installed or cannot be imported. "
+                "Install it with `python -m pip install playwright` and "
+                "`python -m playwright install chromium`. "
+                f"Import error: {_PLAYWRIGHT_IMPORT_ERROR}"
+            )
+
         if self._headless is None:
             headless_cfg = self._config.get("headless")
             self._headless = headless_cfg if headless_cfg is not None else _should_use_headless()

@@ -154,3 +154,39 @@ def test_embedding_manifest_is_reserved_and_retriever_returns_evidence_pack():
         assert "Knowledge Evidence Pack" in pack
         assert "Citation: knowledge/_llm_wiki/chunks/" in pack
         assert "向量检索" in pack
+def test_wiki_index_records_normalized_terms_for_recall():
+    content = "# Smart Construction Workflow\n\nAI-agent based textbook knowledge retrieval workflow."
+
+    with tempfile.TemporaryDirectory() as tmp:
+        service = KnowledgeService(tmp)
+        service._extract_wiki_items = lambda chunks, source_name: service._fallback_wiki_items(chunks, source_name)
+        service._build_llm_wiki(os.path.join(tmp, "paper.md"), content, "tb")
+
+        import json
+        index_path = os.path.join(tmp, "knowledge", "tb", "_llm_wiki", "index.json")
+        index = json.load(open(index_path, encoding="utf-8"))
+        terms = index["chunks"][0].get("normalized_terms", [])
+
+        assert "smart" in terms
+        assert "construction" in terms
+
+        retriever = KnowledgeRetriever(tmp, "tb")
+        evidence = retriever.retrieve("smart-construction", limit=1)
+        assert evidence
+        assert evidence[0]["chunk_id"] == index["chunks"][0]["id"]
+
+
+def test_extracted_asset_filter_skips_small_and_logo_like_images():
+    with tempfile.TemporaryDirectory() as tmp:
+        service = KnowledgeService(tmp)
+
+        keep, reason = service._should_keep_extracted_asset(b"not an image", name="logo.png", width=400, height=300)
+        assert keep is False
+        assert "logo" in reason
+
+        keep, reason = service._should_keep_extracted_asset(b"not an image", name="figure.png", width=40, height=40)
+        assert keep is False
+        assert "small image" in reason
+
+        keep, reason = service._should_keep_extracted_asset(b"not an image", name="diagram.png", width=800, height=500)
+        assert keep is True

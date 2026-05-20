@@ -320,6 +320,13 @@ class MemoryManager:
 
         project_workspace_dir = self.config.get_project_workspace()
 
+        # Scan workspace-root profile files. They are injected once as compact
+        # startup memory and remain available later through memory_search/get.
+        for root_name in ("AGENT.md", "USER.md", "RULE.md", "MEMORY.md"):
+            root_file = Path(project_workspace_dir) / root_name
+            if root_file.exists() and root_file.is_file():
+                await self._sync_file(root_file, "workspace_profile", "shared", None)
+
         # Scan knowledge directory (structured knowledge wiki)
         from config import conf
         if conf().get("knowledge", True):

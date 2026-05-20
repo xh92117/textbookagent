@@ -271,7 +271,7 @@ def _build_skills_section(skill_manager: Any, tools: Optional[List[Any]], langua
 
 
 def _build_memory_section(memory_manager: Any, tools: Optional[List[Any]], language: str) -> List[str]:
-    """构建记忆系统section"""
+    """Build memory-system instructions without eagerly loading memory files."""
     if not memory_manager:
         return []
 
@@ -286,46 +286,30 @@ def _build_memory_section(memory_manager: Any, tools: Optional[List[Any]], langu
     from datetime import datetime
     today_file = datetime.now().strftime("%Y-%m-%d") + ".md"
 
-    lines = [
-        "## 🧠 记忆系统",
+    return [
+        "## 记忆系统",
         "",
-        "### Memory Recall（mandatory）",
+        "### 加载策略",
         "",
-        "当用户询问过往事件、引用之前的决定、提到人物关系、偏好、待办、或你对某事不确定时，**必须先检索记忆再回答**。",
-        "如果 MEMORY.md 中已有相关信息则无需重复检索。完整内容和每日记忆需要通过工具检索。",
+        "- 用户画像、全局记忆、会话记忆、以及工作区根目录 AGENT.md/USER.md/RULE.md/MEMORY.md 只会在本会话首次请求中通过 SYSTEM_MEMORY_BOOTSTRAP 注入一次。",
+        "- 后续轮次不要假设完整记忆仍在上下文中；需要时必须用 memory_search / memory_get 按需读取。",
+        f"- 每日记忆文件：memory/{today_file}；进程记忆：memory/processes/；会话记忆：memory/sessions/。",
+        "- 进程记忆、每日记忆、错误记忆默认按需检索，由智能体根据任务相关性决定是否读取。",
         "",
-        "1. 不确定位置 → `memory_search` 关键词/语义检索",
-        "2. 已知位置 → `memory_get` 直接读取对应行",
-        "3. search 无结果 → `memory_get` 读最近两天记忆",
+        "### 何时检索",
         "",
-        "**记忆文件结构**:",
-        "- `MEMORY.md`: 长期记忆索引（已自动加载到上下文，核心信息、偏好、决策等）",
-        f"- `memory/YYYY-MM-DD.md`: 每日记忆，今天是 `memory/{today_file}`",
-        "- `knowledge/`: 结构化知识库（见下方知识系统）",
+        "- 用户询问过去事件、偏好、规则、项目决策、待办、会话历史，或你不确定上下文时，先检索记忆再回答。",
+        "- 不确定位置时用 memory_search；已知路径时用 memory_get。",
+        "- search 无结果但任务明显依赖历史时，优先读取 MEMORY.md、memory/process_index.md、最近每日记忆或相关 process state。",
         "",
         "### 写入记忆",
         "",
-        "遇到以下情况时，**主动**将信息写入记忆文件（无需告知用户）：",
-        "",
-        "- 用户要求记住某些信息，或使用了「记住」「以后」「总是」「不要」「偏好」等表达",
-        "- 用户分享了重要的个人偏好、习惯、决策",
-        "- 对话中产生了重要的结论、方案、约定",
-        "- 完成了复杂任务，值得记录关键步骤和结果",
-        "",
-        "**存储规则**:",
-        f"- 长期核心信息 → `MEMORY.md`",
-        f"- 当天事件/进展 → `memory/{today_file}`",
-        "- 结构化知识 → `knowledge/`（见知识系统）",
-        "- 追加 → `edit` 工具，oldText 留空",
-        "- 修改 → `edit` 工具，oldText 填写要替换的文本",
-        "- **禁止写入敏感信息**（API密钥、令牌等）",
-        "",
-        "**使用原则**: 自然使用记忆，就像你本来就知道；不用刻意提起，除非用户问起。",
+        "- 用户明确要求记住、以后总是/不要、偏好、规则、长期目标时，写入 MEMORY.md 或 USER.md/RULE.md。",
+        f"- 当天进展、阶段性结论和临时记录写入 memory/{today_file}。",
+        "- 完成复杂任务后的过程状态由进程记忆自动记录；不要把低价值流水账重复写入长期记忆。",
+        "- 禁止写入敏感信息，例如 API key、token、密码。",
         "",
     ]
-
-    return lines
-
 
 def _build_knowledge_section(workspace_dir: str, language: str) -> List[str]:
     """Build knowledge wiki section. Injects knowledge/index.md when present."""

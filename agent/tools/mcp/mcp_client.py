@@ -297,7 +297,7 @@ class McpClient:
         init_params = {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": {"name": "CowAgent", "version": "1.0"},
+            "clientInfo": {"name": "TextbookAgent", "version": "1.0"},
         }
         # Temporarily mark as initialized so _send_request doesn't block
         self._initialized = True

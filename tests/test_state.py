@@ -44,7 +44,19 @@ def test_truth_file_list_chapters():
         mgr.write_chapter(3, "第三章内容")
         chapters = mgr.list_chapters()
         assert len(chapters) == 3, f"应有3个章节文件，实际为 {len(chapters)}"
-        assert chapters == ['chapter_01.md', 'chapter_02.md', 'chapter_03.md']
+        assert chapters == ['chapter_001.md', 'chapter_002.md', 'chapter_003.md']
+
+
+def test_truth_file_chapter_number_ignores_leading_zeroes():
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        book_dir = os.path.join(tmp, "book1")
+        os.makedirs(os.path.join(book_dir, "chapters"), exist_ok=True)
+        with open(os.path.join(book_dir, "chapters", "chapter_00010.md"), "w", encoding="utf-8") as f:
+            f.write("# chapter ten")
+        mgr = TruthFileManager(book_dir)
+        assert mgr.read_chapter(10) == "# chapter ten"
+        assert mgr.list_chapters() == ["chapter_00010.md"]
 
 
 def test_truth_file_snapshot():
@@ -95,6 +107,51 @@ def test_truth_file_status_tracks_completed_chapters():
         assert status['current_chapter'] == 3
         assert status['current_phase'] == 'persist_chapter'
         assert status['pipeline_id'] == 'pipe-test'
+
+
+def test_outline_review_state_tracks_outline_hash():
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        mgr = TruthFileManager(os.path.join(tmp, "book1"))
+        outline = "# Outline\n\n## Chapter 1\n"
+        mgr.write('outline', outline)
+        assert not mgr.is_outline_review_current()
+
+        state = mgr.mark_outline_reviewed(outline, {'score': 91, 'issues': []})
+        assert state['status'] == 'reviewed'
+        assert state['score'] == 91
+        assert mgr.is_outline_review_current()
+
+        mgr.write('outline', outline + "\n## Chapter 2\n")
+        assert not mgr.is_outline_review_current()
+
+        stale = mgr.invalidate_outline_review("test_update")
+        assert stale['status'] == 'stale'
+        assert stale['reason'] == 'test_update'
+
+
+def test_chapter_complete_requires_matching_metadata_hash_when_present():
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        mgr = TruthFileManager(os.path.join(tmp, "book1"))
+        content = "chapter body " * 8
+        mgr.write_chapter(1, content)
+        assert mgr.is_chapter_complete(1, min_chars=50)
+
+        meta_path = mgr.chapter_metadata_path(1)
+        with open(meta_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                'status': 'completed',
+                'content_hash': TruthFileManager.content_hash(content),
+            }, f)
+        assert mgr.is_chapter_complete(1, min_chars=50)
+
+        mgr.write_chapter(1, content + " changed")
+        assert not mgr.is_chapter_complete(1, min_chars=50)
+
+        with open(meta_path, 'w', encoding='utf-8') as f:
+            json.dump({'status': 'draft'}, f)
+        assert not mgr.is_chapter_complete(1, min_chars=50)
 
 
 def test_truth_file_terminology():

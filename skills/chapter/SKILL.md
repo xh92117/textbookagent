@@ -86,6 +86,13 @@ Report the following upon completion:
 
 Before writing a chapter, run an enrichment pass unless the user explicitly says not to use external material.
 
+Hard stop rules:
+- Run at most one enrichment pass per chapter-writing request.
+- If the context already contains 3+ relevant knowledge chunks, 2+ credible web sources, or a previous Web Evidence Pack, stop searching and write the chapter.
+- If any search engine returns HTTP 429/block/challenge, mark that engine unavailable and do not retry it in this chapter request.
+- Do not reread this skill, the multi-search skill, or chapter templates after they have already been read in the current request; continue from the compact state board.
+- After reading enough source material, the next action must be `write` for the chapter draft, not another search/list/read cycle.
+
 1. Use the `multi-search-engine` skill with `web_fetch` to build a small Web Evidence Pack for the chapter topic. Do not use Bocha `web_search`.
    - When a fetched original source is credible and reusable for future chapters, save it with `knowledge_capture` and include why it is useful.
    - Do not save search-result pages or low-signal pages.

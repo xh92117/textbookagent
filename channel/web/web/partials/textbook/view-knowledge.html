@@ -1,0 +1,56 @@
+<div class="view-page" id="view-knowledge">
+                    <div class="workspace-header" style="display:flex;align-items:center;justify-content:space-between;">
+                        <h1>知识库管理</h1>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <select id="knowledgeBookSelect" onchange="onKnowledgeBookChange()" style="padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-sans);background:var(--card);color:var(--fg);min-width:160px;">
+                                <option value="">全部知识库</option>
+                            </select>
+                            <button class="btn-primary" onclick="organizeKnowledge()" id="btnOrganizeKnowledge" style="background:#8b5cf6;">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                                AI整理
+                            </button>
+                            <button class="btn-primary" onclick="uploadKnowledgeDoc(document.getElementById('knowledgeBookSelect')?.value || '')">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                上传文档
+                            </button>
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px;">
+                        <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;text-align:center;">
+                            <div style="font-size:24px;font-weight:700;color:var(--secondary);" id="knowledgeTotalDocs">0</div>
+                            <div style="font-size:12px;color:var(--muted-fg);margin-top:4px;">文档总数</div>
+                        </div>
+                        <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;text-align:center;">
+                            <div style="font-size:24px;font-weight:700;color:var(--phase-outline);" id="knowledgeTotalChunks">0</div>
+                            <div style="font-size:12px;color:var(--muted-fg);margin-top:4px;">知识分块</div>
+                        </div>
+                        <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;text-align:center;">
+                            <div style="font-size:24px;font-weight:700;color:#10b981;" id="knowledgeTotalSize">0 MB</div>
+                            <div style="font-size:12px;color:var(--muted-fg);margin-top:4px;">存储空间</div>
+                        </div>
+                    </div>
+                    <div id="knowledgeOrganizeProgress" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;margin-bottom:20px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                            <div style="font-size:14px;font-weight:700;">知识库整理进度</div>
+                            <div id="knowledgeOrganizeStage" style="font-size:12px;color:var(--muted-fg);">idle</div>
+                        </div>
+                        <div style="height:8px;background:var(--muted);border-radius:999px;overflow:hidden;margin-bottom:10px;">
+                            <div id="knowledgeOrganizeFill" style="height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#10b981);transition:width .25s ease;"></div>
+                        </div>
+                        <div id="knowledgeOrganizeMessage" style="font-size:13px;color:var(--fg);margin-bottom:10px;">等待开始</div>
+                        <div id="knowledgeOrganizeMeta" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:12px;color:var(--muted-fg);"></div>
+                        <div id="knowledgeOrganizeEvents" style="margin-top:10px;max-height:120px;overflow:auto;font-size:12px;color:var(--muted-fg);"></div>
+                    </div>
+                    <div id="knowledgeSourceList" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:20px;">
+                        <div style="text-align:center;padding:40px 0;color:var(--muted-fg);font-size:13px;grid-column:1/-1;">知识库文档将显示在此处</div>
+                    </div>
+                    <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px;">
+                        <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px;">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--secondary)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+                            知识关联图谱
+                        </h3>
+                        <div id="knowledgeGraphArea" style="min-height:200px;position:relative;overflow:auto;">
+                            <div style="text-align:center;padding:40px 0;color:var(--muted-fg);font-size:13px;">点击"AI整理"后可查看知识关联图谱</div>
+                        </div>
+                    </div>
+                </div>

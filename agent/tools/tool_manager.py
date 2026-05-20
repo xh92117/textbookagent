@@ -515,7 +515,7 @@ class ToolManager:
         and removes tools whose MCP server was torn down. Built-in tools
         on the agent are left untouched.
 
-        Handles both representations CowAgent uses:
+        Handles both representations TextbookAgent uses:
           - Agent.tools: list[BaseTool]               (default Agent class)
           - AgentStream.tools: dict[str, BaseTool]    (streaming agent)
 

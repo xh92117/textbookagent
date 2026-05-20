@@ -16,6 +16,7 @@ from agent.textbook.state.truth_files import TruthFileManager
 from agent.textbook.pipeline.runner import PipelineRunner
 
 from common.log import logger
+from common.stream_guard import iter_with_idle_guard
 
 _bridge_instance = None
 _bridge_lock = threading.Lock()
@@ -44,6 +45,10 @@ class _LightweightLLM:
         self._api_key = profile.api_key
         self._api_base = (profile.api_base or "https://api.openai.com/v1").rstrip("/")
         self._proxy = c.get("proxy")
+        try:
+            self._request_timeout = int(c.get("request_timeout", 180) or 180)
+        except (TypeError, ValueError):
+            self._request_timeout = 180
 
         if not self._api_key:
             logger.warning(
@@ -61,17 +66,29 @@ class _LightweightLLM:
             url = f"{self._api_base}/chat/completions"
             headers = {
                 "Content-Type": "application/json",
+                "Accept": "application/json",
                 "Authorization": f"Bearer {self._api_key}",
+                "Connection": "close",
             }
             payload = {
                 "model": self._model,
                 "messages": messages,
                 "temperature": kwargs.get("temperature", 0.7),
+                "stream": False,
             }
             proxies = None
             if self._proxy:
                 proxies = {"http": self._proxy, "https": self._proxy}
             logger.info(f"[TextbookBridge] Sending request to {url}, model={self._model}")
+
+            if self._role == "knowledge" and kwargs.get("stream", True) is not False:
+                return self._call_streaming_chat_completions(
+                    req_lib=req_lib,
+                    url=url,
+                    headers=headers,
+                    payload=payload,
+                    proxies=proxies,
+                )
 
             if cancel_event is not None:
                 result_box = [None]
@@ -80,7 +97,13 @@ class _LightweightLLM:
 
                 def _do_post():
                     try:
-                        resp = req_lib.post(url, json=payload, headers=headers, timeout=180, proxies=proxies)
+                        resp = req_lib.post(
+                            url,
+                            json=payload,
+                            headers=headers,
+                            timeout=(30, self._request_timeout),
+                            proxies=proxies,
+                        )
                         resp.raise_for_status()
                         result_box[0] = resp
                     except Exception as exc:
@@ -89,7 +112,7 @@ class _LightweightLLM:
                 t = threading.Thread(target=_do_post, daemon=True)
                 t.start()
 
-                wait_log_interval = 30
+                wait_log_interval = 10
                 wait_log_next = time.time() + wait_log_interval
                 while t.is_alive():
                     if cancel_event.is_set():
@@ -114,7 +137,13 @@ class _LightweightLLM:
 
                 resp = result_box[0]
             else:
-                resp = req_lib.post(url, json=payload, headers=headers, timeout=180, proxies=proxies)
+                resp = req_lib.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=(30, self._request_timeout),
+                    proxies=proxies,
+                )
                 resp.raise_for_status()
 
             data = resp.json()
@@ -134,7 +163,7 @@ class _LightweightLLM:
             logger.error(f"[TextbookBridge] Unexpected LLM response: {str(data)[:500]}")
             return "[ERROR] Empty response from LLM API"
         except req_lib.exceptions.Timeout:
-            return "[ERROR] LLM API request timed out (180s). The model may be overloaded."
+            return f"[ERROR] LLM API request timed out ({self._request_timeout}s). The model may be overloaded."
         except req_lib.exceptions.ConnectionError as e:
             return f"[ERROR] Cannot connect to LLM API at {self._api_base}: {e}"
         except req_lib.exceptions.HTTPError as e:
@@ -148,6 +177,100 @@ class _LightweightLLM:
         except Exception as e:
             logger.error(f"[TextbookBridge] LLM call failed: {e}", exc_info=True)
             return f"[ERROR] LLM call failed: {e}"
+
+    def _call_streaming_chat_completions(self, req_lib, url: str, headers: dict, payload: dict, proxies=None) -> str:
+        payload = dict(payload)
+        payload["stream"] = True
+        try:
+            from config import conf
+            idle_timeout = float(conf().get("knowledge_stream_idle_timeout", conf().get("agent_stream_idle_timeout", 30)) or 30)
+            first_chunk_timeout = float(
+                conf().get("knowledge_stream_first_chunk_timeout", conf().get("request_timeout", self._request_timeout)) or self._request_timeout
+            )
+        except Exception:
+            idle_timeout = 30
+            first_chunk_timeout = self._request_timeout
+
+        response = req_lib.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=(30, max(int(first_chunk_timeout), self._request_timeout)),
+            proxies=proxies,
+            stream=True,
+        )
+        if response.status_code != 200:
+            return f"[ERROR] LLM API HTTP {response.status_code}: {response.text[:500]}"
+
+        content_parts = []
+        reasoning_parts = []
+        last_error = ""
+
+        def _sse_lines():
+            try:
+                for raw_line in response.iter_lines():
+                    if raw_line:
+                        yield raw_line
+            finally:
+                try:
+                    response.close()
+                except Exception:
+                    pass
+
+        try:
+            for raw_line in iter_with_idle_guard(
+                _sse_lines(),
+                idle_timeout=idle_timeout,
+                first_chunk_timeout=first_chunk_timeout,
+                logger=logger,
+                label=f"Knowledge LLM stream ({self._model})",
+            ):
+                line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else str(raw_line)
+                if line.startswith("data: "):
+                    data_str = line[6:]
+                elif line.startswith("data:"):
+                    data_str = line[5:]
+                else:
+                    continue
+                data_str = data_str.strip()
+                if not data_str:
+                    continue
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                if chunk.get("error"):
+                    err = chunk.get("error")
+                    last_error = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                    break
+                for choice in chunk.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    if delta.get("content"):
+                        content_parts.append(delta["content"])
+                    if delta.get("reasoning_content"):
+                        reasoning_parts.append(delta["reasoning_content"])
+                    message = choice.get("message") or {}
+                    if message.get("content"):
+                        content_parts.append(message["content"])
+                    if message.get("reasoning_content"):
+                        reasoning_parts.append(message["reasoning_content"])
+        except TimeoutError as exc:
+            if not content_parts and not reasoning_parts:
+                return f"[ERROR] {exc}"
+            logger.warning(f"[TextbookBridge] Knowledge stream timed out after partial output: {exc}")
+
+        content = "".join(content_parts).strip()
+        if content:
+            logger.info(f"[TextbookBridge] Knowledge stream response received, chars={len(content)}")
+            return content
+        reasoning = "".join(reasoning_parts).strip()
+        if reasoning:
+            return reasoning
+        if last_error:
+            return f"[ERROR] LLM API error: {last_error}"
+        return "[ERROR] Empty response from LLM stream"
 
 
 class TextbookBridge:
@@ -179,28 +302,26 @@ class TextbookBridge:
         book_dir = self._book_dir(book_id)
         if not os.path.exists(book_dir):
             return "outline"
-        outline_path = os.path.join(book_dir, "outline", "outline.md")
-        has_outline = os.path.exists(outline_path) and os.path.getsize(outline_path) > 10
-        chapters_dir = os.path.join(book_dir, "chapters")
+        mgr = self._memory_manager.get_truth_manager(book_id)
+        outline_text = mgr.read("outline")
+        has_outline = bool(outline_text.strip()) and len(outline_text.strip()) > 10
         existing_chapters = []
-        if os.path.exists(chapters_dir):
-            for f in os.listdir(chapters_dir):
-                if f.startswith("chapter_") and f.endswith(".md"):
-                    try:
-                        num = int(f.replace("chapter_", "").replace(".md", ""))
-                        ch_path = os.path.join(chapters_dir, f)
-                        if os.path.getsize(ch_path) > 50:
-                            existing_chapters.append(num)
-                    except ValueError:
-                        pass
+        for num in mgr.list_completed_chapter_numbers(min_chars=50):
+            existing_chapters.append(num)
         existing_chapters.sort()
         total = config.total_chapters or 1
         if not has_outline:
             return "outline"
-        if len(existing_chapters) == 0:
-            return "compose"
         if len(existing_chapters) >= total:
             return "persist"
+        # Once chapter writing has started, the outline is treated as locked for
+        # this pipeline run. Going back to outline review mid-book is more
+        # disruptive than continuing from the last completed chapter.
+        if existing_chapters:
+            return "compose"
+        if not mgr.is_outline_review_current(outline_text):
+            if not mgr.infer_outline_review_from_reports():
+                return "review_outline"
         return "compose"
 
     def _book_dir(self, book_id):
@@ -286,6 +407,7 @@ class TextbookBridge:
     def update_outline(self, book_id, outline_content):
         mgr = self._memory_manager.get_truth_manager(book_id)
         mgr.write("outline", outline_content)
+        mgr.invalidate_outline_review("outline_updated_via_bridge")
         return True
 
     def get_chapter(self, book_id, chapter_num):

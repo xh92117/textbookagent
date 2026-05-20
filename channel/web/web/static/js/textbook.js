@@ -837,121 +837,201 @@ function startChatSSE(requestId, externalAssistantEl, externalBubbleEl, userMess
         assistantEl = appendChatMessage('assistant', '');
         bubbleEl = assistantEl.querySelector('.chat-bubble');
     }
+
     var accumulatedText = '';
     var plainTextBuffer = '';
-    var toolCallsHtml = '';
-    var statusItems = {};
-    var reasoningHtml = '';
     var frozenHtml = '';
-    var hadToolCallsBeforeText = false;
+    var thinkingNodes = [];
+    var toolCalls = [];
+    var commandRuns = [];
+    var savedAssistantText = false;
+    var eventSeq = 0;
+    var streamStartedAt = Date.now();
 
     var eventSource = new EventSource(API_BASE + '/stream?request_id=' + requestId);
     currentEventSource = eventSource;
     activeChatRequestId = requestId;
 
-    function chapterWorkLabel(text) {
-        var msg = text || '';
-        var m = msg.match(/第\s*([一二三四五六七八九十百千\d]+)\s*章/);
-        if (m) return '第' + m[1] + '章正在编写';
-        if (/编写|写作|生成|撰写/.test(msg)) return '智能体正在处理写作任务';
-        return '智能体正在工作';
+    function nextId(prefix) {
+        eventSeq += 1;
+        return prefix + '-' + eventSeq;
     }
 
-    function upsertStatusItem(key, name, status, detail, state) {
-        state = state || 'running';
-        var marker = 'data-status-key="' + escapeHtml(key) + '"';
-        var html = '<div class="tool-call-item ' + state + ' live-status" ' + marker + '>';
-        html += '<div class="tool-call-header"><span class="tool-call-icon">' + (state === 'completed' ? '✓' : '…') + '</span>';
-        html += '<span class="tool-call-name">' + escapeHtml(name) + '</span>';
-        html += '<span class="tool-call-status' + (state === 'completed' ? ' done' : '') + '">' + escapeHtml(status) + '</span></div>';
-        if (detail) html += '<div class="tool-call-args">' + escapeHtml(detail) + '</div>';
-        html += '</div>';
-        statusItems[key] = html;
+    function stringifyBrief(value, maxLen) {
+        maxLen = maxLen || 600;
+        if (value === undefined || value === null || value === '') return '';
+        var text = '';
+        if (typeof value === 'string') text = value;
+        else {
+            try { text = JSON.stringify(value, null, 2); }
+            catch (e) { text = String(value); }
+        }
+        if (text.length > maxLen) text = text.substring(0, maxLen) + '\n...';
+        return text;
+    }
+
+    function isCommandTool(name, args) {
+        var n = (name || '').toLowerCase();
+        if (n.indexOf('bash') >= 0 || n.indexOf('shell') >= 0 || n.indexOf('terminal') >= 0 || n.indexOf('command') >= 0) return true;
+        if (n.indexOf('execute') >= 0 || n.indexOf('sandbox') >= 0) return true;
+        if (args && (args.command || args.cmd || args.code)) return true;
+        return false;
+    }
+
+    function statusMeta(status) {
+        if (status === 'success' || status === 'completed') return {label:'成功', glyph:'✓', cls:'success'};
+        if (status === 'error' || status === 'failed' || status === 'failure') return {label:'失败', glyph:'✗', cls:'error'};
+        return {label:'执行中', glyph:'⏳', cls:'running'};
+    }
+
+    function addThinking(title, detail, state) {
+        thinkingNodes.push({id: nextId('think'), title: title || '正在思考', detail: detail || '', state: state || 'running'});
+        if (thinkingNodes.length > 80) thinkingNodes = thinkingNodes.slice(-80);
         flushOutput();
     }
 
-    upsertStatusItem('agent-working', chapterWorkLabel(userMessage), '进行中', '等待模型输出或工具事件...', 'running');
+    function upsertThinking(key, title, detail, state) {
+        var node = thinkingNodes.find(function(item) { return item.key === key; });
+        if (!node) {
+            node = {id: nextId('think'), key: key, title: title, detail: detail || '', state: state || 'running'};
+            thinkingNodes.push(node);
+        } else {
+            node.title = title || node.title;
+            node.detail = detail || node.detail;
+            node.state = state || node.state;
+        }
+        flushOutput();
+    }
+
+    function startWorkItem(name, args) {
+        var item = {
+            id: nextId(isCommandTool(name, args) ? 'cmd' : 'tool'),
+            name: name || 'tool',
+            args: stringifyBrief(args, 1200),
+            result: '',
+            status: 'running',
+            executionTime: ''
+        };
+        if (isCommandTool(name, args)) commandRuns.push(item);
+        else toolCalls.push(item);
+        flushOutput();
+        return item;
+    }
+
+    function finishWorkItem(name, status, result, executionTime) {
+        var list = isCommandTool(name, null) ? commandRuns : toolCalls;
+        var item = null;
+        for (var i = list.length - 1; i >= 0; i--) {
+            if (list[i].name === name && list[i].status === 'running') { item = list[i]; break; }
+        }
+        if (!item) {
+            list = toolCalls.concat(commandRuns);
+            for (var j = list.length - 1; j >= 0; j--) {
+                if (list[j].name === name && list[j].status === 'running') { item = list[j]; break; }
+            }
+        }
+        if (!item) item = startWorkItem(name, {});
+        item.status = status === 'success' ? 'success' : (status || 'success');
+        item.result = stringifyBrief(result, 2000);
+        item.executionTime = executionTime ? String(executionTime) + 's' : '';
+        flushOutput();
+    }
+
+    function renderThinkingSection() {
+        if (!thinkingNodes.length) return '';
+        var elapsed = Math.max(1, Math.round((Date.now() - streamStartedAt) / 1000));
+        var html = '<details class="agent-section agent-thinking-section" open>';
+        html += '<summary><span class="terminal-step-lead">⏵</span><span><span class="thinking-label">Thinking</span><span class="terminal-muted"> · ' + elapsed + 's</span></span><em>' + thinkingNodes.length + ' 个节点</em></summary>';
+        html += '<div class="thinking-tree">';
+        thinkingNodes.forEach(function(node, index) {
+            var meta = statusMeta(node.state);
+            html += '<div class="thinking-node ' + meta.cls + '">';
+            html += '<div class="thinking-node-dot">' + (index === thinkingNodes.length - 1 ? '└' : '├') + '</div>';
+            html += '<div class="thinking-node-body"><div class="thinking-node-title">' + escapeHtml(node.title || '正在思考') + '</div>';
+            if (node.detail) html += '<div class="thinking-node-detail">' + escapeHtml(node.detail) + '</div>';
+            html += '</div></div>';
+        });
+        html += '</div></details>';
+        return html;
+    }
+
+    function renderWorkCard(item, type) {
+        var meta = statusMeta(item.status);
+        var label = type === 'command' ? 'Command' : 'Tool';
+        var title = type === 'command' ? (item.name || 'command') : item.name;
+        var sub = item.executionTime ? meta.label + ' · ' + item.executionTime : meta.label;
+        var html = '<div class="agent-work-card ' + meta.cls + '">';
+        html += '<div class="agent-work-card-head"><span class="terminal-step-lead">⏵</span><span class="work-status-icon">' + meta.glyph + '</span>';
+        html += '<div class="work-title-wrap"><div class="work-title">' + label + ': ' + escapeHtml(title) + '</div><div class="work-subtitle">' + escapeHtml(item.name) + '</div></div>';
+        html += '<span class="work-status-text">' + escapeHtml(sub) + '</span></div>';
+        if (item.args) {
+            html += '<details class="work-detail"><summary>参数</summary><pre>' + escapeHtml(item.args) + '</pre></details>';
+        }
+        if (item.result) {
+            html += '<details class="work-detail"><summary>结果</summary><pre>' + escapeHtml(item.result) + '</pre></details>';
+        }
+        html += '</div>';
+        return html;
+    }
+
+    function renderToolSection() {
+        if (!toolCalls.length) return '';
+        return '<div class="agent-work-card-list">' + toolCalls.map(function(item) { return renderWorkCard(item, 'tool'); }).join('') + '</div>';
+    }
+
+    function renderCommandSection() {
+        if (!commandRuns.length) return '';
+        return '<div class="agent-work-card-list">' + commandRuns.map(function(item) { return renderWorkCard(item, 'command'); }).join('') + '</div>';
+    }
+
+    function renderProcessPanel() {
+        var sections = renderThinkingSection() + renderToolSection() + renderCommandSection();
+        if (!sections) return '';
+        return '<div class="agent-process-panel">' + sections + '</div>';
+    }
 
     function isNearBottom(el) {
         if (!el) return true;
         return (el.scrollHeight - el.scrollTop - el.clientHeight) < 96;
     }
 
-    function replaceLast(haystack, needle, replacement) {
-        var idx = haystack.lastIndexOf(needle);
-        if (idx < 0) return haystack;
-        return haystack.slice(0, idx) + replacement + haystack.slice(idx + needle.length);
-    }
-
-    function replaceLastTag(haystack, startToken, endToken, replacement) {
-        var idx = haystack.lastIndexOf(startToken);
-        if (idx < 0) return haystack;
-        var endIdx = haystack.indexOf(endToken, idx);
-        if (endIdx < 0) return haystack;
-        return haystack.slice(0, idx) + replacement + haystack.slice(endIdx + endToken.length);
-    }
-
     function flushOutput() {
         var messages = document.getElementById('chatMessages');
         var shouldAutoScroll = isNearBottom(messages);
-        var statusHtml = Object.keys(statusItems).map(function(k) { return statusItems[k]; }).join('');
-        var html = '';
-        if (statusHtml) {
-            html += '<div class="agent-status-sticky"><div class="agent-tool-calls agent-status-calls">' + statusHtml + '</div></div>';
-        }
-        html += frozenHtml;
-        if (reasoningHtml) {
-            html += '<div class="agent-reasoning">' + reasoningHtml + '</div>';
-        }
+        var html = frozenHtml + renderProcessPanel();
         if (accumulatedText) {
             var rendered = renderMarkdown(accumulatedText);
             html += rendered || ('<p>' + escapeHtml(accumulatedText) + '</p>');
         }
-        if (toolCallsHtml) {
-            html += '<div class="agent-tool-calls">' + toolCallsHtml + '</div>';
-        }
-        if (html) {
-            bubbleEl.innerHTML = html;
-        }
+        if (html) bubbleEl.innerHTML = html;
         if (messages && shouldAutoScroll) messages.scrollTop = messages.scrollHeight;
     }
 
     function freezeCurrentOutput() {
-        var chunk = '';
-        if (reasoningHtml) {
-            chunk += '<div class="agent-reasoning">' + reasoningHtml + '</div>';
-        }
+        var chunk = renderProcessPanel();
         if (accumulatedText) {
             var rendered = renderMarkdown(accumulatedText);
             chunk += rendered || ('<p>' + escapeHtml(accumulatedText) + '</p>');
         }
-        if (toolCallsHtml) {
-            chunk += '<div class="agent-tool-calls">' + toolCallsHtml + '</div>';
-        }
         if (chunk) frozenHtml += chunk;
         accumulatedText = '';
-        toolCallsHtml = '';
-        reasoningHtml = '';
+        thinkingNodes = [];
+        toolCalls = [];
+        commandRuns = [];
     }
 
-    var savedAssistantText = false;
+    upsertThinking('agent-working', '等待模型响应', '智能体正在理解任务并准备下一步操作。', 'running');
 
     eventSource.onmessage = function(event) {
         try {
             var d = JSON.parse(event.data);
-            console.log('[SSE] event:', d.type, d.content ? d.content.substring(0, 50) : '');
             if (d.type === 'delta') {
-                if (toolCallsHtml) {
-                    freezeCurrentOutput();
-                }
-                accumulatedText += d.content;
+                accumulatedText += d.content || '';
                 plainTextBuffer += d.content || '';
                 flushOutput();
             } else if (d.type === 'done') {
-                if (d.content && !plainTextBuffer) {
-                    plainTextBuffer = d.content;
-                }
-                if (accumulatedText || toolCallsHtml || reasoningHtml) {
+                if (d.content && !plainTextBuffer) plainTextBuffer = d.content;
+                if (accumulatedText || thinkingNodes.length || toolCalls.length || commandRuns.length) {
                     freezeCurrentOutput();
                     bubbleEl.innerHTML = frozenHtml;
                 } else if (d.content) {
@@ -967,149 +1047,67 @@ function startChatSSE(requestId, externalAssistantEl, externalBubbleEl, userMess
                 setChatSending(false);
                 eventSource.close();
             } else if (d.type === 'error') {
-                flushOutput();
-                bubbleEl.innerHTML += '<div style="color:var(--destructive);margin-top:8px;">[错误: ' + escapeHtml(d.message || '未知错误') + ']</div>';
+                addThinking('执行出错', d.message || '未知错误', 'error');
                 currentEventSource = null;
                 activeChatRequestId = null;
                 setChatSending(false);
                 eventSource.close();
             } else if (d.type === 'reasoning') {
-                reasoningHtml += escapeHtml(d.content || '');
-                flushOutput();
+                addThinking('模型推理', d.content || '', 'running');
             } else if (d.type === 'llm_thinking') {
                 var elapsed = d.elapsed_seconds || 0;
-                upsertStatusItem('agent-working', chapterWorkLabel(userMessage), '思考中 ' + elapsed + 's', '模型仍在生成，页面可保持等待。', 'running');
+                upsertThinking('llm-thinking', '等待模型生成', '已等待 ' + elapsed + ' 秒，后台仍在运行。', 'running');
             } else if (d.type === 'phase_progress') {
                 var pd = d.data || {};
                 var item = pd.item_label || pd.phase || '处理任务';
-                var current = pd.current_item || 0;
                 var total = pd.total_items || 0;
-                var detail = total ? ('进度 ' + current + '/' + total) : '';
-                upsertStatusItem('pipeline-progress', item, '进行中', detail, 'running');
+                var detail = total ? ('进度 ' + (pd.current_item || 0) + '/' + total) : '';
+                upsertThinking('pipeline-progress', item, detail, 'running');
             } else if (d.type === 'tool_start') {
-                var toolName = d.tool || 'tool';
-                var args = d.arguments || {};
-                var argsStr = '';
-                try { argsStr = JSON.stringify(args); if (argsStr.length > 200) argsStr = argsStr.substring(0, 200) + '...'; } catch(e) {}
-                toolCallsHtml += '<div class="tool-call-item running">';
-                toolCallsHtml += '<div class="tool-call-header">';
-                toolCallsHtml += '<span class="tool-call-icon">&#9654;</span>';
-                toolCallsHtml += '<span class="tool-call-name">' + escapeHtml(toolName) + '</span>';
-                toolCallsHtml += '<span class="tool-call-status">执行中...</span>';
-                toolCallsHtml += '</div>';
-                if (argsStr) {
-                    toolCallsHtml += '<div class="tool-call-args">' + escapeHtml(argsStr) + '</div>';
-                }
-                toolCallsHtml += '<div class="tool-call-result" data-tool="' + escapeHtml(toolName) + '"></div>';
-                toolCallsHtml += '</div>';
-                flushOutput();
+                startWorkItem(d.tool || 'tool', d.arguments || {});
             } else if (d.type === 'tool_end') {
                 var endToolName = d.tool || 'tool';
                 var endStatus = d.status || 'success';
                 var endResult = d.result || '';
-                var pipelineBookId = null;
+                finishWorkItem(endToolName, endStatus, endResult, d.execution_time);
                 if (endToolName === 'start_pipeline' && endStatus === 'success') {
                     try {
                         var parsed = typeof endResult === 'string' ? JSON.parse(endResult) : endResult;
                         if (parsed && parsed.book_id) {
-                            pipelineBookId = parsed.book_id;
+                            currentBookId = parsed.book_id;
+                            loadTextbooks().then(function() { selectTextbook(parsed.book_id); });
                         }
                     } catch(e) {}
                 }
-                if (endResult && typeof endResult === 'string' && endResult.length > 300) endResult = endResult.substring(0, 300) + '...';
-                var execTime = d.execution_time ? (' (' + d.execution_time + 's)') : '';
-                var endClass = endStatus === 'success' ? 'completed' : 'error';
-                var statusClass = endStatus === 'success' ? 'done' : 'error';
-                var statusText = (endStatus === 'success' ? '完成' : '失败') + execTime;
-                toolCallsHtml = replaceLast(toolCallsHtml, 'tool-call-item running', 'tool-call-item ' + endClass);
-                toolCallsHtml = replaceLastTag(toolCallsHtml, '<span class="tool-call-icon">', '</span>', '<span class="tool-call-icon ' + statusClass + '">' + (endStatus === 'success' ? '✓' : '×') + '</span>');
-                toolCallsHtml = replaceLastTag(toolCallsHtml, '<span class="tool-call-status">', '</span>', '<span class="tool-call-status ' + statusClass + '">' + statusText + '</span>');
-                if (endResult) {
-                    toolCallsHtml = replaceLast(toolCallsHtml, '<div class="tool-call-result" data-tool="' + escapeHtml(endToolName) + '"></div>', '<div class="tool-call-result" data-tool="' + escapeHtml(endToolName) + '" style="display:block;"><pre>' + escapeHtml(endResult) + '</pre></div>');
-                }
-                var resultEl = bubbleEl.querySelector('.tool-call-result[data-tool="' + endToolName + '"]');
-                var statusEl = bubbleEl.querySelector('.tool-call-item.running:last-child .tool-call-status');
-                var iconEl = bubbleEl.querySelector('.tool-call-item.running:last-child .tool-call-icon');
-                if (statusEl) {
-                    statusEl.textContent = endStatus === 'success' ? '完成' + execTime : '失败' + execTime;
-                    statusEl.className = 'tool-call-status ' + (endStatus === 'success' ? 'done' : 'error');
-                }
-                if (iconEl) {
-                    iconEl.innerHTML = endStatus === 'success' ? '&#10003;' : '&#10007;';
-                    iconEl.className = 'tool-call-icon ' + (endStatus === 'success' ? 'done' : 'error');
-                }
-                if (resultEl && endResult) {
-                    resultEl.innerHTML = '<pre>' + escapeHtml(endResult) + '</pre>';
-                    resultEl.style.display = 'block';
-                }
-                var runningItem = bubbleEl.querySelector('.tool-call-item.running:last-child');
-                if (runningItem) runningItem.className = 'tool-call-item ' + (endStatus === 'success' ? 'completed' : 'error');
-                if (endToolName === 'start_pipeline' && endStatus === 'success') {
-                    if (pipelineBookId) {
-                        currentBookId = pipelineBookId;
-                        loadTextbooks().then(function() {
-                            selectTextbook(pipelineBookId);
-                        });
-                    } else {
-                        fetch(API_BASE + '/api/textbook').then(function(r) { return r.json(); }).then(function(d) {
-                            if (d.status === 'success' && d.textbooks && d.textbooks.length > 0) {
-                                var latest = d.textbooks[d.textbooks.length - 1];
-                                if (latest && latest.id) {
-                                    currentBookId = latest.id;
-                                    loadTextbooks().then(function() {
-                                        selectTextbook(latest.id);
-                                    });
-                                }
-                            }
-                        }).catch(function() {});
-                    }
-                }
-                flushOutput();
             } else if (d.type === 'message_end') {
-                if (d.has_tool_calls) {
-                    freezeCurrentOutput();
-                    flushOutput();
-                }
+                if (d.has_tool_calls) freezeCurrentOutput();
+                flushOutput();
             } else if (d.type === 'pipeline_start') {
                 var bookId = (d.data && d.data.book_id) || currentBookId;
-                if (bookId) {
-                    currentBookId = bookId;
-                }
-                toolCallsHtml += '<div class="tool-call-item running pipeline-step"><div class="tool-call-header"><span class="tool-call-icon">▶</span><span class="tool-call-name">教材管线</span><span class="tool-call-status">执行中</span></div><div class="tool-call-args">7 阶段自动编制流程已启动</div></div>';
-                flushOutput();
+                if (bookId) currentBookId = bookId;
+                addThinking('教材管线启动', '7 阶段自动编制流程已启动。', 'running');
             } else if (d.type === 'phase_start') {
                 var phaseName = (d.data && d.data.phase) || '';
-                var phaseLabel = (d.data && d.data.phase_label) || phaseName;
-                var phaseIcons = {'outline':'📋','review_outline':'🔍','compose':'🔧','write':'✍️','review_chapter':'🔎','revise':'✏️','persist':'💾'};
-                var icon = phaseIcons[phaseName] || '▶';
-                toolCallsHtml += '<div class="tool-call-item running pipeline-step"><div class="tool-call-header"><span class="tool-call-icon">' + icon + '</span><span class="tool-call-name">' + escapeHtml(phaseLabel || phaseName) + '</span><span class="tool-call-status">进行中</span></div></div>';
-                flushOutput();
+                var phaseLabel = (d.data && d.data.phase_label) || phaseName || '阶段任务';
+                addThinking(phaseLabel, '阶段开始执行。', 'running');
             } else if (d.type === 'phase_complete') {
                 var phaseName2 = (d.data && d.data.phase) || '';
-                var phaseLabel2 = (d.data && d.data.phase_label) || phaseName2;
-                var summary = (d.data && d.data.result_summary) || '';
-                toolCallsHtml += '<div class="tool-call-item completed pipeline-step"><div class="tool-call-header"><span class="tool-call-icon done">✓</span><span class="tool-call-name">' + escapeHtml(phaseLabel2 || phaseName2) + '</span><span class="tool-call-status done">完成</span></div>';
-                if (summary) toolCallsHtml += '<div class="tool-call-result" style="display:block;"><pre>' + escapeHtml(summary) + '</pre></div>';
-                toolCallsHtml += '</div>';
-                flushOutput();
+                var phaseLabel2 = (d.data && d.data.phase_label) || phaseName2 || '阶段任务';
+                addThinking(phaseLabel2, (d.data && d.data.result_summary) || '阶段已完成。', 'success');
             } else if (d.type === 'pipeline_complete') {
                 var totalCh = (d.data && d.data.total_chapters) || 0;
-                toolCallsHtml += '<div class="tool-call-item completed pipeline-step pipeline-done"><div class="tool-call-header"><span class="tool-call-icon done">✓</span><span class="tool-call-name">管线执行完成</span><span class="tool-call-status done">完成</span></div>';
-                if (totalCh) toolCallsHtml += '<div class="tool-call-args">共完成 ' + totalCh + ' 章编写</div>';
-                toolCallsHtml += '</div>';
-                flushOutput();
+                addThinking('管线执行完成', totalCh ? ('共完成 ' + totalCh + ' 章编写。') : '教材编写流程已完成。', 'success');
+                loadTextbooks();
             } else if (d.type === 'pipeline_error') {
-                var errMsg = (d.data && d.data.error) || '管线执行出错';
-                toolCallsHtml += '<div class="tool-call-item error pipeline-step"><div class="tool-call-header"><span class="tool-call-icon error">×</span><span class="tool-call-name">管线执行失败</span><span class="tool-call-status error">失败</span></div><div class="tool-call-result" style="display:block;"><pre>' + escapeHtml(errMsg) + '</pre></div></div>';
-                flushOutput();
+                addThinking('管线执行失败', (d.data && d.data.error) || '管线执行出错。', 'error');
             }
         } catch (e) {
-            // ignore parse errors for keepalive
+            // Ignore keepalive or malformed SSE packets.
         }
     };
 
     eventSource.onerror = function() {
-        if (accumulatedText || toolCallsHtml || reasoningHtml) {
+        if (accumulatedText || thinkingNodes.length || toolCalls.length || commandRuns.length) {
             freezeCurrentOutput();
             bubbleEl.innerHTML = frozenHtml;
         }
@@ -1426,6 +1424,38 @@ function modelDisplayName(item) {
     return (item.name || item.model || '未命名模型') + ' · ' + (provider.label || item.provider || '自定义');
 }
 
+function switchSettingsTab(tabName) {
+    document.querySelectorAll('.settings-tab').forEach(function(btn) {
+        btn.classList.toggle('active', btn.getAttribute('data-settings-tab') === tabName);
+    });
+    document.querySelectorAll('.settings-tab-pane').forEach(function(pane) {
+        pane.classList.toggle('active', pane.id === 'tab-' + tabName);
+    });
+}
+
+function togglePwd(btn) {
+    var input = btn && btn.parentElement ? btn.parentElement.querySelector('input') : null;
+    if (!input) return;
+    var show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    var icon = btn.querySelector('i');
+    if (icon) icon.className = show ? 'fas fa-eye-slash' : 'fas fa-eye';
+}
+
+function clearModelEditor() {
+    var editId = document.getElementById('settingEditModelId');
+    var provider = document.getElementById('settingModelProvider');
+    var modelName = document.getElementById('settingModelName');
+    var apiKey = document.getElementById('settingModelApiKey');
+    var apiBase = document.getElementById('settingModelApiBase');
+    if (editId) editId.value = '';
+    if (provider && _configChatModels[0]) provider.value = _configChatModels[0].provider || 'custom';
+    if (modelName) modelName.value = '';
+    if (apiKey) apiKey.value = '';
+    if (apiBase) apiBase.value = '';
+    onModelProviderChange();
+}
+
 function hydrateLegacyChatModels(data) {
     var list = (data.ai_chat_models || []).slice();
     if (!list.length && data.model) {
@@ -1458,12 +1488,15 @@ function renderModelPool() {
     } else {
         pool.innerHTML = _configChatModels.map(function(item) {
             var isActive = item.id === _configActiveChatModelId;
-            return '<div class="settings-model-card' + (isActive ? ' active' : '') + '">' +
-                '<div><div class="settings-model-title">' + escapeHtml(modelDisplayName(item)) + '</div>' +
-                '<div class="settings-model-meta">' + escapeHtml(item.model || '') + ' · ' + escapeHtml(item.api_base || '默认 URL') + ' · ' + (item.provider_key_configured ? '已配置供应商密钥' : '未配置供应商密钥') + '</div></div>' +
-                '<div class="settings-model-actions">' +
-                '<button class="chat-action-btn" onclick="editChatModel(&quot;' + escapeHtml(item.id) + '&quot;)" title="编辑">编辑</button>' +
-                '<button class="chat-action-btn" onclick="removeChatModel(&quot;' + escapeHtml(item.id) + '&quot;)" title="删除">删除</button>' +
+            var statusText = item.provider_key_configured ? '已配置密钥' : '未配置密钥';
+            var apiBaseText = item.api_base || '默认 URL';
+            return '<div class="model-card' + (isActive ? ' active' : '') + '">' +
+                '<div class="model-card-icon"><i class="fas fa-microchip"></i></div>' +
+                '<div class="model-card-info"><div class="model-card-name">' + escapeHtml(modelDisplayName(item)) + '</div>' +
+                '<div class="model-card-meta"><span class="status-dot ' + (item.provider_key_configured ? 'ready' : 'muted') + '"></span>' + escapeHtml(statusText) + ' · ' + escapeHtml(item.model || '') + ' · ' + escapeHtml(apiBaseText) + '</div></div>' +
+                '<div class="model-card-actions">' +
+                '<button class="model-action-btn" type="button" onclick="editChatModel(&quot;' + escapeHtml(item.id) + '&quot;)" title="编辑"><i class="fas fa-pen"></i></button>' +
+                '<button class="model-action-btn danger" type="button" onclick="removeChatModel(&quot;' + escapeHtml(item.id) + '&quot;)" title="删除"><i class="fas fa-trash"></i></button>' +
                 '</div></div>';
         }).join('');
     }
@@ -1471,6 +1504,8 @@ function renderModelPool() {
     fillModelChoice(document.getElementById('settingReviewModelChoice'), _configReviewModelId || _configActiveChatModelId);
     fillModelChoice(document.getElementById('settingImageModelChoice'), _configImageModelId || _configActiveChatModelId);
     fillModelChoice(document.getElementById('settingKnowledgeModelChoice'), _configKnowledgeModelId || _configActiveChatModelId);
+    var count = document.getElementById('settingModelCount');
+    if (count) count.textContent = String(_configChatModels.length);
 }
 
 function fillModelChoice(selectEl, selectedId) {
@@ -1492,7 +1527,7 @@ function onModelProviderChange() {
     if (!providerSelect || !apiBaseInput) return;
     var provider = _configProviders[providerSelect.value] || {};
     apiBaseInput.value = _configApiBases[provider.api_base_key] || provider.api_base_default || '';
-    apiBaseInput.placeholder = provider.api_base_placeholder || 'https://...../v1';
+    apiBaseInput.placeholder = provider.api_base_placeholder || 'https://api.example.com/v1';
     if (apiKeyInput) {
         var keyField = provider.api_key_field || '';
         apiKeyInput.value = _configProviderKeyUpdates[keyField] || _configApiKeys[keyField] || '';
@@ -1547,9 +1582,7 @@ function addOrUpdateChatModel() {
     if (idx >= 0) _configChatModels[idx] = item;
     else _configChatModels.push(item);
     if (!_configActiveChatModelId) _configActiveChatModelId = item.id;
-    document.getElementById('settingEditModelId').value = '';
-    document.getElementById('settingModelName').value = '';
-    document.getElementById('settingModelApiKey').value = '';
+    clearModelEditor();
     renderModelPool();
 }
 
@@ -1574,10 +1607,20 @@ function loadSettings() {
         if (maxTurns) maxTurns.value = data.agent_max_context_turns || 20;
         var maxSteps = document.getElementById('settingMaxSteps');
         if (maxSteps) maxSteps.value = data.agent_max_steps || 20;
+        var timeout = document.getElementById('settingTimeout');
+        if (timeout) timeout.value = data.request_timeout || data.timeout || 180;
         var thinking = document.getElementById('settingThinking');
         if (thinking) thinking.checked = data.enable_thinking || false;
+        var password = document.getElementById('settingPassword');
+        if (password) password.value = '';
         renderWorkspaceSettings(data.workspace || {});
-    }).catch(function(e) { console.error('Failed to load settings:', e); });
+        var saveStatus = document.getElementById('saveStatus');
+        if (saveStatus) saveStatus.innerHTML = '<i class="fas fa-circle-check"></i> 配置已加载';
+    }).catch(function(e) {
+        console.error('Failed to load settings:', e);
+        var saveStatus = document.getElementById('saveStatus');
+        if (saveStatus) saveStatus.innerHTML = '<i class="fas fa-triangle-exclamation"></i> 配置加载失败';
+    });
 }
 
 function renderWorkspaceSettings(workspace) {
@@ -1585,10 +1628,12 @@ function renderWorkspaceSettings(workspace) {
     var active = workspace.active_workspace || '';
     var systemDir = workspace.system_dir || '';
     var activeInput = document.getElementById('settingActiveWorkspace');
+    var storageInput = document.getElementById('settingTextbooksStorageDir');
     var splitInput = document.getElementById('settingWorkspaceSplit');
     var currentLabel = document.getElementById('settingWorkspaceCurrent');
     var systemLabel = document.getElementById('settingSystemDir');
     if (activeInput) activeInput.value = active;
+    if (storageInput) storageInput.value = workspace.textbooks_storage_dir || '';
     if (splitInput) splitInput.checked = workspace.workspace_split_enabled !== false;
     if (currentLabel) currentLabel.textContent = active || '-';
     if (systemLabel) systemLabel.textContent = systemDir || '-';
@@ -1598,8 +1643,12 @@ function saveSettings() {
     var maxTokens = document.getElementById('settingMaxTokens');
     var maxTurns = document.getElementById('settingMaxTurns');
     var maxSteps = document.getElementById('settingMaxSteps');
+    var timeout = document.getElementById('settingTimeout');
     var thinking = document.getElementById('settingThinking');
+    var password = document.getElementById('settingPassword');
+    var saveStatus = document.getElementById('saveStatus');
     var updates = {};
+    if (saveStatus) saveStatus.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 正在保存...';
     var activeSelect = document.getElementById('settingActiveChatModel');
     var reviewSelect = document.getElementById('settingReviewModelChoice');
     var imageSelect = document.getElementById('settingImageModelChoice');
@@ -1612,12 +1661,14 @@ function saveSettings() {
     if (maxTokens) updates.agent_max_context_tokens = parseInt(maxTokens.value) || 50000;
     if (maxTurns) updates.agent_max_context_turns = parseInt(maxTurns.value) || 20;
     if (maxSteps) updates.agent_max_steps = parseInt(maxSteps.value) || 20;
+    if (timeout) updates.request_timeout = parseInt(timeout.value) || 180;
     if (thinking) updates.enable_thinking = thinking.checked;
+    if (password && password.value.trim()) updates.web_password = password.value.trim();
     var activeWorkspace = document.getElementById('settingActiveWorkspace');
+    var textbooksStorageDir = document.getElementById('settingTextbooksStorageDir');
     var workspaceSplit = document.getElementById('settingWorkspaceSplit');
-    if (activeWorkspace && activeWorkspace.value.trim()) {
-        updates.active_workspace = activeWorkspace.value.trim();
-    }
+    if (activeWorkspace && activeWorkspace.value.trim()) updates.active_workspace = activeWorkspace.value.trim();
+    if (textbooksStorageDir) updates.textbooks_storage_dir = textbooksStorageDir.value.trim();
     if (workspaceSplit) updates.workspace_split_enabled = workspaceSplit.checked;
     var providerSelect = document.getElementById('settingModelProvider');
     var keyInput = document.getElementById('settingModelApiKey');
@@ -1625,9 +1676,7 @@ function saveSettings() {
         var providerInfo = _configProviders[providerSelect.value] || {};
         var keyField = providerInfo.api_key_field || '';
         var keyValue = keyInput.value.trim();
-        if (keyField && keyValue && keyValue.indexOf('*') < 0) {
-            _configProviderKeyUpdates[keyField] = keyValue;
-        }
+        if (keyField && keyValue && keyValue.indexOf('*') < 0) _configProviderKeyUpdates[keyField] = keyValue;
     }
     for (var key in _configProviderKeyUpdates) {
         if (_configProviderKeyUpdates[key]) updates[key] = _configProviderKeyUpdates[key];
@@ -1639,12 +1688,15 @@ function saveSettings() {
     }).then(function(r) { return r.json(); }).then(function(data) {
         if (data.status === 'success') {
             showToast('配置已保存');
+            if (saveStatus) saveStatus.innerHTML = '<i class="fas fa-circle-check"></i> 配置已保存';
             loadSettings();
         } else {
             showToast('保存失败: ' + (data.message || '未知错误'), 'error');
+            if (saveStatus) saveStatus.innerHTML = '<i class="fas fa-triangle-exclamation"></i> 保存失败';
         }
     }).catch(function(e) {
         showToast('保存失败: ' + e.message, 'error');
+        if (saveStatus) saveStatus.innerHTML = '<i class="fas fa-triangle-exclamation"></i> 保存失败';
     });
 }
 
@@ -1786,7 +1838,6 @@ function switchTab(el, tabName) {
     if (tabName === 'outline-edit') loadOutlineForEditor();
     if (tabName === 'chapter-preview') loadChapterTree();
     if (tabName === 'export') { }
-    if (tabName === 'knowledge') loadBookKnowledge();
     if (tabName === 'preferences') loadBookPreferences();
 }
 
@@ -2028,58 +2079,6 @@ function _pollOrganizeStatus(bookId, btn) {
     }, 3000);
 }
 
-function organizeBookKnowledge() {
-    if (!currentBookId) { showToast('请先选择教材', 'error'); return; }
-    var btns = document.querySelectorAll('#tab-knowledge .btn-primary');
-    var btn = null;
-    btns.forEach(function(b) { if (b.textContent.indexOf('AI整理') >= 0 || b.textContent.indexOf('整理中') >= 0 || b.textContent.indexOf('一键AI整理') >= 0) btn = b; });
-    if (btn) { btn.disabled = true; btn.textContent = '整理中...'; }
-    updateKnowledgeOrganizeProgress('bookKnowledge', {status:'starting', stage:'starting', message:'准备整理教材知识库'});
-    fetch(API_BASE + '/api/knowledge/organize', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({book_id: currentBookId})
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-        if (data.status === 'started' || data.status === 'already_running') {
-            _pollBookOrganizeStatus(currentBookId, btn);
-        } else {
-            if (btn) { btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> 一键AI整理'; }
-            showToast('整理失败: ' + (data.message || ''), 'error');
-        }
-    })
-    .catch(function(err) {
-        if (btn) { btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> 一键AI整理'; }
-        showToast('整理失败: ' + err, 'error');
-    });
-}
-
-function _pollBookOrganizeStatus(bookId, btn) {
-    var pollUrl = API_BASE + '/api/knowledge/organize?book_id=' + encodeURIComponent(bookId);
-    var pollInterval = setInterval(function() {
-        fetch(pollUrl)
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                updateKnowledgeOrganizeProgress('bookKnowledge', data);
-                if (data.status === 'done') {
-                    clearInterval(pollInterval);
-                    if (btn) { btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> 一键AI整理'; }
-                    var result = data.result || {};
-                    showToast('整理完成: ' + (result.message || 'organized ' + (result.organized_count || 0) + ' entries'));
-                    loadBookKnowledge();
-                    loadKnowledgeStatus(bookId);
-                    loadKnowledgeGraph(bookId, 'bookKnowledgeGraphArea');
-                } else if (data.status === 'error') {
-                    clearInterval(pollInterval);
-                    if (btn) { btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> 一键AI整理'; }
-                    showToast('整理失败: ' + (data.error || ''), 'error');
-                }
-            })
-            .catch(function() {});
-    }, 3000);
-}
-
 function updateKnowledgeOrganizeProgress(prefix, data) {
     var panel = document.getElementById(prefix + 'OrganizeProgress');
     if (!panel) return;
@@ -2126,11 +2125,6 @@ function updateKnowledgeOrganizeProgress(prefix, data) {
             return '<div style="padding:4px 0;border-top:1px solid var(--border);">' + escapeHtml(ev.message || ev.stage || '') + '</div>';
         }).join('');
     }
-}
-
-function uploadBookKnowledgeDoc() {
-    if (!currentBookId) { showToast('请先选择教材', 'error'); return; }
-    uploadKnowledgeDoc(currentBookId);
 }
 
 function loadKnowledgeGraph(bookId, containerId) {
@@ -2308,23 +2302,26 @@ function renderKnowledgeSources(sources) {
     const container = document.getElementById('knowledgeSourceList');
     if (!container) return;
     if (!sources.length) {
-        container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted-fg);">暂无知识库文档</div>';
+        container.innerHTML = '<div class="knowledge-empty">暂无知识库文档</div>';
         return;
     }
     let html = '';
-    sources.forEach(s => {
-        html += `<div class="kb-card">
-            <div class="kb-header">
-                <div class="kb-icon" style="background:#dbeafe;">📄</div>
-                <div class="kb-title">${s.name}</div>
-                <span class="kb-status ${s.status === 'ready' ? 'ready' : 'processing'}">${s.status === 'ready' ? '已就绪' : '处理中'}</span>
-            </div>
-            <div class="kb-meta">
-                <span>📁 ${s.category}</span>
-                <span>📊 ${formatFileSize(s.size)}</span>
-                <span>📅 ${s.updated_at || ''}</span>
-            </div>
-        </div>`;
+    sources.forEach(function(s) {
+        var name = s.name || s.file_name || '未命名文档';
+        var category = s.category || 'root';
+        var statusReady = s.status === 'ready';
+        html += '<div class="kb-card">' +
+            '<div class="kb-header">' +
+                '<div class="kb-icon"><i class="fas fa-file-lines"></i></div>' +
+                '<div class="kb-title" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</div>' +
+                '<span class="kb-status ' + (statusReady ? 'ready' : 'processing') + '">' + (statusReady ? '已就绪' : '处理中') + '</span>' +
+            '</div>' +
+            '<div class="kb-meta">' +
+                '<span title="' + escapeHtml(category) + '"><i class="fas fa-folder"></i> ' + escapeHtml(category) + '</span>' +
+                '<span><i class="fas fa-chart-simple"></i> ' + escapeHtml(formatFileSize(s.size || 0)) + '</span>' +
+                '<span title="' + escapeHtml(s.updated_at || '') + '"><i class="fas fa-calendar-days"></i> ' + escapeHtml(s.updated_at || '') + '</span>' +
+            '</div>' +
+        '</div>';
     });
     container.innerHTML = html;
 }
@@ -2353,20 +2350,6 @@ function uploadKnowledgeDoc(bookId, category) {
             .catch(err => showToast('上传失败: ' + err, 'error'));
     };
     input.click();
-}
-
-function loadBookKnowledge() {
-    if (!currentBookId) return;
-    loadKnowledgeSources(currentBookId);
-    loadKnowledgeGraph(currentBookId, 'bookKnowledgeGraphArea');
-}
-
-function associateKnowledge() {
-    if (!currentBookId) {
-        showToast('请先选择教材', 'error');
-        return;
-    }
-    uploadKnowledgeDoc(currentBookId);
 }
 
 function formatFileSize(bytes) {
@@ -2461,6 +2444,20 @@ function showSimpleModal(title, contentHtml) {
 var currentChapterNum = null;
 var chapterEditMode = false;
 
+function parseChapterOrdinal(raw) {
+    raw = String(raw || '').trim();
+    if (/^\d+$/.test(raw)) return parseInt(raw, 10);
+    var digits = {'一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9};
+    if (raw === '十') return 10;
+    if (raw.indexOf('十') >= 0) {
+        var parts = raw.split('十');
+        var tens = parts[0] ? digits[parts[0]] : 1;
+        var ones = parts[1] ? digits[parts[1]] : 0;
+        return (tens || 0) * 10 + (ones || 0);
+    }
+    return digits[raw] || null;
+}
+
 function loadChapterTree() {
     if (!currentBookId) return;
     fetch('/api/textbook/' + currentBookId + '/outline')
@@ -2484,9 +2481,10 @@ function renderChapterTree(outlineText) {
         if (match) {
             var level = match[1].length;
             var title = match[2];
-            var isChapterTitle = /第[一二三四五六七八九十\d]+章/.test(title);
-            if (isChapterTitle || level === 1) {
-                chapterNum++;
+            var chapterMatch = title.match(/^第\s*(\d{1,3}|[一二三四五六七八九十]{1,3})\s*章/);
+            if (chapterMatch) {
+                var parsedChapter = parseChapterOrdinal(chapterMatch[1]);
+                chapterNum = parsedChapter || (chapterNum + 1);
                 html += '<div class="tree-node" data-chapter="' + chapterNum + '" data-title="' + escapeHtml(title) + '" style="padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;">';
                 html += '<span style="width:20px;height:20px;border-radius:6px;background:var(--primary-soft);color:var(--primary);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;">' + chapterNum + '</span>';
                 html += escapeHtml(title);

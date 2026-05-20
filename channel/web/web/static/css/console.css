@@ -1,5 +1,5 @@
 /* =====================================================================
-   CowAgent Console Styles
+   TextbookAgent Console Styles
    ===================================================================== */
 
 /* Animations */
@@ -475,6 +475,19 @@
 .agent-thinking-step .thinking-header:hover { color: #64748b; }
 .dark .agent-thinking-step .thinking-header:hover { color: #cbd5e1; }
 .agent-thinking-step .thinking-header i:first-child { font-size: 0.625rem; margin-top: 1px; }
+.agent-thinking-step .thinking-label {
+    display: inline-flex;
+    align-items: center;
+    height: 1.125rem;
+    padding: 0 0.4rem;
+    border-radius: 999px;
+    border: 1px solid rgba(245, 158, 11, 0.32);
+    background: rgba(245, 158, 11, 0.10);
+    color: #f59e0b;
+    font: 800 0.625rem/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    text-transform: uppercase;
+    letter-spacing: 0;
+}
 .agent-thinking-step .thinking-chevron {
     font-size: 0.5rem;
     margin-left: auto;
@@ -817,6 +830,16 @@
 }
 .dark .att-chip { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); color: #94a3b8; }
 .att-uploading { opacity: 0.6; pointer-events: none; }
+.att-error {
+    background: #fef2f2;
+    border-color: #fecaca;
+    color: #b91c1c;
+}
+.dark .att-error {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(248, 113, 113, 0.35);
+    color: #fca5a5;
+}
 .att-name {
     overflow: hidden;
     text-overflow: ellipsis;

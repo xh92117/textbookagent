@@ -12,6 +12,7 @@ user_datas.pkl
 __pycache__/
 *.pyc
 .pytest_cache/
+node_modules/
 .trae/
 .workbuddy/
 .codex-browser-test/

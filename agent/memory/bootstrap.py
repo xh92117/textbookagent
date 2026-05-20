@@ -34,13 +34,12 @@ class MemoryBootstrap:
         sections = [
             "# System Memory Bootstrap",
             "",
-            "This compact context is loaded once at session startup. Use memory tools for details when needed.",
+            "This compact profile context is loaded once on the first request of a session. Use memory tools for details when needed.",
             "",
         ]
         sections.extend(self._profile_section())
-        sections.extend(self._process_section(session_id))
-        sections.extend(self._error_section())
-        sections.extend(self._project_section())
+        sections.extend(self._workspace_profile_section())
+        sections.extend(self._on_demand_section())
         return "\n".join(sections).strip() + "\n"
 
     def _profile_section(self) -> List[str]:
@@ -52,6 +51,33 @@ class MemoryBootstrap:
         elif profile_json.exists():
             content = self._read_head(profile_json, 1200)
         return ["## User Profile", "", content or "No user profile available.", ""]
+
+    def _workspace_profile_section(self) -> List[str]:
+        if not self.project_workspace:
+            return []
+        rows: List[str] = []
+        for filename, title, max_chars in (
+            ("AGENT.md", "Agent Operating Notes", 900),
+            ("USER.md", "Workspace User Notes", 900),
+            ("RULE.md", "Workspace Rules", 900),
+            ("MEMORY.md", "Workspace Long-term Memory", 1400),
+        ):
+            path = self.project_workspace / filename
+            if not path.exists() or not path.is_file():
+                continue
+            content = self._read_head(path, max_chars)
+            if not content or self._looks_like_template(content):
+                continue
+            rows.extend([f"### {title} ({filename})", "", content, ""])
+        if not rows:
+            return []
+        return [
+            "## Workspace Profile Files",
+            "",
+            "These workspace-root files are fused into startup memory once; use memory_get/read for full content later.",
+            "",
+            *rows,
+        ]
 
     def _process_section(self, session_id: str) -> List[str]:
         processes_dir = self.memory_dir / "processes"
@@ -87,6 +113,17 @@ class MemoryBootstrap:
                 rows.append(f"- {title}: {path.relative_to(self.project_workspace).as_posix()}")
         return ["## Textbook State Index", "", *(rows or ["No textbook state index available."]), ""]
 
+    def _on_demand_section(self) -> List[str]:
+        return [
+            "## On-demand Memory Stores",
+            "",
+            "- Process memories: `memory/processes/` (load only when task depends on prior process state).",
+            "- Daily memories: `memory/YYYY-MM-DD.md` (load only when date-specific history matters).",
+            "- Session memories: `memory/sessions/` (load only when current/previous session context matters).",
+            "- Error memories: `memory/errors/` (load only when debugging repeated or similar failures).",
+            "",
+        ]
+
     def _recent_files(self, root: Path, patterns: tuple[str, ...], limit: int) -> List[Path]:
         if not root.exists():
             return []
@@ -116,3 +153,16 @@ class MemoryBootstrap:
         except Exception:
             return ""
         return text[:max_chars].rstrip()
+
+    @staticmethod
+    def _looks_like_template(content: str) -> bool:
+        markers = (
+            "No stable profile yet.",
+            "在这里记录",
+            "填写",
+            "TODO",
+            "todo",
+            "placeholder",
+        )
+        sample = content[:500]
+        return any(marker in sample for marker in markers)

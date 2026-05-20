@@ -1,4 +1,4 @@
-# encoding:utf-8
+﻿# encoding:utf-8
 
 import copy
 import json
@@ -7,209 +7,214 @@ import os
 
 from common.log import logger
 
-# 将所有可用的配置项写在字典里, 请使用小写字母
-# 此处的配置值无实际意义，程序不会读取此处的配置，仅用于提示格式，请将配置加入到config.json中
+# 灏嗘墍鏈夊彲鐢ㄧ殑閰嶇疆椤瑰啓鍦ㄥ瓧鍏搁噷, 璇蜂娇鐢ㄥ皬鍐欏瓧姣?
+# 姝ゅ鐨勯厤缃€兼棤瀹為檯鎰忎箟锛岀▼搴忎笉浼氳鍙栨澶勭殑閰嶇疆锛屼粎鐢ㄤ簬鎻愮ず鏍煎紡锛岃灏嗛厤缃姞鍏ュ埌config.json涓?
 available_setting = {
-    # openai api配置
+    # openai api閰嶇疆
     "open_ai_api_key": "",  # openai api key
-    # openai apibase，当use_azure_chatgpt为true时，需要设置对应的api base
+    # openai apibase锛屽綋use_azure_chatgpt涓簍rue鏃讹紝闇€瑕佽缃搴旂殑api base
     "open_ai_api_base": "https://api.openai.com/v1",
     "claude_api_base": "https://api.anthropic.com/v1",  # claude api base
     "gemini_api_base": "https://generativelanguage.googleapis.com",  # gemini api base
     "custom_api_key": "",  # custom OpenAI-compatible provider api key (used when bot_type is "custom")
     "custom_api_base": "",  # custom OpenAI-compatible provider api base (used when bot_type is "custom")
-    "proxy": "",  # openai使用的代理
-    # chatgpt模型， 当use_azure_chatgpt为true时，其名称为Azure上model deployment名称
-    "model": "gpt-3.5-turbo",  # 可选择: gpt-4o, pt-4o-mini, gpt-4-turbo, claude-3-sonnet, wenxin, moonshot, qwen-turbo, xunfei, glm-4, minimax, gemini等模型，全部可选模型详见common/const.py文件
-    "bot_type": "",  # 可选配置，使用兼容openai格式的三方服务时候，需填"openai"或"custom"（custom模式下切换模型不会自动切换bot_type）。bot具体名称详见common/const.py文件，如不填根据model名称判断
-    "review_model": "",  # 教材审查模型；为空时沿用 model
-    "review_bot_type": "",  # 教材审查模型供应商；为空时沿用 bot_type
-    "image_model": "",  # 图片生成模型；从 ai_chat_models 中选择
-    "image_bot_type": "",  # 图片生成模型供应商
-    "knowledge_model": "",  # 知识库构建/LLM-WIKI 整理模型；从 ai_chat_models 中选择
-    "knowledge_bot_type": "",  # 知识库构建/LLM-WIKI 整理模型供应商
-    "knowledge_api_key": "",  # 知识库构建模型使用 custom 路由时的 API Key
-    "knowledge_api_base": "",  # 知识库构建模型使用 custom 路由时的 API Base
-    "ai_chat_models": [],  # AI 对话模型池：[{id,name,provider,model,api_base}]，API Key 使用供应商级配置
-    "active_chat_model_id": "",  # 当前 AI 对话模型 id
-    "review_model_id": "",  # 审查模型 id，引用 ai_chat_models
-    "image_model_id": "",  # 图片生成模型 id，引用 ai_chat_models
-    "knowledge_model_id": "",  # 知识库构建模型 id，引用 ai_chat_models
-    "use_azure_chatgpt": False,  # 是否使用azure的chatgpt
-    "azure_deployment_id": "",  # azure 模型部署名称
-    "azure_api_version": "",  # azure api版本
-    # Bot触发配置
-    "single_chat_prefix": ["bot", "@bot"],  # 私聊时文本需要包含该前缀才能触发机器人回复
-    "single_chat_reply_prefix": "[bot] ",  # 私聊时自动回复的前缀，用于区分真人
-    "single_chat_reply_suffix": "",  # 私聊时自动回复的后缀，\n 可以换行
-    "group_chat_prefix": ["@bot"],  # 群聊时包含该前缀则会触发机器人回复
-    "no_need_at": False,  # 群聊回复时是否不需要艾特
-    "group_chat_reply_prefix": "",  # 群聊时自动回复的前缀
-    "group_chat_reply_suffix": "",  # 群聊时自动回复的后缀，\n 可以换行
-    "group_chat_keyword": [],  # 群聊时包含该关键词则会触发机器人回复
-    "group_at_off": False,  # 是否关闭群聊时@bot的触发
-    "group_name_white_list": ["ChatGPT测试群", "ChatGPT测试群2"],  # 开启自动回复的群名称列表
-    "group_name_keyword_white_list": [],  # 开启自动回复的群名称关键词列表
+    "proxy": "",  # openai浣跨敤鐨勪唬鐞?
+    # chatgpt妯″瀷锛?褰搖se_azure_chatgpt涓簍rue鏃讹紝鍏跺悕绉颁负Azure涓妋odel deployment鍚嶇О
+    "model": "gpt-3.5-turbo",  # 鍙€夋嫨: gpt-4o, pt-4o-mini, gpt-4-turbo, claude-3-sonnet, wenxin, moonshot, qwen-turbo, xunfei, glm-4, minimax, gemini绛夋ā鍨嬶紝鍏ㄩ儴鍙€夋ā鍨嬭瑙乧ommon/const.py鏂囦欢
+    "bot_type": "",  # 鍙€夐厤缃紝浣跨敤鍏煎openai鏍煎紡鐨勪笁鏂规湇鍔℃椂鍊欙紝闇€濉?openai"鎴?custom"锛坈ustom妯″紡涓嬪垏鎹㈡ā鍨嬩笉浼氳嚜鍔ㄥ垏鎹ot_type锛夈€俠ot鍏蜂綋鍚嶇О璇﹁common/const.py鏂囦欢锛屽涓嶅～鏍规嵁model鍚嶇О鍒ゆ柇
+    "review_model": "",  # 鏁欐潗瀹℃煡妯″瀷锛涗负绌烘椂娌跨敤 model
+    "review_bot_type": "",  # 鏁欐潗瀹℃煡妯″瀷渚涘簲鍟嗭紱涓虹┖鏃舵部鐢?bot_type
+    "image_model": "",  # 鍥剧墖鐢熸垚妯″瀷锛涗粠 ai_chat_models 涓€夋嫨
+    "image_bot_type": "",  # 鍥剧墖鐢熸垚妯″瀷渚涘簲鍟?
+    "knowledge_model": "",  # 鐭ヨ瘑搴撴瀯寤?LLM-WIKI 鏁寸悊妯″瀷锛涗粠 ai_chat_models 涓€夋嫨
+    "knowledge_bot_type": "",  # 鐭ヨ瘑搴撴瀯寤?LLM-WIKI 鏁寸悊妯″瀷渚涘簲鍟?
+    "knowledge_api_key": "",  # 鐭ヨ瘑搴撴瀯寤烘ā鍨嬩娇鐢?custom 璺敱鏃剁殑 API Key
+    "knowledge_api_base": "",  # 鐭ヨ瘑搴撴瀯寤烘ā鍨嬩娇鐢?custom 璺敱鏃剁殑 API Base
+    "ai_chat_models": [],  # AI 瀵硅瘽妯″瀷姹狅細[{id,name,provider,model,api_base}]锛孉PI Key 浣跨敤渚涘簲鍟嗙骇閰嶇疆
+    "active_chat_model_id": "",  # 褰撳墠 AI 瀵硅瘽妯″瀷 id
+    "textbooks_storage_dir": "",  # Optional textbook library root containing textbook id folders; default: <active_workspace>/textbooks
+    "review_model_id": "",  # 瀹℃煡妯″瀷 id锛屽紩鐢?ai_chat_models
+    "image_model_id": "",  # 鍥剧墖鐢熸垚妯″瀷 id锛屽紩鐢?ai_chat_models
+    "knowledge_model_id": "",  # 鐭ヨ瘑搴撴瀯寤烘ā鍨?id锛屽紩鐢?ai_chat_models
+    "use_azure_chatgpt": False,  # 鏄惁浣跨敤azure鐨刢hatgpt
+    "azure_deployment_id": "",  # azure 妯″瀷閮ㄧ讲鍚嶇О
+    "azure_api_version": "",  # azure api鐗堟湰
+    # Bot瑙﹀彂閰嶇疆
+    "single_chat_prefix": ["bot", "@bot"],  # 绉佽亰鏃舵枃鏈渶瑕佸寘鍚鍓嶇紑鎵嶈兘瑙﹀彂鏈哄櫒浜哄洖澶?
+    "single_chat_reply_prefix": "[bot] ",  # 绉佽亰鏃惰嚜鍔ㄥ洖澶嶇殑鍓嶇紑锛岀敤浜庡尯鍒嗙湡浜?
+    "single_chat_reply_suffix": "",  # 绉佽亰鏃惰嚜鍔ㄥ洖澶嶇殑鍚庣紑锛孿n 鍙互鎹㈣
+    "group_chat_prefix": ["@bot"],  # 缇よ亰鏃跺寘鍚鍓嶇紑鍒欎細瑙﹀彂鏈哄櫒浜哄洖澶?
+    "no_need_at": False,  # 缇よ亰鍥炲鏃舵槸鍚︿笉闇€瑕佽壘鐗?
+    "group_chat_reply_prefix": "",  # 缇よ亰鏃惰嚜鍔ㄥ洖澶嶇殑鍓嶇紑
+    "group_chat_reply_suffix": "",  # 缇よ亰鏃惰嚜鍔ㄥ洖澶嶇殑鍚庣紑锛孿n 鍙互鎹㈣
+    "group_chat_keyword": [],  # 缇よ亰鏃跺寘鍚鍏抽敭璇嶅垯浼氳Е鍙戞満鍣ㄤ汉鍥炲
+    "group_at_off": False,  # 鏄惁鍏抽棴缇よ亰鏃禓bot鐨勮Е鍙?
+    "group_name_white_list": ["ChatGPT测试群", "ChatGPT测试群2"],  # 开启自动回复的群名称白名单
+    "group_name_keyword_white_list": [],  # 寮€鍚嚜鍔ㄥ洖澶嶇殑缇ゅ悕绉板叧閿瘝鍒楄〃
     "group_chat_in_one_session": ["ChatGPT测试群"],  # 支持会话上下文共享的群名称
-    "group_shared_session": False,  # 群聊是否共享会话上下文（所有成员共享）。False时每个用户在群内有独立会话
-    "nick_name_black_list": [],  # 用户昵称黑名单
-    "group_welcome_msg": "",  # 配置新人进群固定欢迎语，不配置则使用随机风格欢迎
-    "trigger_by_self": False,  # 是否允许机器人触发
-    "text_to_image": "dall-e-2",  # 图片生成模型，可选 dall-e-2, dall-e-3
-    # Azure OpenAI dall-e-3 配置
-    "dalle3_image_style": "vivid", # 图片生成dalle3的风格，可选有 vivid, natural
-    "dalle3_image_quality": "hd", # 图片生成dalle3的质量，可选有 standard, hd
-    # Azure OpenAI DALL-E API 配置, 当use_azure_chatgpt为true时,用于将文字回复的资源和Dall-E的资源分开.
-    "azure_openai_dalle_api_base": "", # [可选] azure openai 用于回复图片的资源 endpoint，默认使用 open_ai_api_base
-    "azure_openai_dalle_api_key": "", # [可选] azure openai 用于回复图片的资源 key，默认使用 open_ai_api_key
-    "azure_openai_dalle_deployment_id":"", # [可选] azure openai 用于回复图片的资源 deployment id，默认使用 text_to_image
-    "image_proxy": True,  # 是否需要图片代理，国内访问LinkAI时需要
+    "group_shared_session": False,  # 缇よ亰鏄惁鍏变韩浼氳瘽涓婁笅鏂囷紙鎵€鏈夋垚鍛樺叡浜級銆侳alse鏃舵瘡涓敤鎴峰湪缇ゅ唴鏈夌嫭绔嬩細璇?
+    "nick_name_black_list": [],  # 鐢ㄦ埛鏄电О榛戝悕鍗?
+    "group_welcome_msg": "",  # 閰嶇疆鏂颁汉杩涚兢鍥哄畾娆㈣繋璇紝涓嶉厤缃垯浣跨敤闅忔満椋庢牸娆㈣繋
+    "trigger_by_self": False,  # 鏄惁鍏佽鏈哄櫒浜鸿Е鍙?
+    "text_to_image": "dall-e-2",  # 鍥剧墖鐢熸垚妯″瀷锛屽彲閫?dall-e-2, dall-e-3
+    # Azure OpenAI dall-e-3 閰嶇疆
+    "dalle3_image_style": "vivid", # 鍥剧墖鐢熸垚dalle3鐨勯鏍硷紝鍙€夋湁 vivid, natural
+    "dalle3_image_quality": "hd", # 鍥剧墖鐢熸垚dalle3鐨勮川閲忥紝鍙€夋湁 standard, hd
+    # Azure OpenAI DALL-E API 閰嶇疆, 褰搖se_azure_chatgpt涓簍rue鏃?鐢ㄤ簬灏嗘枃瀛楀洖澶嶇殑璧勬簮鍜孌all-E鐨勮祫婧愬垎寮€.
+    "azure_openai_dalle_api_base": "", # [鍙€塢 azure openai 鐢ㄤ簬鍥炲鍥剧墖鐨勮祫婧?endpoint锛岄粯璁や娇鐢?open_ai_api_base
+    "azure_openai_dalle_api_key": "", # [鍙€塢 azure openai 鐢ㄤ簬鍥炲鍥剧墖鐨勮祫婧?key锛岄粯璁や娇鐢?open_ai_api_key
+    "azure_openai_dalle_deployment_id":"", # [鍙€塢 azure openai 鐢ㄤ簬鍥炲鍥剧墖鐨勮祫婧?deployment id锛岄粯璁や娇鐢?text_to_image
+    "image_proxy": True,  # 鏄惁闇€瑕佸浘鐗囦唬鐞嗭紝鍥藉唴璁块棶LinkAI鏃堕渶瑕?
     "image_create_prefix": ["画", "看", "找"],  # 开启图片回复的前缀
-    "concurrency_in_session": 1,  # 同一会话最多有多少条消息在处理中，大于1可能乱序
-    "image_create_size": "256x256",  # 图片大小,可选有 256x256, 512x512, 1024x1024 (dall-e-3默认为1024x1024)
+    "concurrency_in_session": 1,  # 鍚屼竴浼氳瘽鏈€澶氭湁澶氬皯鏉℃秷鎭湪澶勭悊涓紝澶т簬1鍙兘涔卞簭
+    "image_create_size": "256x256",  # 鍥剧墖澶у皬,鍙€夋湁 256x256, 512x512, 1024x1024 (dall-e-3榛樿涓?024x1024)
     "group_chat_exit_group": False,
-    # chatgpt会话参数
-    "expires_in_seconds": 3600,  # 无操作会话的过期时间
-    # 人格描述
-    "character_desc": "你是ChatGPT, 一个由OpenAI训练的大型语言模型, 你旨在回答并解决人们的任何问题，并且可以使用多种语言与人交流。",
-    "conversation_max_tokens": 1000,  # 支持上下文记忆的最多字符数
-    # chatgpt限流配置
-    "rate_limit_chatgpt": 20,  # chatgpt的调用频率限制
-    "rate_limit_dalle": 50,  # openai dalle的调用频率限制
-    # chatgpt api参数 参考https://platform.openai.com/docs/api-reference/chat/create
+    # chatgpt浼氳瘽鍙傛暟
+    "expires_in_seconds": 3600,  # 鏃犳搷浣滀細璇濈殑杩囨湡鏃堕棿
+    # 浜烘牸鎻忚堪
+    "character_desc": "你是ChatGPT，一个由OpenAI训练的大型语言模型，你在回答并解决人们的问题，并且可以使用多种语言与人交流。",
+    "conversation_max_tokens": 1000,  # 鏀寔涓婁笅鏂囪蹇嗙殑鏈€澶氬瓧绗︽暟
+    # chatgpt闄愭祦閰嶇疆
+    "rate_limit_chatgpt": 20,  # chatgpt鐨勮皟鐢ㄩ鐜囬檺鍒?
+    "rate_limit_dalle": 50,  # openai dalle鐨勮皟鐢ㄩ鐜囬檺鍒?
+    # chatgpt api鍙傛暟 鍙傝€僪ttps://platform.openai.com/docs/api-reference/chat/create
     "temperature": 0.9,
     "top_p": 1,
     "frequency_penalty": 0,
     "presence_penalty": 0,
-    "request_timeout": 180,  # chatgpt请求超时时间，openai接口默认设置为600，对于难问题一般需要较长时间
-    "timeout": 120,  # chatgpt重试超时时间，在这个时间内，将会自动重试
-    # Baidu 文心一言参数
-    "baidu_wenxin_model": "eb-instant",  # 默认使用ERNIE-Bot-turbo模型
+    "request_timeout": 180,  # chatgpt璇锋眰瓒呮椂鏃堕棿锛宱penai鎺ュ彛榛樿璁剧疆涓?00锛屽浜庨毦闂涓€鑸渶瑕佽緝闀挎椂闂?
+    "agent_stream_idle_timeout": 30,  # Agent streaming: stop waiting when provider is idle after useful deltas
+    "agent_stream_first_chunk_timeout": 180,  # Agent streaming: max wait before first model delta
+    "knowledge_stream_idle_timeout": 30,  # Knowledge organize streaming: stop waiting when provider is idle after useful deltas
+    "knowledge_stream_first_chunk_timeout": 180,  # Knowledge organize streaming: max wait before first model delta
+    "timeout": 120,  # chatgpt閲嶈瘯瓒呮椂鏃堕棿锛屽湪杩欎釜鏃堕棿鍐咃紝灏嗕細鑷姩閲嶈瘯
+    # Baidu 鏂囧績涓€瑷€鍙傛暟
+    "baidu_wenxin_model": "eb-instant",  # 榛樿浣跨敤ERNIE-Bot-turbo妯″瀷
     "baidu_wenxin_api_key": "",  # Baidu api key
     "baidu_wenxin_secret_key": "",  # Baidu secret key
     "baidu_wenxin_prompt_enabled": False,  # Enable prompt if you are using ernie character model
     # Baidu Qianfan / ERNIE OpenAI-compatible API
     "qianfan_api_key": "",  # Baidu Qianfan API key in bce-v3 format
     "qianfan_api_base": "https://qianfan.baidubce.com/v2",  # Qianfan OpenAI-compatible API base
-    # 讯飞星火API
-    "xunfei_app_id": "",  # 讯飞应用ID
-    "xunfei_api_key": "",  # 讯飞 API key
-    "xunfei_api_secret": "",  # 讯飞 API secret
-    "xunfei_domain": "",  # 讯飞模型对应的domain参数，Spark4.0 Ultra为 4.0Ultra，其他模型详见: https://www.xfyun.cn/doc/spark/Web.html
-    "xunfei_spark_url": "",  # 讯飞模型对应的请求地址，Spark4.0 Ultra为 wss://spark-api.xf-yun.com/v4.0/chat，其他模型参考详见: https://www.xfyun.cn/doc/spark/Web.html
-    # claude 配置
+    # 璁鏄熺伀API
+    "xunfei_app_id": "",  # 璁搴旂敤ID
+    "xunfei_api_key": "",  # 璁 API key
+    "xunfei_api_secret": "",  # 璁 API secret
+    "xunfei_domain": "",  # 璁妯″瀷瀵瑰簲鐨刣omain鍙傛暟锛孲park4.0 Ultra涓?4.0Ultra锛屽叾浠栨ā鍨嬭瑙? https://www.xfyun.cn/doc/spark/Web.html
+    "xunfei_spark_url": "",  # 璁妯″瀷瀵瑰簲鐨勮姹傚湴鍧€锛孲park4.0 Ultra涓?wss://spark-api.xf-yun.com/v4.0/chat锛屽叾浠栨ā鍨嬪弬鑰冭瑙? https://www.xfyun.cn/doc/spark/Web.html
+    # claude 閰嶇疆
     "claude_api_cookie": "",
     "claude_uuid": "",
     # claude api key
     "claude_api_key": "",
-    # 通义千问API, 获取方式查看文档 https://help.aliyun.com/document_detail/2587494.html
+    # 閫氫箟鍗冮棶API, 鑾峰彇鏂瑰紡鏌ョ湅鏂囨。 https://help.aliyun.com/document_detail/2587494.html
     "qwen_access_key_id": "",
     "qwen_access_key_secret": "",
     "qwen_agent_key": "",
     "qwen_app_id": "",
-    "qwen_node_id": "",  # 流程编排模型用到的id，如果没有用到qwen_node_id，请务必保持为空字符串
-    # 阿里灵积(通义新版sdk)模型api key
+    "qwen_node_id": "",  # 娴佺▼缂栨帓妯″瀷鐢ㄥ埌鐨刬d锛屽鏋滄病鏈夌敤鍒皅wen_node_id锛岃鍔″繀淇濇寔涓虹┖瀛楃涓?
+    # 闃块噷鐏电Н(閫氫箟鏂扮増sdk)妯″瀷api key
     "dashscope_api_key": "",
     "dashscope_api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     # Google Gemini Api Key
     "gemini_api_key": "",
-    # 语音设置
-    "speech_recognition": True,  # 是否开启语音识别
-    "group_speech_recognition": False,  # 是否开启群组语音识别
-    "voice_reply_voice": False,  # 是否使用语音回复语音，需要设置对应语音合成引擎的api key
-    "always_reply_voice": False,  # 是否一直使用语音回复
-    "voice_to_text": "openai",  # 语音识别引擎，支持openai,baidu,google,azure,xunfei,ali
-    "text_to_voice": "openai",  # 语音合成引擎，支持openai,baidu,google,azure,xunfei,ali,pytts(offline),elevenlabs,edge(online)
+    # 璇煶璁剧疆
+    "speech_recognition": True,  # 鏄惁寮€鍚闊宠瘑鍒?
+    "group_speech_recognition": False,  # 鏄惁寮€鍚兢缁勮闊宠瘑鍒?
+    "voice_reply_voice": False,  # 鏄惁浣跨敤璇煶鍥炲璇煶锛岄渶瑕佽缃搴旇闊冲悎鎴愬紩鎿庣殑api key
+    "always_reply_voice": False,  # 鏄惁涓€鐩翠娇鐢ㄨ闊冲洖澶?
+    "voice_to_text": "openai",  # 璇煶璇嗗埆寮曟搸锛屾敮鎸乷penai,baidu,google,azure,xunfei,ali
+    "text_to_voice": "openai",  # 璇煶鍚堟垚寮曟搸锛屾敮鎸乷penai,baidu,google,azure,xunfei,ali,pytts(offline),elevenlabs,edge(online)
     "text_to_voice_model": "tts-1",
     "tts_voice_id": "alloy",
-    # baidu 语音api配置， 使用百度语音识别和语音合成时需要
+    # baidu 璇煶api閰嶇疆锛?浣跨敤鐧惧害璇煶璇嗗埆鍜岃闊冲悎鎴愭椂闇€瑕?
     "baidu_app_id": "",
     "baidu_api_key": "",
     "baidu_secret_key": "",
-    # 1536普通话(支持简单的英文识别) 1737英语 1637粤语 1837四川话 1936普通话远场
+    # 1536鏅€氳瘽(鏀寔绠€鍗曠殑鑻辨枃璇嗗埆) 1737鑻辫 1637绮よ 1837鍥涘窛璇?1936鏅€氳瘽杩滃満
     "baidu_dev_pid": 1536,
-    # azure 语音api配置， 使用azure语音识别和语音合成时需要
+    # azure 璇煶api閰嶇疆锛?浣跨敤azure璇煶璇嗗埆鍜岃闊冲悎鎴愭椂闇€瑕?
     "azure_voice_api_key": "",
     "azure_voice_region": "japaneast",
-    # elevenlabs 语音api配置
-    "xi_api_key": "",  # 获取ap的方法可以参考https://docs.elevenlabs.io/api-reference/quick-start/authentication
-    "xi_voice_id": "",  # ElevenLabs提供了9种英式、美式等英语发音id，分别是“Adam/Antoni/Arnold/Bella/Domi/Elli/Josh/Rachel/Sam”
-    # 服务时间限制
-    "chat_time_module": False,  # 是否开启服务时间限制
-    "chat_start_time": "00:00",  # 服务开始时间
-    "chat_stop_time": "24:00",  # 服务结束时间
-    # 翻译api
-    "translate": "baidu",  # 翻译api，支持baidu, youdao
-    # baidu翻译api的配置
-    "baidu_translate_app_id": "",  # 百度翻译api的appid
-    "baidu_translate_app_key": "",  # 百度翻译api的秘钥
-    # youdao翻译api的配置
-    "youdao_translate_app_key": "",  # 有道翻译api的应用ID
-    "youdao_translate_app_secret": "",  # 有道翻译api的应用密钥
-    # wechatmp的配置
-    "wechatmp_token": "",  # 微信公众平台的Token
-    "wechatmp_port": 8080,  # 微信公众平台的端口,需要端口转发到80或443
-    "wechatmp_app_id": "",  # 微信公众平台的appID
-    "wechatmp_app_secret": "",  # 微信公众平台的appsecret
-    "wechatmp_aes_key": "",  # 微信公众平台的EncodingAESKey，加密模式需要
-    # wechatcom的通用配置
-    "wechatcom_corp_id": "",  # 企业微信公司的corpID
-    # wechatcomapp的配置
-    "wechatcomapp_token": "",  # 企业微信app的token
-    "wechatcomapp_port": 9898,  # 企业微信app的服务端口,不需要端口转发
-    "wechatcomapp_secret": "",  # 企业微信app的secret
-    "wechatcomapp_agent_id": "",  # 企业微信app的agent_id
-    "wechatcomapp_aes_key": "",  # 企业微信app的aes_key
-    # 飞书配置
-    "feishu_port": 80,  # 飞书bot监听端口，仅webhook模式需要
-    "feishu_app_id": "",  # 飞书机器人应用APP Id
-    "feishu_app_secret": "",  # 飞书机器人APP secret
-    "feishu_token": "",  # 飞书 verification token，仅webhook模式需要
-    "feishu_event_mode": "websocket",  # 飞书事件接收模式: webhook(HTTP服务器) 或 websocket(长连接)
-    # 飞书流式回复（基于官方 cardkit 流式卡片 API，需要机器人开通 cardkit:card:write 权限，且飞书客户端 7.20+）
-    "feishu_stream_reply": True,  # 是否开启流式回复（打字机效果）。失败/老客户端自动降级为非流式或升级提示
-    # 钉钉配置
-    "dingtalk_client_id": "",  # 钉钉机器人Client ID 
-    "dingtalk_client_secret": "",  # 钉钉机器人Client Secret
+    # elevenlabs 璇煶api閰嶇疆
+    "xi_api_key": "",  # 鑾峰彇ap鐨勬柟娉曞彲浠ュ弬鑰僪ttps://docs.elevenlabs.io/api-reference/quick-start/authentication
+    "xi_voice_id": "",  # ElevenLabs鎻愪緵浜?绉嶈嫳寮忋€佺編寮忕瓑鑻辫鍙戦煶id锛屽垎鍒槸鈥淎dam/Antoni/Arnold/Bella/Domi/Elli/Josh/Rachel/Sam鈥?
+    # 鏈嶅姟鏃堕棿闄愬埗
+    "chat_time_module": False,  # 鏄惁寮€鍚湇鍔℃椂闂撮檺鍒?
+    "chat_start_time": "00:00",  # 鏈嶅姟寮€濮嬫椂闂?
+    "chat_stop_time": "24:00",  # 鏈嶅姟缁撴潫鏃堕棿
+    # 缈昏瘧api
+    "translate": "baidu",  # 缈昏瘧api锛屾敮鎸乥aidu, youdao
+    # baidu缈昏瘧api鐨勯厤缃?
+    "baidu_translate_app_id": "",  # 鐧惧害缈昏瘧api鐨刟ppid
+    "baidu_translate_app_key": "",  # 鐧惧害缈昏瘧api鐨勭閽?
+    # youdao缈昏瘧api鐨勯厤缃?
+    "youdao_translate_app_key": "",  # 鏈夐亾缈昏瘧api鐨勫簲鐢↖D
+    "youdao_translate_app_secret": "",  # 鏈夐亾缈昏瘧api鐨勫簲鐢ㄥ瘑閽?
+    # wechatmp鐨勯厤缃?
+    "wechatmp_token": "",  # 寰俊鍏紬骞冲彴鐨凾oken
+    "wechatmp_port": 8080,  # 寰俊鍏紬骞冲彴鐨勭鍙?闇€瑕佺鍙ｈ浆鍙戝埌80鎴?43
+    "wechatmp_app_id": "",  # 寰俊鍏紬骞冲彴鐨刟ppID
+    "wechatmp_app_secret": "",  # 寰俊鍏紬骞冲彴鐨刟ppsecret
+    "wechatmp_aes_key": "",  # 寰俊鍏紬骞冲彴鐨凟ncodingAESKey锛屽姞瀵嗘ā寮忛渶瑕?
+    # wechatcom鐨勯€氱敤閰嶇疆
+    "wechatcom_corp_id": "",  # 浼佷笟寰俊鍏徃鐨刢orpID
+    # wechatcomapp鐨勯厤缃?
+    "wechatcomapp_token": "",  # 浼佷笟寰俊app鐨則oken
+    "wechatcomapp_port": 9898,  # 浼佷笟寰俊app鐨勬湇鍔＄鍙?涓嶉渶瑕佺鍙ｈ浆鍙?
+    "wechatcomapp_secret": "",  # 浼佷笟寰俊app鐨剆ecret
+    "wechatcomapp_agent_id": "",  # 浼佷笟寰俊app鐨刟gent_id
+    "wechatcomapp_aes_key": "",  # 浼佷笟寰俊app鐨刟es_key
+    # 椋炰功閰嶇疆
+    "feishu_port": 80,  # 椋炰功bot鐩戝惉绔彛锛屼粎webhook妯″紡闇€瑕?
+    "feishu_app_id": "",  # 椋炰功鏈哄櫒浜哄簲鐢ˋPP Id
+    "feishu_app_secret": "",  # 椋炰功鏈哄櫒浜篈PP secret
+    "feishu_token": "",  # 椋炰功 verification token锛屼粎webhook妯″紡闇€瑕?
+    "feishu_event_mode": "websocket",  # 椋炰功浜嬩欢鎺ユ敹妯″紡: webhook(HTTP鏈嶅姟鍣? 鎴?websocket(闀胯繛鎺?
+    # 椋炰功娴佸紡鍥炲锛堝熀浜庡畼鏂?cardkit 娴佸紡鍗＄墖 API锛岄渶瑕佹満鍣ㄤ汉寮€閫?cardkit:card:write 鏉冮檺锛屼笖椋炰功瀹㈡埛绔?7.20+锛?
+    "feishu_stream_reply": True,  # 鏄惁寮€鍚祦寮忓洖澶嶏紙鎵撳瓧鏈烘晥鏋滐級銆傚け璐?鑰佸鎴风鑷姩闄嶇骇涓洪潪娴佸紡鎴栧崌绾ф彁绀?
+    # 閽夐拤閰嶇疆
+    "dingtalk_client_id": "",  # 閽夐拤鏈哄櫒浜篊lient ID 
+    "dingtalk_client_secret": "",  # 閽夐拤鏈哄櫒浜篊lient Secret
     "dingtalk_card_enabled": False,
-    # 企微智能机器人配置(长连接模式)
-    "wecom_bot_id": "",  # 企微智能机器人BotID
-    "wecom_bot_secret": "",  # 企微智能机器人长连接Secret
-    # 微信配置
-    "weixin_token": "",  # 微信登录后获取的bot_token，留空则启动时自动扫码登录
+    # 浼佸井鏅鸿兘鏈哄櫒浜洪厤缃?闀胯繛鎺ユā寮?
+    "wecom_bot_id": "",  # 浼佸井鏅鸿兘鏈哄櫒浜築otID
+    "wecom_bot_secret": "",  # 浼佸井鏅鸿兘鏈哄櫒浜洪暱杩炴帴Secret
+    # 寰俊閰嶇疆
+    "weixin_token": "",  # 寰俊鐧诲綍鍚庤幏鍙栫殑bot_token锛岀暀绌哄垯鍚姩鏃惰嚜鍔ㄦ壂鐮佺櫥褰?
     "weixin_base_url": "https://ilinkai.weixin.qq.com",  # Weixin ilink API base URL
     "weixin_cdn_base_url": "https://novac2c.cdn.weixin.qq.com/c2c",  # CDN base URL
     "weixin_credentials_path": "~/.weixin_cow_credentials.json",  # credentials file path
-    # chatgpt指令自定义触发词
-    "clear_memory_commands": ["#清除记忆"],  # 重置会话指令，必须以#开头
-    # channel配置
-    "channel_type": "",  # 通道类型，支持多渠道同时运行。单个: "feishu"，多个: "feishu, dingtalk" 或 ["feishu", "dingtalk"]。可选值: web,feishu,dingtalk,wecom_bot,weixin,wechatmp,wechatmp_service,wechatcom_app
-    "web_console": True,  # 是否自动启动Web控制台（默认启动）。设为False可禁用
-    "subscribe_msg": "",  # 订阅消息, 支持: wechatmp, wechatmp_service, wechatcom_app
-    "debug": False,  # 是否开启debug模式，开启后会打印更多日志
-    "appdata_dir": "",  # 数据目录
-    "system_workspace": "",  # 系统区根目录；为空时沿用 agent_workspace
-    "active_workspace": "",  # 当前业务工作区；为空时沿用 agent_workspace
-    "workspace_dir": "",  # active_workspace 的兼容别名
-    "workspace_split_enabled": True,  # 是否将系统文件放入 system/ 子目录
-    # 插件配置
-    "plugin_trigger_prefix": "$",  # 规范插件提供聊天相关指令的前缀，建议不要和管理员指令前缀"#"冲突
-    # 是否使用全局插件配置
+    # chatgpt鎸囦护鑷畾涔夎Е鍙戣瘝
+    "clear_memory_commands": ["#娓呴櫎璁板繂"],  # 閲嶇疆浼氳瘽鎸囦护锛屽繀椤讳互#寮€澶?
+    # channel閰嶇疆
+    "channel_type": "",  # 閫氶亾绫诲瀷锛屾敮鎸佸娓犻亾鍚屾椂杩愯銆傚崟涓? "feishu"锛屽涓? "feishu, dingtalk" 鎴?["feishu", "dingtalk"]銆傚彲閫夊€? web,feishu,dingtalk,wecom_bot,weixin,wechatmp,wechatmp_service,wechatcom_app
+    "web_console": True,  # 鏄惁鑷姩鍚姩Web鎺у埗鍙帮紙榛樿鍚姩锛夈€傝涓篎alse鍙鐢?
+    "subscribe_msg": "",  # 璁㈤槄娑堟伅, 鏀寔: wechatmp, wechatmp_service, wechatcom_app
+    "debug": False,  # 鏄惁寮€鍚痙ebug妯″紡锛屽紑鍚悗浼氭墦鍗版洿澶氭棩蹇?
+    "appdata_dir": "",  # 鏁版嵁鐩綍
+    "system_workspace": "",  # 绯荤粺鍖烘牴鐩綍锛涗负绌烘椂娌跨敤 agent_workspace
+    "active_workspace": "",  # 褰撳墠涓氬姟宸ヤ綔鍖猴紱涓虹┖鏃舵部鐢?agent_workspace
+    "workspace_dir": "",  # active_workspace 鐨勫吋瀹瑰埆鍚?
+    "workspace_split_enabled": True,  # 鏄惁灏嗙郴缁熸枃浠舵斁鍏?system/ 瀛愮洰褰?
+    # 鎻掍欢閰嶇疆
+    "plugin_trigger_prefix": "$",  # 瑙勮寖鎻掍欢鎻愪緵鑱婂ぉ鐩稿叧鎸囦护鐨勫墠缂€锛屽缓璁笉瑕佸拰绠＄悊鍛樻寚浠ゅ墠缂€"#"鍐茬獊
+    # 鏄惁浣跨敤鍏ㄥ眬鎻掍欢閰嶇疆
     "use_global_plugin_config": False,
-    "max_media_send_count": 3,  # 单次最大发送媒体资源的个数
-    "media_send_interval": 1,  # 发送图片的事件间隔，单位秒
-    # 智谱AI 平台配置
+    "max_media_send_count": 3,  # 鍗曟鏈€澶у彂閫佸獟浣撹祫婧愮殑涓暟
+    "media_send_interval": 1,  # 鍙戦€佸浘鐗囩殑浜嬩欢闂撮殧锛屽崟浣嶇
+    # 鏅鸿氨AI 骞冲彴閰嶇疆
     "zhipu_ai_api_key": "",
     "zhipu_ai_api_base": "https://open.bigmodel.cn/api/paas/v4",
     "moonshot_api_key": "",
     "moonshot_base_url": "https://api.moonshot.cn/v1",
-    # 豆包(火山方舟) 平台配置
+    # 璞嗗寘(鐏北鏂硅垷) 骞冲彴閰嶇疆
     "ark_api_key": "",
     "ark_base_url": "https://ark.cn-beijing.volces.com/api/v3",
-    # 魔搭社区 平台配置
+    # 榄旀惌绀惧尯 骞冲彴閰嶇疆
     "modelscope_api_key": "",
     "modelscope_base_url": "https://api-inference.modelscope.cn/v1/chat/completions",
-    # LinkAI平台配置
+    # LinkAI骞冲彴閰嶇疆
     "use_linkai": False,
     "linkai_api_key": "",
     "linkai_app_code": "",
@@ -225,14 +230,23 @@ available_setting = {
     "web_port": 9899,
     "web_password": "",  # Web console password; empty means no authentication required
     "web_session_expire_days": 30,  # Auth session expiry in days
-    "agent": True,  # 是否开启Agent模式
-    "agent_workspace": "~/textbook_workspace",  # agent工作空间路径，用于存储skills、memory等
+    "agent": True,  # 鏄惁寮€鍚疉gent妯″紡
+    "agent_workspace": "~/textbook_workspace",  # agent宸ヤ綔绌洪棿璺緞锛岀敤浜庡瓨鍌╯kills銆乵emory绛?
     "agent_max_context_tokens": 50000,  # Agent模式下最大上下文tokens
     "agent_max_context_turns": 20,  # Agent模式下最大上下文记忆轮次
-    "agent_max_steps": 20,  # Agent模式下单次运行最大决策步数
+    "agent_model_context_window": 0,  # 显式覆盖当前模型上下文窗口；0表示自动识别
+    "agent_context_reserve_tokens": 0,  # 显式覆盖输出/工具增长预留tokens；0表示自动计算
+    "agent_max_steps": 20,  # Agent妯″紡涓嬪崟娆¤繍琛屾渶澶у喅绛栨鏁?
     "enable_thinking": False,  # Enable deep-thinking mode for thinking-capable models
     "reasoning_effort": "high",  # Reasoning depth under thinking mode: "high" or "max"
-    "knowledge": True,  # 是否开启知识库功能
+    "knowledge": True,  # 鏄惁寮€鍚煡璇嗗簱鍔熻兘
+    "knowledge_organize_mode": "auto",  # Knowledge organize mode: auto, fast/local, or deep/llm/accurate
+    "knowledge_fast_chunk_threshold": 20,  # Use local metadata when a source has more chunks than this in auto mode
+    "knowledge_extract_assets": True,  # Extract useful images from PDF/DOCX into LLM-WIKI assets
+    "knowledge_skip_logo_watermark_assets": True,  # Skip likely logos/watermarks when extracting document images
+    "knowledge_min_asset_width": 120,  # Minimum extracted image width to keep
+    "knowledge_min_asset_height": 120,  # Minimum extracted image height to keep
+    "knowledge_min_asset_area": 20000,  # Minimum extracted image pixel area to keep
     "skill": {},  # Per-skill runtime config; nested keys flatten to SKILL_<NAME>_<KEY> env vars at startup
     "mcp_servers": [],  # MCP server list; each entry supports type "stdio" (local process) or "sse" (remote URL)
 }
@@ -245,7 +259,7 @@ class Config(dict):
             d = {}
         for k, v in d.items():
             self[k] = v
-        # user_datas: 用户数据，key为用户名，value为用户数据，也是dict
+        # user_datas: 鐢ㄦ埛鏁版嵁锛宬ey涓虹敤鎴峰悕锛寁alue涓虹敤鎴锋暟鎹紝涔熸槸dict
         self.user_datas = {}
 
     def __getitem__(self, key):
@@ -255,11 +269,11 @@ class Config(dict):
         return super().__setitem__(key, value)
 
     def get(self, key, default=None):
-        # 跳过以下划线开头的注释字段
+        # 璺宠繃浠ヤ笅鍒掔嚎寮€澶寸殑娉ㄩ噴瀛楁
         if key.startswith("_"):
             return super().get(key, default)
         
-        # 如果key不在available_setting中，直接走dict的get，返回config.json中实际加载的值（如不存在则返回default）
+        # 濡傛灉key涓嶅湪available_setting涓紝鐩存帴璧癲ict鐨刧et锛岃繑鍥瀋onfig.json涓疄闄呭姞杞界殑鍊硷紙濡備笉瀛樺湪鍒欒繑鍥瀌efault锛?
         if key not in available_setting:
             return super().get(key, default)
         
@@ -328,30 +342,30 @@ def drag_sensitive(config):
 def load_config():
     global config
 
-    # 打印 ASCII Logo
-    logger.info("  ____                _                    _   ")
-    logger.info(" / ___|_____      __ / \\   __ _  ___ _ __ | |_ ")
-    logger.info("| |   / _ \\ \\ /\\ / // _ \\ / _` |/ _ \\ '_ \\| __|")
-    logger.info("| |__| (_) \\ V  V // ___ \\ (_| |  __/ | | | |_ ")
-    logger.info(" \\____\\___/ \\_/\\_//_/   \\_\\__, |\\___|_| |_|\\__|")
-    logger.info("                          |___/                 ")
+    # Print ASCII logo
+    logger.info(" _____         _   _                 _      ___                    _   ")
+    logger.info("|_   _|____  _| |_| |__   ___   ___ | | __ / _ \\  __ _  ___ _ __ | |_ ")
+    logger.info("  | |/ _ \\ \\/ / __| '_ \\ / _ \\ / _ \\| |/ /| |_| |/ _` |/ _ \\ '_ \\| __|")
+    logger.info("  | |  __/>  <| |_| |_) | (_) | (_) |   < |  _  | (_| |  __/ | | | |_ ")
+    logger.info("  |_|\\___/_/\\_\\\\__|_.__/ \\___/ \\___/|_|\\_\\|_| |_|\\__, |\\___|_| |_|\\__|")
+    logger.info("                                                   |___/               ")
     logger.info("")
     config_path = "./config.json"
     if not os.path.exists(config_path):
-        logger.info("配置文件不存在，将使用config-template.json模板")
+        logger.info("閰嶇疆鏂囦欢涓嶅瓨鍦紝灏嗕娇鐢╟onfig-template.json妯℃澘")
         config_path = "./config-template.json"
 
     config_str = read_file(config_path)
     logger.debug("[INIT] config str: {}".format(drag_sensitive(config_str)))
 
-    # 将json字符串反序列化为dict类型
+    # 灏唈son瀛楃涓插弽搴忓垪鍖栦负dict绫诲瀷
     config = Config(json.loads(config_str))
 
     # override config with environment variables.
     # Some online deployment platforms (e.g. Railway) deploy project from github directly. So you shouldn't put your secrets like api key in a config file, instead use environment variables to override the default config.
     for name, value in os.environ.items():
         name = name.lower()
-        # 跳过以下划线开头的注释字段
+        # 璺宠繃浠ヤ笅鍒掔嚎寮€澶寸殑娉ㄩ噴瀛楁
         if name.startswith("_"):
             continue
         if name in available_setting:
@@ -364,19 +378,19 @@ def load_config():
 
     logger.info("[INIT] load config: {}".format(drag_sensitive(config)))
 
-    # 打印系统初始化信息
+    # 鎵撳嵃绯荤粺鍒濆鍖栦俊鎭?
     logger.info("[INIT] ========================================")
     logger.info("[INIT] System Initialization")
     logger.info("[INIT] ========================================")
     logger.info("[INIT] Channel: {}".format(config.get("channel_type", "unknown")))
     logger.info("[INIT] Model: {}".format(config.get("model", "unknown")))
 
-    # Agent模式信息
+    # Agent妯″紡淇℃伅
     if config.get("agent", False):
         workspace = config.get("agent_workspace", "~/textbook_workspace")
         logger.info("[INIT] Mode: Agent (workspace: {})".format(workspace))
     else:
-        logger.info("[INIT] Mode: Chat (在config.json中设置 \"agent\":true 可启用Agent模式)")
+        logger.info("[INIT] Mode: Chat (鍦╟onfig.json涓缃?\"agent\":true 鍙惎鐢ˋgent妯″紡)")
 
     logger.info("[INIT] Debug: {}".format(config.get("debug", False)))
     logger.info("[INIT] ========================================")
@@ -519,8 +533,8 @@ plugin_config = {}
 
 def write_plugin_config(pconf: dict):
     """
-    写入插件全局配置
-    :param pconf: 全量插件配置
+    鍐欏叆鎻掍欢鍏ㄥ眬閰嶇疆
+    :param pconf: 鍏ㄩ噺鎻掍欢閰嶇疆
     """
     global plugin_config
     for k in pconf:
@@ -528,8 +542,8 @@ def write_plugin_config(pconf: dict):
 
 def remove_plugin_config(name: str):
     """
-    移除待重新加载的插件全局配置
-    :param name: 待重载的插件名
+    绉婚櫎寰呴噸鏂板姞杞界殑鎻掍欢鍏ㄥ眬閰嶇疆
+    :param name: 寰呴噸杞界殑鎻掍欢鍚?
     """
     global plugin_config
     plugin_config.pop(name.lower(), None)
@@ -537,12 +551,12 @@ def remove_plugin_config(name: str):
 
 def pconf(plugin_name: str) -> dict:
     """
-    根据插件名称获取配置
-    :param plugin_name: 插件名称
-    :return: 该插件的配置项
+    鏍规嵁鎻掍欢鍚嶇О鑾峰彇閰嶇疆
+    :param plugin_name: 鎻掍欢鍚嶇О
+    :return: 璇ユ彃浠剁殑閰嶇疆椤?
     """
     return plugin_config.get(plugin_name.lower())
 
 
-# 全局配置，用于存放全局生效的状态
+# 鍏ㄥ眬閰嶇疆锛岀敤浜庡瓨鏀惧叏灞€鐢熸晥鐨勭姸鎬?
 global_config = {"admin_users": []}

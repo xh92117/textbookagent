@@ -101,12 +101,12 @@ def test_persistence_snapshot():
         persistence.save_chapter(2, "第二章内容")
 
         snapshot_dir = persistence.create_snapshot('v1')
-        assert os.path.exists(os.path.join(snapshot_dir, 'chapters', 'chapter_01.md'))
-        assert os.path.exists(os.path.join(snapshot_dir, 'chapters', 'chapter_02.md'))
+        assert os.path.exists(os.path.join(snapshot_dir, 'chapters', 'chapter_001.md'))
+        assert os.path.exists(os.path.join(snapshot_dir, 'chapters', 'chapter_002.md'))
 
-        with open(os.path.join(snapshot_dir, 'chapters', 'chapter_01.md'), 'r', encoding='utf-8') as f:
+        with open(os.path.join(snapshot_dir, 'chapters', 'chapter_001.md'), 'r', encoding='utf-8') as f:
             assert f.read() == "第一章内容"
-        with open(os.path.join(snapshot_dir, 'chapters', 'chapter_02.md'), 'r', encoding='utf-8') as f:
+        with open(os.path.join(snapshot_dir, 'chapters', 'chapter_002.md'), 'r', encoding='utf-8') as f:
             assert f.read() == "第二章内容"
 
 

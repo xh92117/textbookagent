@@ -5,6 +5,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import threading
 import time
 import uuid
@@ -194,6 +195,14 @@ def _raw_web_input():
         return rawinput(method="post")
     except TypeError:
         return rawinput()
+
+
+def _upload_web_input():
+    """Return multipart upload params while preserving file objects."""
+    try:
+        return _raw_web_input()
+    except Exception:
+        return web.input(file={})
 
 
 def _ensure_list(value):
@@ -468,7 +477,7 @@ class WebChannel(ChatChannel):
     def upload_file(self):
         """Handle file or directory upload via multipart/form-data."""
         try:
-            params = _raw_web_input()
+            params = _upload_web_input()
             file_obj = params.get("file")
             file_objs = params.get("files")
             session_id = params.get("session_id", "")
@@ -540,7 +549,9 @@ class WebChannel(ChatChannel):
             if file_obj is None or not hasattr(file_obj, "filename") or not file_obj.filename:
                 return json.dumps({"status": "error", "message": "No file uploaded"})
 
-            original_name = file_obj.filename
+            original_name = os.path.basename(str(file_obj.filename).replace("\\", "/"))
+            if not original_name:
+                return json.dumps({"status": "error", "message": "No file uploaded"})
             ext = os.path.splitext(original_name)[1].lower()
             safe_name = f"web_{uuid.uuid4().hex[:8]}{ext}"
             save_path = os.path.join(upload_dir, safe_name)
@@ -646,9 +657,22 @@ class WebChannel(ChatChannel):
                     book = bridge.get_textbook(book_id)
                     if book:
                         outline = bridge.get_outline(book_id)
+                        from common.app_paths import active_workspace
+                        workspace_root = active_workspace()
+                        book_dir = bridge.get_book_dir(book_id)
+                        chapter_dir = os.path.join(book_dir, "chapters")
+                        image_dir = os.path.join(book_dir, "assets", "images")
+                        chart_dir = os.path.join(book_dir, "assets", "charts")
                         prompt = (
                             f"[Current textbook id: {book_id}]\n"
                             f"[Current textbook: {book.title} / {book.subject} / {book.level}]\n"
+                            f"[Textbook workspace root: {workspace_root}]\n"
+                            f"[Current textbook directory: {book_dir}]\n"
+                            f"[Canonical chapter directory: {chapter_dir}]\n"
+                            f"[Canonical image directory: {image_dir}]\n"
+                            f"[Canonical chart directory: {chart_dir}]\n"
+                            f"[Path rule: When writing this textbook, write chapter files ONLY under the canonical chapter directory. Do not create chapters/ directly under the workspace root. Use chapter_001.md style filenames unless an existing chapter file uses another compatible name.]\n"
+                            f"[Visual rule: If the chapter text promises a figure, illustration, diagram, chart, or table visualization, create the corresponding asset with the image model or sandbox/chart tool and reference it from the chapter Markdown.]\n"
                             f"[Outline]\n{outline[:4000] if outline else 'No outline yet'}\n\n"
                             f"{prompt}"
                         )
@@ -1040,13 +1064,38 @@ class ChatHandler:
 
 
 class TextbookPageHandler:
+    @staticmethod
+    def _expand_includes(html: str, base_dir: str) -> str:
+        """Expand simple same-directory HTML partial includes for textbook page."""
+        include_pattern = re.compile(r"<!--#include\s+([A-Za-z0-9_./-]+)\s+-->")
+
+        def _replace(match):
+            rel_path = match.group(1)
+            full_path = os.path.realpath(os.path.join(base_dir, rel_path))
+            root = os.path.realpath(base_dir)
+            if os.path.commonpath([root, full_path]) != root:
+                return ""
+            if not os.path.isfile(full_path):
+                logger.warning(f"[WebChannel] Missing textbook partial: {rel_path}")
+                return ""
+            try:
+                with open(full_path, 'r', encoding='utf-8') as f:
+                    return f.read()
+            except Exception as e:
+                logger.warning(f"[WebChannel] Failed to read textbook partial {rel_path}: {e}")
+                return ""
+
+        return include_pattern.sub(_replace, html)
+
     def GET(self):
         web.header('Content-Type', 'text/html; charset=utf-8')
         web.header('Cache-Control', 'no-cache, no-store, must-revalidate')
         web.header('Pragma', 'no-cache')
-        file_path = os.path.join(os.path.dirname(__file__), 'textbook.html')
+        base_dir = os.path.dirname(__file__)
+        file_path = os.path.join(base_dir, 'textbook.html')
         with open(file_path, 'r', encoding='utf-8') as f:
             html = f.read()
+        html = self._expand_includes(html, base_dir)
         cache_bust = str(int(time.time()))
         html = html.replace('assets/js/textbook.js', f'assets/js/textbook.js?v={cache_bust}')
         html = html.replace('assets/css/textbook.css', f'assets/css/textbook.css?v={cache_bust}')
@@ -1195,9 +1244,13 @@ class ConfigHandler:
         "open_ai_api_key", "deepseek_api_key", "qianfan_api_key", "claude_api_key", "gemini_api_key",
         "zhipu_ai_api_key", "dashscope_api_key", "moonshot_api_key",
         "ark_api_key", "minimax_api_key", "linkai_api_key", "custom_api_key",
-        "agent_max_context_tokens", "agent_max_context_turns", "agent_max_steps",
+        "agent_max_context_tokens", "agent_max_context_turns", "agent_model_context_window",
+        "agent_context_reserve_tokens", "agent_max_steps", "request_timeout",
+        "knowledge_organize_mode", "knowledge_fast_chunk_threshold", "knowledge_extract_assets",
+        "knowledge_skip_logo_watermark_assets", "knowledge_min_asset_width",
+        "knowledge_min_asset_height", "knowledge_min_asset_area",
         "enable_thinking", "web_password",
-        "active_workspace", "system_workspace", "workspace_split_enabled",
+        "active_workspace", "system_workspace", "workspace_split_enabled", "textbooks_storage_dir",
     }
 
     @staticmethod
@@ -1283,7 +1336,7 @@ class ConfigHandler:
         try:
             local_config = conf()
             use_agent = local_config.get("agent", False)
-            title = "CowAgent" if use_agent else "AI Assistant"
+            title = "TextbookAgent" if use_agent else "AI Assistant"
 
             api_bases = {}
             api_keys_masked = {}
@@ -1336,6 +1389,8 @@ class ConfigHandler:
                 "channel_type": local_config.get("channel_type", ""),
                 "agent_max_context_tokens": local_config.get("agent_max_context_tokens", 50000),
                 "agent_max_context_turns": local_config.get("agent_max_context_turns", 20),
+                "agent_model_context_window": local_config.get("agent_model_context_window", 0),
+                "agent_context_reserve_tokens": local_config.get("agent_context_reserve_tokens", 0),
                 "agent_max_steps": local_config.get("agent_max_steps", 20),
                 "enable_thinking": bool(local_config.get("enable_thinking", False)),
                 "api_bases": api_bases,
@@ -1350,9 +1405,10 @@ class ConfigHandler:
 
     @staticmethod
     def _workspace_payload():
-        from common.app_paths import active_workspace, system_dir, system_root
+        from common.app_paths import active_workspace, system_dir, system_root, textbooks_dir
         return {
             "active_workspace": active_workspace(),
+            "textbooks_storage_dir": textbooks_dir(),
             "system_root": system_root(),
             "system_dir": system_dir(),
             "workspace_split_enabled": bool(conf().get("workspace_split_enabled", True)),
@@ -1373,7 +1429,11 @@ class ConfigHandler:
             for key, value in updates.items():
                 if key not in self.EDITABLE_KEYS:
                     continue
-                if key in ("agent_max_context_tokens", "agent_max_context_turns", "agent_max_steps"):
+                if key in (
+                    "agent_max_context_tokens", "agent_max_context_turns",
+                    "agent_model_context_window", "agent_context_reserve_tokens",
+                    "agent_max_steps",
+                ):
                     value = int(value)
                 if key in ("use_linkai", "enable_thinking", "workspace_split_enabled"):
                     value = bool(value)
@@ -1492,7 +1552,7 @@ class ConfigHandler:
                 except Exception as reset_err:
                     logger.warning(f"[WebChannel] Failed to reset bridge: {reset_err}")
 
-            workspace_keys = {"active_workspace", "workspace_dir", "system_workspace", "workspace_split_enabled"}
+            workspace_keys = {"active_workspace", "workspace_dir", "system_workspace", "workspace_split_enabled", "textbooks_storage_dir"}
             if any(k in applied for k in workspace_keys):
                 from common.app_paths import ensure_active_workspace, ensure_system_dir
                 ensure_active_workspace()
@@ -2080,7 +2140,7 @@ class FeishuRegisterHandler:
                 result = lark.register_app(
                     on_qr_code=_on_qr,
                     on_status_change=_on_status,
-                    source="cowagent",
+                    source="textbookagent",
                     cancel_event=cancel_event,
                 )
                 with cls._lock:
@@ -3180,8 +3240,9 @@ class TextbookChaptersHandler:
             chapters = []
             for idx, fname in enumerate(chapter_files):
                 try:
-                    num = int(str(fname).replace("chapter_", "").replace(".md", ""))
-                except ValueError:
+                    match = re.match(r"^chapter_0*(\d+)\.md$", str(fname), re.IGNORECASE)
+                    num = int(match.group(1)) if match else idx + 1
+                except (AttributeError, ValueError):
                     num = idx + 1
                 content = bridge.get_chapter(book_id, num)
                 title = f"第{num}章"

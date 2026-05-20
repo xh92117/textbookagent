@@ -30,6 +30,34 @@ def _make_config(**kwargs):
     return TextbookConfig(**defaults)
 
 
+def test_determine_resume_point_requires_current_outline_review():
+    with tempfile.TemporaryDirectory() as tmp:
+        bridge = _make_bridge(tmp)
+        created = bridge.create_textbook(_make_config(total_chapters=3))
+        mgr = bridge._memory_manager.get_truth_manager(created.id)
+        outline = "# Outline\n\n## Chapter 1\n"
+        mgr.write('outline', outline)
+
+        assert bridge._determine_resume_point(created.id, created) == "review_outline"
+
+        mgr.mark_outline_reviewed(outline, {'score': 90, 'issues': []})
+        assert bridge._determine_resume_point(created.id, created) == "compose"
+
+        mgr.write('outline', outline + "\n## Chapter 2\n")
+        assert bridge._determine_resume_point(created.id, created) == "review_outline"
+
+
+def test_determine_resume_point_does_not_return_to_outline_after_chapters():
+    with tempfile.TemporaryDirectory() as tmp:
+        bridge = _make_bridge(tmp)
+        created = bridge.create_textbook(_make_config(total_chapters=3))
+        mgr = bridge._memory_manager.get_truth_manager(created.id)
+        mgr.write('outline', "# Outline\n\n## Chapter 1\n")
+        mgr.write_chapter(1, "chapter content long enough to be counted as completed " * 2)
+
+        assert bridge._determine_resume_point(created.id, created) == "compose"
+
+
 def test_create_textbook():
     with tempfile.TemporaryDirectory() as tmp:
         bridge = _make_bridge(tmp)
@@ -183,9 +211,9 @@ def test_list_chapters():
         bridge.update_chapter(created.id, 3, "第三章内容")
         chapters = bridge.list_chapters(created.id)
         assert len(chapters) == 3
-        assert "chapter_01.md" in chapters
-        assert "chapter_02.md" in chapters
-        assert "chapter_03.md" in chapters
+        assert "chapter_001.md" in chapters
+        assert "chapter_002.md" in chapters
+        assert "chapter_003.md" in chapters
 
 
 def test_pipeline_start():

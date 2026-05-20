@@ -1,5 +1,7 @@
 import os
 import json
+import hashlib
+import re
 from typing import Dict, Optional
 from datetime import datetime
 
@@ -15,6 +17,7 @@ class TruthFileManager:
         'cross_references': 'state/cross_references.md',
         'progress': 'state/progress.md',
         'status': 'state/status.json',
+        'outline_review_state': 'state/outline_review.json',
         'research_evidence': 'state/research_evidence.md',
     }
 
@@ -40,32 +43,208 @@ class TruthFileManager:
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
 
+    @staticmethod
+    def content_hash(content: str) -> str:
+        return hashlib.sha256((content or "").encode('utf-8')).hexdigest()
+
+    def get_outline_review_state(self) -> Dict:
+        raw = self.read('outline_review_state')
+        if not raw.strip():
+            return {}
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+
+    def mark_outline_reviewed(self, outline_text: str, review_result: Optional[Dict] = None) -> Dict:
+        review_result = review_result or {}
+        issues = review_result.get('issues') or []
+        payload = {
+            'version': 'outline-review-state-v1',
+            'status': 'reviewed',
+            'outline_hash': self.content_hash(outline_text),
+            'outline_chars': len(outline_text or ''),
+            'score': review_result.get('score', 0),
+            'issues_count': len(issues) if isinstance(issues, list) else 0,
+            'reviewed_at': datetime.now().isoformat(),
+        }
+        self.write('outline_review_state', json.dumps(payload, ensure_ascii=False, indent=2))
+        return payload
+
+    def is_outline_review_current(self, outline_text: str = "") -> bool:
+        if not outline_text:
+            outline_text = self.read('outline')
+        if not outline_text.strip():
+            return False
+        state = self.get_outline_review_state()
+        return (
+            state.get('status') == 'reviewed'
+            and state.get('outline_hash') == self.content_hash(outline_text)
+        )
+
+    def invalidate_outline_review(self, reason: str = "outline_updated") -> Dict:
+        outline_text = self.read('outline')
+        payload = {
+            'version': 'outline-review-state-v1',
+            'status': 'stale',
+            'outline_hash': self.content_hash(outline_text),
+            'outline_chars': len(outline_text or ''),
+            'reason': reason,
+            'updated_at': datetime.now().isoformat(),
+        }
+        self.write('outline_review_state', json.dumps(payload, ensure_ascii=False, indent=2))
+        return payload
+
+    def infer_outline_review_from_reports(self) -> bool:
+        outline_path = os.path.join(self.book_dir, self.TRUTH_FILES['outline'])
+        outline_text = self.read('outline')
+        if not outline_text.strip() or not os.path.exists(outline_path):
+            return False
+        outline_mtime = os.path.getmtime(outline_path)
+        report_dirs = [
+            os.path.join(self.book_dir, 'outline'),
+            os.path.join(self.book_dir, 'state'),
+        ]
+        latest_report = ""
+        latest_mtime = 0.0
+        for report_dir in report_dirs:
+            if not os.path.isdir(report_dir):
+                continue
+            for filename in os.listdir(report_dir):
+                lower = filename.lower()
+                if 'review' not in lower or not lower.endswith(('.md', '.json')):
+                    continue
+                path = os.path.join(report_dir, filename)
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    continue
+                if mtime >= outline_mtime and mtime > latest_mtime:
+                    latest_report = os.path.relpath(path, self.book_dir).replace('\\', '/')
+                    latest_mtime = mtime
+        if not latest_report:
+            return False
+        payload = {
+            'version': 'outline-review-state-v1',
+            'status': 'reviewed',
+            'outline_hash': self.content_hash(outline_text),
+            'outline_chars': len(outline_text),
+            'source': 'inferred_from_review_report',
+            'review_report': latest_report,
+            'reviewed_at': datetime.fromtimestamp(latest_mtime).isoformat(),
+        }
+        self.write('outline_review_state', json.dumps(payload, ensure_ascii=False, indent=2))
+        return True
+
     def read_chapter(self, chapter_num: int) -> str:
-        filepath = os.path.join(self.book_dir, 'chapters', f'chapter_{chapter_num:02d}.md')
-        if os.path.exists(filepath):
-            with open(filepath, 'r', encoding='utf-8') as f:
-                return f.read()
+        for filepath in self._chapter_path_candidates(chapter_num):
+            if os.path.exists(filepath):
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    return f.read()
         return ""
 
+    def _chapter_path_candidates(self, chapter_num: int) -> list:
+        chapters_dir = os.path.join(self.book_dir, 'chapters')
+        candidates = []
+        if os.path.isdir(chapters_dir):
+            pattern = re.compile(r'^chapter_0*(\d+)\.md$', re.IGNORECASE)
+            for filename in sorted(os.listdir(chapters_dir)):
+                match = pattern.match(filename)
+                if match and int(match.group(1)) == int(chapter_num):
+                    candidates.append(os.path.join(chapters_dir, filename))
+        candidates.extend([
+            os.path.join(chapters_dir, f'chapter_{chapter_num:03d}.md'),
+            os.path.join(chapters_dir, f'chapter_{chapter_num:02d}.md'),
+        ])
+        return list(dict.fromkeys(candidates))
+
+    def _chapter_path(self, chapter_num: int) -> str:
+        for filepath in self._chapter_path_candidates(chapter_num):
+            if os.path.exists(filepath):
+                return filepath
+        return self._chapter_path_candidates(chapter_num)[0]
+
+    def _chapter_meta_path_candidates(self, chapter_num: int) -> list:
+        chapters_dir = os.path.join(self.book_dir, 'chapters')
+        candidates = []
+        if os.path.isdir(chapters_dir):
+            pattern = re.compile(r'^chapter_0*(\d+)_meta\.json$', re.IGNORECASE)
+            for filename in sorted(os.listdir(chapters_dir)):
+                match = pattern.match(filename)
+                if match and int(match.group(1)) == int(chapter_num):
+                    candidates.append(os.path.join(chapters_dir, filename))
+        candidates.extend([
+            os.path.join(chapters_dir, f'chapter_{chapter_num:03d}_meta.json'),
+            os.path.join(chapters_dir, f'chapter_{chapter_num:02d}_meta.json'),
+        ])
+        return list(dict.fromkeys(candidates))
+
+    def _chapter_meta_path(self, chapter_num: int) -> str:
+        for filepath in self._chapter_meta_path_candidates(chapter_num):
+            if os.path.exists(filepath):
+                return filepath
+        return self._chapter_meta_path_candidates(chapter_num)[0]
+
     def write_chapter(self, chapter_num: int, content: str):
-        filepath = os.path.join(self.book_dir, 'chapters', f'chapter_{chapter_num:02d}.md')
+        filepath = self._chapter_path(chapter_num)
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
+
+    def chapter_metadata_path(self, chapter_num: int) -> str:
+        return self._chapter_meta_path(chapter_num)
+
+    def get_chapter_metadata(self, chapter_num: int) -> Dict:
+        path = self.chapter_metadata_path(chapter_num)
+        if not os.path.exists(path):
+            return {}
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def is_chapter_complete(self, chapter_num: int, min_chars: int = 50) -> bool:
+        content = self.read_chapter(chapter_num)
+        if len((content or "").strip()) < min_chars:
+            return False
+        meta = self.get_chapter_metadata(chapter_num)
+        if not meta:
+            # Legacy chapters did not always write metadata. Treat a substantial
+            # chapter body as complete for backward compatibility.
+            return True
+        if meta.get('status') and meta.get('status') != 'completed':
+            return False
+        content_hash = meta.get('content_hash')
+        if content_hash and content_hash != self.content_hash(content):
+            return False
+        return True
 
     def list_chapters(self) -> list:
         chapters_dir = os.path.join(self.book_dir, 'chapters')
         if not os.path.exists(chapters_dir):
             return []
-        files = sorted(os.listdir(chapters_dir))
-        return [f for f in files if f.startswith('chapter_') and f.endswith('.md')]
+        by_num = {}
+        pattern = re.compile(r'^chapter_0*(\d+)\.md$', re.IGNORECASE)
+        for filename in sorted(os.listdir(chapters_dir)):
+            match = pattern.match(filename)
+            if not match:
+                continue
+            num = int(match.group(1))
+            by_num.setdefault(num, filename)
+        return [by_num[num] for num in sorted(by_num)]
 
-    def list_completed_chapter_numbers(self) -> list:
+    def list_completed_chapter_numbers(self, min_chars: int = 1) -> list:
         chapter_numbers = []
         for filename in self.list_chapters():
             try:
-                chapter_numbers.append(int(filename.replace('chapter_', '').replace('.md', '')))
-            except ValueError:
+                chapter_num = int(re.match(r'^chapter_0*(\d+)\.md$', filename, re.IGNORECASE).group(1))
+            except (AttributeError, ValueError):
                 continue
+            if self.is_chapter_complete(chapter_num, min_chars=min_chars):
+                chapter_numbers.append(chapter_num)
         return sorted(chapter_numbers)
 
     def save_snapshot(self, snapshot_name: str = ""):

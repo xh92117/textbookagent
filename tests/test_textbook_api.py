@@ -179,9 +179,9 @@ def test_api_list_chapters():
         bridge.update_chapter(created.id, 3, "第三章")
         chapters = bridge.list_chapters(created.id)
         assert len(chapters) == 3
-        assert "chapter_01.md" in chapters
-        assert "chapter_02.md" in chapters
-        assert "chapter_03.md" in chapters
+        assert "chapter_001.md" in chapters
+        assert "chapter_002.md" in chapters
+        assert "chapter_003.md" in chapters
 
 
 def test_api_list_chapters_empty():

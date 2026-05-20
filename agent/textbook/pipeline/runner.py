@@ -237,18 +237,14 @@ class PipelineRunner:
         if self.memory_manager:
             mgr = self.memory_manager.get_truth_manager(book_id)
             existing_outline = mgr.read('outline')
-            existing_chapters = mgr.list_chapters()
-            if existing_chapters:
-                completed_chapters = []
-                for ch_file in existing_chapters:
-                    try:
-                        num = int(ch_file.replace('chapter_', '').replace('.md', ''))
-                        completed_chapters.append(num)
-                    except ValueError:
-                        pass
-                completed_chapters.sort()
+            completed_chapters = mgr.list_completed_chapter_numbers(min_chars=50)
+            if completed_chapters and phase_index < 2:
+                phase_index = 2
 
-        if phase_index <= 0:
+        if phase_index <= 0 and existing_outline.strip():
+            outline_text = existing_outline
+            self._emit('phase_complete', {'phase': 'outline', 'result_summary': 'outline exists; skipped regeneration'})
+        elif phase_index <= 0:
             self._emit('phase_start', {'phase': 'outline', 'phase_label': self.PHASE_LABELS['outline'], 'agent': 'OutlinerAgent'})
             outline_result = await self.outliner.run({
                 'title': book_config.title,
@@ -272,6 +268,7 @@ class PipelineRunner:
             if self.memory_manager:
                 mgr = self.memory_manager.get_truth_manager(book_id)
                 mgr.write('outline', outline_result.get('outline_text', ''))
+                mgr.invalidate_outline_review("outline_regenerated")
                 self.memory_manager.update_terminology(book_id, outline_result.get('terminology', {}))
             outline_text = outline_result.get('outline_text', '')
         else:
@@ -280,7 +277,19 @@ class PipelineRunner:
                 outline_text = mgr.read('outline')
             self._emit('phase_complete', {'phase': 'outline', 'result_summary': '大纲已存在，跳过生成'})
 
-        if phase_index <= 1:
+        outline_review_current = False
+        if self.memory_manager:
+            try:
+                mgr = self.memory_manager.get_truth_manager(book_id)
+                outline_review_current = mgr.is_outline_review_current(outline_text)
+                if not outline_review_current:
+                    outline_review_current = mgr.infer_outline_review_from_reports()
+            except Exception:
+                outline_review_current = False
+
+        if phase_index <= 1 and outline_review_current:
+            self._emit('phase_complete', {'phase': 'review_outline', 'result_summary': 'outline review is current; skipped re-review'})
+        elif phase_index <= 1:
             self._emit('phase_start', {'phase': 'review_outline', 'phase_label': self.PHASE_LABELS['review_outline'], 'agent': 'ReviewerAgent'})
             self.reviewer.set_review_mode('outline')
             review_result = await self.reviewer.run({
@@ -291,6 +300,9 @@ class PipelineRunner:
             })
             review_result = self._ensure_agent_result(review_result, "ReviewerAgent", "review_outline")
             results['review_outline'] = review_result
+            if self.memory_manager:
+                mgr = self.memory_manager.get_truth_manager(book_id)
+                mgr.mark_outline_reviewed(outline_text, review_result)
             self._emit('phase_complete', {'phase': 'review_outline', 'score': review_result.get('score', 0)})
 
             if await self._check_pause_cancel('review_outline', results):
@@ -584,6 +596,7 @@ class PipelineRunner:
                     persistence.save_chapter(i, final_content, metadata={
                         'word_count': len(final_content),
                         'review_score': chapter_review.get('score', 0),
+                        'outline_hash': TruthFileManager.content_hash(outline_text),
                     })
                 mgr.append_chapter_summary(i, f'第{i}章', final_content[:200])
                 mgr.update_progress(i, total_chapters)

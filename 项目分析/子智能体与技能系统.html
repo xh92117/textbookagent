@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TextBookAgent 子智能体与技能系统</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700;900&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0f172a;--surface:#1e293b;--surface2:#334155;--border:#475569;
+  --text:#f1f5f9;--text2:#94a3b8;--text3:#64748b;
+  --blue:#3b82f6;--blue-bg:rgba(59,130,246,.12);
+  --cyan:#06b6d4;--cyan-bg:rgba(6,182,212,.12);
+  --green:#10b981;--green-bg:rgba(16,185,129,.12);
+  --purple:#8b5cf6;--purple-bg:rgba(139,92,246,.12);
+  --orange:#f59e0b;--orange-bg:rgba(245,158,11,.12);
+  --pink:#ec4899;--pink-bg:rgba(236,72,153,.12);
+  --red:#ef4444;--red-bg:rgba(239,68,68,.12);
+  --teal:#14b8a6;--teal-bg:rgba(20,184,166,.12);
+  --amber:#f59e0b;--amber-bg:rgba(245,158,11,.12);
+  --radius:16px;--radius-sm:10px;
+}
+html{scroll-behavior:smooth;font-size:18px}
+body{font-family:'Noto Sans SC',-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);line-height:1.7;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:var(--cyan);text-decoration:none}
+.topnav{position:sticky;top:0;z-index:100;background:rgba(15,23,42,.85);backdrop-filter:blur(16px);border-bottom:1px solid var(--surface2);padding:0 32px;display:flex;align-items:center;gap:28px;height:56px}
+.topnav .brand{font-weight:700;font-size:1rem;color:var(--amber);white-space:nowrap}
+.topnav .links{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
+.topnav .links::-webkit-scrollbar{display:none}
+.topnav .links a{font-size:.82rem;padding:6px 14px;border-radius:8px;color:var(--text2);white-space:nowrap;transition:.2s}
+.topnav .links a:hover,.topnav .links a.active{background:var(--amber-bg);color:var(--amber)}
+.hero{position:relative;padding:80px 32px 64px;text-align:center;overflow:hidden}
+.hero::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 80% 60% at 50% 0%,rgba(245,158,11,.18),transparent 70%),radial-gradient(ellipse 60% 40% at 20% 30%,rgba(139,92,246,.12),transparent 60%)}
+.hero h1{font-size:2.8rem;font-weight:900;position:relative;letter-spacing:-.02em;background:linear-gradient(135deg,#fbbf24,#f59e0b,#ec4899);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.hero p{font-size:1.15rem;color:var(--text2);max-width:720px;margin:16px auto 0;position:relative}
+.hero .chips{display:flex;gap:10px;justify-content:center;margin-top:28px;position:relative;flex-wrap:wrap}
+.hero .chip{padding:7px 18px;border-radius:20px;font-size:.82rem;font-weight:600;border:1px solid var(--surface2);color:var(--text2);background:var(--surface);display:flex;align-items:center;gap:6px}
+.hero .chip .dot{width:7px;height:7px;border-radius:50%;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.wrap{max-width:1280px;margin:0 auto;padding:0 32px}
+.section{padding:56px 0}
+.section-title{font-size:1.65rem;font-weight:800;margin-bottom:8px;display:flex;align-items:center;gap:12px}
+.section-title .ico{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0}
+.section-desc{color:var(--text2);font-size:1rem;margin-bottom:32px;max-width:800px}
+.bento{display:grid;gap:16px}
+.bento-2{grid-template-columns:1fr 1fr}
+.bento-3{grid-template-columns:1fr 1fr 1fr}
+.bento-span2{grid-column:span 2}
+@media(max-width:900px){.bento-2,.bento-3{grid-template-columns:1fr}.bento-span2{grid-column:span 1}.hero h1{font-size:2rem}html{font-size:16px}}
+.card{background:var(--surface);border:1px solid var(--surface2);border-radius:var(--radius);padding:28px;transition:.25s}
+.card:hover{border-color:var(--amber);box-shadow:0 0 24px rgba(245,158,11,.08)}
+.card h3{font-size:1.15rem;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.card p,.card li{font-size:.92rem;color:var(--text2);line-height:1.65}
+.card ul{list-style:none}
+.card ul li{padding:5px 0;display:flex;align-items:flex-start;gap:8px}
+.card ul li::before{content:'→';color:var(--amber);font-weight:700;flex-shrink:0;margin-top:1px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:40px}
+@media(max-width:900px){.stats{grid-template-columns:repeat(2,1fr)}}
+.stat{background:var(--surface);border:1px solid var(--surface2);border-radius:var(--radius);padding:24px;text-align:center}
+.stat .val{font-size:2.4rem;font-weight:900;background:linear-gradient(135deg,var(--amber),var(--pink));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.stat .lab{font-size:.85rem;color:var(--text3);margin-top:4px}
+.diagram-box{background:var(--surface);border:1px solid var(--surface2);border-radius:var(--radius);padding:32px;overflow:hidden}
+.diagram-box svg{width:100%;height:auto;display:block}
+.code{background:#0c1222;border:1px solid var(--surface2);border-radius:var(--radius-sm);padding:20px 24px;font-family:'JetBrains Mono','Fira Code',Consolas,monospace;font-size:.82rem;line-height:1.85;color:#e2e8f0;overflow-x:auto;white-space:pre}
+.code .cm{color:#64748b}.code .kw{color:#c084fc}.code .str{color:#34d399}.code .ty{color:#38bdf8}.code .fn{color:#fbbf24}
+.tbl{width:100%;border-collapse:collapse;font-size:.9rem}
+.tbl th{background:var(--surface2);color:var(--text);padding:12px 16px;text-align:left;font-weight:600}
+.tbl th:first-child{border-radius:8px 0 0 0}.tbl th:last-child{border-radius:0 8px 0 0}
+.tbl td{padding:10px 16px;border-bottom:1px solid var(--surface2);color:var(--text2)}
+.tbl tr:hover td{background:rgba(245,158,11,.04)}
+.tag{display:inline-block;padding:2px 10px;border-radius:8px;font-size:.75rem;font-weight:600}
+.tag-blue{background:var(--blue-bg);color:var(--blue)}.tag-cyan{background:var(--cyan-bg);color:var(--cyan)}.tag-green{background:var(--green-bg);color:var(--green)}.tag-purple{background:var(--purple-bg);color:var(--purple)}.tag-orange{background:var(--orange-bg);color:var(--orange)}.tag-pink{background:var(--pink-bg);color:var(--pink)}.tag-red{background:var(--red-bg);color:var(--red)}.tag-teal{background:var(--teal-bg);color:var(--teal)}.tag-amber{background:var(--amber-bg);color:var(--amber)}
+.feat{display:flex;gap:14px;padding:14px 0;border-bottom:1px solid var(--surface2)}
+.feat:last-child{border-bottom:none}
+.feat .fi{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:.95rem;font-weight:700;flex-shrink:0}
+.feat .ft h4{font-size:.95rem;font-weight:600;margin-bottom:2px}
+.feat .ft p{font-size:.85rem;color:var(--text2);line-height:1.5}
+@keyframes flowDash{to{stroke-dashoffset:-20}}
+@keyframes nodeAppear{from{opacity:0;transform:scale(.7)}to{opacity:1;transform:scale(1)}}
+@keyframes pipelinePulse{0%,100%{filter:drop-shadow(0 0 4px rgba(245,158,11,.3))}50%{filter:drop-shadow(0 0 12px rgba(245,158,11,.6))}}
+.anim-node{animation:nodeAppear .5s ease-out both}
+.anim-flow{stroke-dasharray:8 6;animation:flowDash .8s linear infinite}
+.agent-card{background:var(--surface);border:1px solid var(--surface2);border-radius:var(--radius);padding:24px;transition:.25s;position:relative;overflow:hidden}
+.agent-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.2)}
+.agent-card .agent-icon{width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:1.3rem;font-weight:800;margin-bottom:12px}
+.agent-card h3{font-size:1.1rem;font-weight:700;margin-bottom:4px}
+.agent-card .agent-type{font-family:'JetBrains Mono',Consolas,monospace;font-size:.78rem;color:var(--text3);margin-bottom:10px}
+.agent-card p{font-size:.85rem;color:var(--text2);line-height:1.6}
+.agent-card .agent-tags{margin-top:12px;display:flex;gap:6px;flex-wrap:wrap}
+.skill-card{background:var(--surface);border:1px solid var(--surface2);border-radius:var(--radius);padding:24px;transition:.25s;position:relative;overflow:hidden}
+.skill-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.2)}
+.skill-card .skill-icon{width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:1.3rem;margin-bottom:12px}
+.skill-card h3{font-size:1.1rem;font-weight:700;margin-bottom:4px}
+.skill-card .skill-name{font-family:'JetBrains Mono',Consolas,monospace;font-size:.78rem;color:var(--text3);margin-bottom:10px}
+.skill-card p{font-size:.85rem;color:var(--text2);line-height:1.6}
+.skill-card .triggers{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap}
+.skill-card .triggers span{font-size:.75rem;padding:2px 10px;border-radius:8px;font-weight:600}
+.footer{border-top:1px solid var(--surface2);padding:40px 32px;text-align:center;color:var(--text3);font-size:.85rem}
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="brand">TextBookAgent · 子智能体与技能</div>
+  <div class="links">
+    <a href="#overview">概览</a>
+    <a href="#agents">子智能体</a>
+    <a href="#skills">技能</a>
+    <a href="#pipeline">管线</a>
+    <a href="#orchestrator">编排</a>
+    <a href="#checkpoint">检查点</a>
+    <a href="#source">源码</a>
+  </div>
+</nav>
+
+<div class="hero">
+  <h1>子智能体与技能系统</h1>
+  <p>6 个专业子智能体 + 4 大核心技能，通过 7 阶段管线协同完成从零到成书的教材编制</p>
+  <div class="chips">
+    <div class="chip"><span class="dot" style="background:var(--amber)"></span>PipelineRunner</div>
+    <div class="chip"><span class="dot" style="background:var(--purple)"></span>6 子智能体</div>
+    <div class="chip"><span class="dot" style="background:var(--cyan)"></span>4 核心技能</div>
+    <div class="chip"><span class="dot" style="background:var(--green)"></span>7 阶段管线</div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<div class="stats">
+  <div class="stat"><div class="val">6</div><div class="lab">专业子智能体</div></div>
+  <div class="stat"><div class="val">4</div><div class="lab">核心技能</div></div>
+  <div class="stat"><div class="val">7</div><div class="lab">管线阶段</div></div>
+  <div class="stat"><div class="val">9</div><div class="lab">章节动作</div></div>
+</div>
+
+<!-- ═══════════ 1. OVERVIEW ═══════════ -->
+<div id="overview" class="section">
+  <div class="section-title"><div class="ico" style="background:var(--amber-bg);color:var(--amber)">🎯</div>协作架构全景</div>
+  <div class="section-desc">PipelineRunner 是教材编制的中枢调度器，编排 6 个子智能体按 7 阶段管线顺序执行，每章经历 9 个确定性动作。</div>
+
+  <div class="diagram-box" style="margin-bottom:20px">
+    <svg viewBox="0 0 1100 280" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="var(--text3)"/></marker></defs>
+
+      <!-- PipelineRunner -->
+      <rect x="380" y="10" width="340" height="50" rx="25" fill="var(--amber-bg)" stroke="var(--amber)" stroke-width="2" class="anim-node" style="animation-delay:0s"/>
+      <text x="550" y="42" fill="var(--amber)" font-size="16" font-weight="800" text-anchor="middle">PipelineRunner 管线调度器</text>
+
+      <!-- Branch to agents -->
+      <line x1="400" y1="60" x2="100" y2="110" stroke="var(--purple)" stroke-width="1.5" class="anim-flow"/>
+      <line x1="450" y1="60" x2="270" y2="110" stroke="var(--blue)" stroke-width="1.5" class="anim-flow"/>
+      <line x1="520" y1="60" x2="440" y2="110" stroke="var(--green)" stroke-width="1.5" class="anim-flow"/>
+      <line x1="580" y1="60" x2="610" y2="110" stroke="var(--orange)" stroke-width="1.5" class="anim-flow"/>
+      <line x1="650" y1="60" x2="780" y2="110" stroke="var(--pink)" stroke-width="1.5" class="anim-flow"/>
+      <line x1="700" y1="60" x2="950" y2="110" stroke="var(--teal)" stroke-width="1.5" class="anim-flow"/>
+
+      <!-- 6 Agents -->
+      <rect x="20" y="110" width="160" height="70" rx="12" fill="var(--purple-bg)" stroke="var(--purple)" stroke-width="1.5" class="anim-node" style="animation-delay:.1s"/>
+      <text x="100" y="138" fill="var(--purple)" font-size="14" font-weight="800" text-anchor="middle">OutlinerAgent</text>
+      <text x="100" y="160" fill="var(--text2)" font-size="11" text-anchor="middle">大纲编制</text>
+
+      <rect x="195" y="110" width="160" height="70" rx="12" fill="var(--blue-bg)" stroke="var(--blue)" stroke-width="1.5" class="anim-node" style="animation-delay:.15s"/>
+      <text x="275" y="138" fill="var(--blue)" font-size="14" font-weight="800" text-anchor="middle">ComposerAgent</text>
+      <text x="275" y="160" fill="var(--text2)" font-size="11" text-anchor="middle">上下文组装</text>
+
+      <rect x="370" y="110" width="160" height="70" rx="12" fill="var(--green-bg)" stroke="var(--green)" stroke-width="1.5" class="anim-node" style="animation-delay:.2s"/>
+      <text x="450" y="138" fill="var(--green)" font-size="14" font-weight="800" text-anchor="middle">WriterAgent</text>
+      <text x="450" y="160" fill="var(--text2)" font-size="11" text-anchor="middle">章节编写</text>
+
+      <rect x="545" y="110" width="160" height="70" rx="12" fill="var(--orange-bg)" stroke="var(--orange)" stroke-width="1.5" class="anim-node" style="animation-delay:.25s"/>
+      <text x="625" y="138" fill="var(--orange)" font-size="14" font-weight="800" text-anchor="middle">ReviewerAgent</text>
+      <text x="625" y="160" fill="var(--text2)" font-size="11" text-anchor="middle">审查评分</text>
+
+      <rect x="720" y="110" width="160" height="70" rx="12" fill="var(--pink-bg)" stroke="var(--pink)" stroke-width="1.5" class="anim-node" style="animation-delay:.3s"/>
+      <text x="800" y="138" fill="var(--pink)" font-size="14" font-weight="800" text-anchor="middle">ReviserAgent</text>
+      <text x="800" y="160" fill="var(--text2)" font-size="11" text-anchor="middle">修订章节</text>
+
+      <rect x="895" y="110" width="160" height="70" rx="12" fill="var(--teal-bg)" stroke="var(--teal)" stroke-width="1.5" class="anim-node" style="animation-delay:.35s"/>
+      <text x="975" y="138" fill="var(--teal)" font-size="14" font-weight="800" text-anchor="middle">PolisherAgent</text>
+      <text x="975" y="160" fill="var(--text2)" font-size="11" text-anchor="middle">润色定稿</text>
+
+      <!-- Agents to Skills -->
+      <line x1="100" y1="180" x2="100" y2="210" stroke="var(--purple)" stroke-width="1" stroke-dasharray="4 3" class="anim-flow"/>
+      <line x1="450" y1="180" x2="450" y2="210" stroke="var(--green)" stroke-width="1" stroke-dasharray="4 3" class="anim-flow"/>
+      <line x1="800" y1="180" x2="800" y2="210" stroke="var(--pink)" stroke-width="1" stroke-dasharray="4 3" class="anim-flow"/>
+
+      <!-- Skills layer -->
+      <rect x="20" y="210" width="260" height="50" rx="10" fill="var(--cyan-bg)" stroke="var(--cyan)" stroke-width="1"/>
+      <text x="150" y="240" fill="var(--cyan)" font-size="13" font-weight="700" text-anchor="middle">textbook-outline 技能</text>
+
+      <rect x="300" y="210" width="260" height="50" rx="10" fill="var(--cyan-bg)" stroke="var(--cyan)" stroke-width="1"/>
+      <text x="430" y="240" fill="var(--cyan)" font-size="13" font-weight="700" text-anchor="middle">textbook-chapter 技能</text>
+
+      <rect x="580" y="210" width="260" height="50" rx="10" fill="var(--cyan-bg)" stroke="var(--cyan)" stroke-width="1"/>
+      <text x="710" y="240" fill="var(--cyan)" font-size="13" font-weight="700" text-anchor="middle">knowledge-organizer 技能</text>
+
+      <rect x="860" y="210" width="220" height="50" rx="10" fill="var(--cyan-bg)" stroke="var(--cyan)" stroke-width="1"/>
+      <text x="970" y="240" fill="var(--cyan)" font-size="13" font-weight="700" text-anchor="middle">textbook-fullbook 技能</text>
+    </svg>
+  </div>
+</div>
+
+<!-- ═══════════ 2. AGENTS ═══════════ -->
+<div id="agents" class="section">
+  <div class="section-title"><div class="ico" style="background:var(--purple-bg);color:var(--purple)">🤖</div>六大子智能体</div>
+  <div class="section-desc">每个子智能体继承 TextbookBaseAgent，拥有独立的系统提示词、用户提示词模板和输出解析器。</div>
+
+  <div class="bento" style="grid-template-columns:1fr 1fr 1fr;gap:16px">
+    <div class="agent-card" style="border-left:3px solid var(--purple)">
+      <div class="agent-icon" style="background:var(--purple-bg);color:var(--purple)">📋</div>
+      <h3 style="color:var(--purple)">OutlinerAgent</h3>
+      <div class="agent-type">outliner</div>
+      <p>大纲编制智能体。基于 OKR 递归分解和布鲁姆认知层次，从教材目标逐级分解到章节要点，生成结构化大纲。</p>
+      <div class="agent-tags">
+        <span class="tag tag-purple">OKR 分解</span>
+        <span class="tag tag-blue">布鲁姆标注</span>
+        <span class="tag tag-green">术语表初始化</span>
+      </div>
+    </div>
+    <div class="agent-card" style="border-left:3px solid var(--blue)">
+      <div class="agent-icon" style="background:var(--blue-bg);color:var(--blue)">🔧</div>
+      <h3 style="color:var(--blue)">ComposerAgent</h3>
+      <div class="agent-type">composer</div>
+      <p>上下文组装智能体。收集大纲、前章摘要、术语表、当前状态，组装为低 Token 写作上下文包。</p>
+      <div class="agent-tags">
+        <span class="tag tag-blue">上下文组装</span>
+        <span class="tag tag-green">预算控制</span>
+      </div>
+    </div>
+    <div class="agent-card" style="border-left:3px solid var(--green)">
+      <div class="agent-icon" style="background:var(--green-bg);color:var(--green)">✍️</div>
+      <h3 style="color:var(--green)">WriterAgent</h3>
+      <div class="agent-type">writer</div>
+      <p>章节编写智能体。基于上下文包撰写章节正文，自动识别图表/插图需求，输出 VISUAL_ASSETS JSON。</p>
+      <div class="agent-tags">
+        <span class="tag tag-green">去AI味</span>
+        <span class="tag tag-orange">图表识别</span>
+        <span class="tag tag-pink">习题设计</span>
+      </div>
+    </div>
+    <div class="agent-card" style="border-left:3px solid var(--orange)">
+      <div class="agent-icon" style="background:var(--orange-bg);color:var(--orange)">🔍</div>
+      <h3 style="color:var(--orange)">ReviewerAgent</h3>
+      <div class="agent-type">reviewer</div>
+      <p>审查评分智能体。双模式审查：大纲审查（8 维度）和章节审查（20 维度），输出评分和问题列表。</p>
+      <div class="agent-tags">
+        <span class="tag tag-orange">双模式</span>
+        <span class="tag tag-red">评分+问题</span>
+        <span class="tag tag-purple">JSON 输出</span>
+      </div>
+    </div>
+    <div class="agent-card" style="border-left:3px solid var(--pink)">
+      <div class="agent-icon" style="background:var(--pink-bg);color:var(--pink)">✏️</div>
+      <h3 style="color:var(--pink)">ReviserAgent</h3>
+      <div class="agent-type">reviser</div>
+      <p>修订智能体。根据审查问题列表进行定点修复（spot-fix），仅修改有问题的段落，保留已通过内容。</p>
+      <div class="agent-tags">
+        <span class="tag tag-pink">定点修复</span>
+        <span class="tag tag-green">条件触发</span>
+      </div>
+    </div>
+    <div class="agent-card" style="border-left:3px solid var(--teal)">
+      <div class="agent-icon" style="background:var(--teal-bg);color:var(--teal)">✨</div>
+      <h3 style="color:var(--teal)">PolisherAgent</h3>
+      <div class="agent-type">polisher</div>
+      <p>润色智能体。统一写作风格、提升可读性、消除残留 AI 痕迹。评分 ≥88 且无严重问题时自动跳过。</p>
+      <div class="agent-tags">
+        <span class="tag tag-teal">风格统一</span>
+        <span class="tag tag-amber">智能跳过</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 3. SKILLS ═══════════ -->
+<div id="skills" class="section">
+  <div class="section-title"><div class="ico" style="background:var(--cyan-bg);color:var(--cyan)">⚡</div>四大核心技能</div>
+  <div class="section-desc">技能由 SKILL.md 定义触发词和指令，智能体匹配后按需读取执行。SkillManager 管理加载、启用/禁用和提示词注入。</div>
+
+  <div class="bento bento-2">
+    <div class="skill-card" style="border-left:3px solid var(--purple)">
+      <div class="skill-icon" style="background:var(--purple-bg);color:var(--purple)">📋</div>
+      <h3 style="color:var(--purple)">textbook-outline</h3>
+      <div class="skill-name">大纲编制技能</div>
+      <p>触发词匹配后，智能体读取 SKILL.md 获取 OKR 递归分解指令，搜索课标，生成结构化大纲并保存。支持新建和调整大纲。</p>
+      <div class="triggers">
+        <span style="background:var(--purple-bg);color:var(--purple)">编制大纲</span>
+        <span style="background:var(--purple-bg);color:var(--purple)">生成大纲</span>
+        <span style="background:var(--purple-bg);color:var(--purple)">规划大纲</span>
+        <span style="background:var(--purple-bg);color:var(--purple)">调整大纲</span>
+      </div>
+    </div>
+    <div class="skill-card" style="border-left:3px solid var(--green)">
+      <div class="skill-icon" style="background:var(--green-bg);color:var(--green)">✍️</div>
+      <h3 style="color:var(--green)">textbook-chapter</h3>
+      <div class="skill-name">章节编写技能</div>
+      <p>触发词匹配后，智能体读取大纲、前章摘要、术语表和去AI味规则，执行知识库+网页证据充实，编写章节正文。</p>
+      <div class="triggers">
+        <span style="background:var(--green-bg);color:var(--green)">编写第</span>
+        <span style="background:var(--green-bg);color:var(--green)">写第</span>
+        <span style="background:var(--green-bg);color:var(--green)">续写章节</span>
+        <span style="background:var(--green-bg);color:var(--green)">重写章节</span>
+      </div>
+    </div>
+    <div class="skill-card" style="border-left:3px solid var(--cyan)">
+      <div class="skill-icon" style="background:var(--cyan-bg);color:var(--cyan)">📚</div>
+      <h3 style="color:var(--cyan)">knowledge-organizer</h3>
+      <div class="skill-name">知识库整理技能</div>
+      <p>触发词匹配后，执行 organize.py 脚本对知识库进行 AI 整理，提取知识条目、建立关联图谱、生成交叉引用。</p>
+      <div class="triggers">
+        <span style="background:var(--cyan-bg);color:var(--cyan)">整理知识库</span>
+        <span style="background:var(--cyan-bg);color:var(--cyan)">梳理知识</span>
+      </div>
+    </div>
+    <div class="skill-card" style="border-left:3px solid var(--amber)">
+      <div class="skill-icon" style="background:var(--amber-bg);color:var(--amber)">📖</div>
+      <h3 style="color:var(--amber)">textbook-fullbook</h3>
+      <div class="skill-name">全教材一键生成技能</div>
+      <p>触发词匹配后，展示参数确认表格，用户确认后调用 start_pipeline 工具启动 7 阶段管线，支持暂停/恢复/取消。</p>
+      <div class="triggers">
+        <span style="background:var(--amber-bg);color:var(--amber)">编写教材</span>
+        <span style="background:var(--amber-bg);color:var(--amber)">一键生成</span>
+        <span style="background:var(--amber-bg);color:var(--amber)">整本教材</span>
+        <span style="background:var(--amber-bg);color:var(--amber)">制作教材</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h3>⚙️ SkillManager 技能生命周期</h3>
+    <div class="bento bento-3" style="margin-top:12px">
+      <div class="feat"><div class="fi" style="background:var(--cyan-bg);color:var(--cyan)">📂</div><div class="ft"><h4>加载扫描</h4><p>SkillLoader 扫描 builtin + custom 目录，解析 SKILL.md 元数据</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--green-bg);color:var(--green)">🔄</div><div class="ft"><h4>配置同步</h4><p>与 skills_config.json 双向同步，新增技能自动注册，启用/禁用持久化</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--amber-bg);color:var(--amber)">📝</div><div class="ft"><h4>提示词注入</h4><p>仅注入 name+description+location，不预加载 SKILL.md 全文，按需读取</p></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 4. PIPELINE ═══════════ -->
+<div id="pipeline" class="section">
+  <div class="section-title"><div class="ico" style="background:var(--amber-bg);color:var(--amber)">🔄</div>教材编制管线（从零到成书）</div>
+  <div class="section-desc">7 阶段管线从用户需求出发，自动编排子智能体和技能，逐章推进直到整本教材完成。</div>
+
+  <div class="diagram-box" style="margin-bottom:20px">
+    <svg id="pipelineSvg" viewBox="0 0 1100 520" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrowW" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="var(--text3)"/></marker>
+        <filter id="glow"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      </defs>
+
+      <!-- Phase 1: Outline -->
+      <rect x="40" y="20" width="220" height="90" rx="14" fill="var(--purple-bg)" stroke="var(--purple)" stroke-width="2" class="anim-node" style="animation-delay:0s" id="p1"/>
+      <text x="150" y="48" fill="var(--purple)" font-size="20" font-weight="800" text-anchor="middle">Phase 1</text>
+      <text x="150" y="72" fill="var(--text)" font-size="14" font-weight="700" text-anchor="middle">大纲编制</text>
+      <text x="150" y="92" fill="var(--text2)" font-size="11" text-anchor="middle">OutlinerAgent</text>
+      <line x1="260" y1="65" x2="290" y2="65" stroke="var(--text3)" stroke-width="2" marker-end="url(#arrowW)" class="anim-flow"/>
+
+      <!-- Phase 2: Review Outline -->
+      <rect x="290" y="20" width="220" height="90" rx="14" fill="var(--orange-bg)" stroke="var(--orange)" stroke-width="2" class="anim-node" style="animation-delay:.2s" id="p2"/>
+      <text x="400" y="48" fill="var(--orange)" font-size="20" font-weight="800" text-anchor="middle">Phase 2</text>
+      <text x="400" y="72" fill="var(--text)" font-size="14" font-weight="700" text-anchor="middle">大纲审查</text>
+      <text x="400" y="92" fill="var(--text2)" font-size="11" text-anchor="middle">ReviewerAgent(outline)</text>
+      <line x1="510" y1="65" x2="540" y2="65" stroke="var(--text3)" stroke-width="2" marker-end="url(#arrowW)" class="anim-flow"/>
+
+      <!-- Phase 3: Compose -->
+      <rect x="540" y="20" width="220" height="90" rx="14" fill="var(--blue-bg)" stroke="var(--blue)" stroke-width="2" class="anim-node" style="animation-delay:.4s" id="p3"/>
+      <text x="650" y="48" fill="var(--blue)" font-size="20" font-weight="800" text-anchor="middle">Phase 3</text>
+      <text x="650" y="72" fill="var(--text)" font-size="14" font-weight="700" text-anchor="middle">上下文组装</text>
+      <text x="650" y="92" fill="var(--text2)" font-size="11" text-anchor="middle">ContextPackageBuilder</text>
+      <line x1="760" y1="65" x2="790" y2="65" stroke="var(--text3)" stroke-width="2" marker-end="url(#arrowW)" class="anim-flow"/>
+
+      <!-- Phase 4: Write -->
+      <rect x="790" y="20" width="270" height="90" rx="14" fill="var(--green-bg)" stroke="var(--green)" stroke-width="2" class="anim-node" style="animation-delay:.6s" id="p4"/>
+      <text x="925" y="48" fill="var(--green)" font-size="20" font-weight="800" text-anchor="middle">Phase 4</text>
+      <text x="925" y="72" fill="var(--text)" font-size="14" font-weight="700" text-anchor="middle">章节编写</text>
+      <text x="925" y="92" fill="var(--text2)" font-size="11" text-anchor="middle">WriterAgent + VisualRouter</text>
+
+      <!-- Loop back arrow -->
+      <path d="M1060 65 L1080 65 L1080 140 L550 140 L550 160" stroke="var(--amber)" stroke-width="2" fill="none" marker-end="url(#arrowW)" class="anim-flow" stroke-dasharray="6 4"/>
+      <text x="820" y="155" fill="var(--amber)" font-size="11" font-weight="600" text-anchor="middle">逐章循环 (1→N)</text>
+
+      <!-- Chapter loop detail -->
+      <rect x="40" y="160" width="1020" height="340" rx="14" fill="rgba(245,158,11,.04)" stroke="var(--amber)" stroke-width="1" stroke-dasharray="6 3"/>
+      <text x="60" y="188" fill="var(--amber)" font-size="13" font-weight="700" letter-spacing="1">每章 9 个确定性动作 (ChapterOrchestrator.plan)</text>
+
+      <!-- Action 1 -->
+      <rect x="60" y="200" width="200" height="50" rx="8" fill="var(--surface2)" stroke="var(--purple)" stroke-width="1" class="anim-node" style="animation-delay:.8s"/>
+      <text x="160" y="222" fill="var(--purple)" font-size="11" font-weight="700" text-anchor="middle">1. read_outline</text>
+      <text x="160" y="240" fill="var(--text3)" font-size="9" text-anchor="middle">读取当前章节大纲</text>
+
+      <!-- Action 2 -->
+      <rect x="280" y="200" width="200" height="50" rx="8" fill="var(--surface2)" stroke="var(--cyan)" stroke-width="1" class="anim-node" style="animation-delay:.9s"/>
+      <text x="380" y="222" fill="var(--cyan)" font-size="11" font-weight="700" text-anchor="middle">2. retrieve_knowledge</text>
+      <text x="380" y="240" fill="var(--text3)" font-size="9" text-anchor="middle">检索知识库证据</text>
+
+      <!-- Action 3 -->
+      <rect x="500" y="200" width="200" height="50" rx="8" fill="var(--surface2)" stroke="var(--blue)" stroke-width="1" class="anim-node" style="animation-delay:1s"/>
+      <text x="600" y="222" fill="var(--blue)" font-size="11" font-weight="700" text-anchor="middle">3. build_context</text>
+      <text x="600" y="240" fill="var(--text3)" font-size="9" text-anchor="middle">组装低上下文写作包</text>
+
+      <!-- Action 4 -->
+      <rect x="720" y="200" width="200" height="50" rx="8" fill="var(--surface2)" stroke="var(--green)" stroke-width="1" class="anim-node" style="animation-delay:1.1s"/>
+      <text x="820" y="222" fill="var(--green)" font-size="11" font-weight="700" text-anchor="middle">4. write_chapter</text>
+      <text x="820" y="240" fill="var(--text3)" font-size="9" text-anchor="middle">调用写作子智能体</text>
+
+      <!-- Action 5 -->
+      <rect x="60" y="265" width="200" height="50" rx="8" fill="var(--surface2)" stroke="var(--amber)" stroke-width="1" class="anim-node" style="animation-delay:1.2s"/>
+      <text x="160" y="287" fill="var(--amber)" font-size="11" font-weight="700" text-anchor="middle">5. route_visual_assets</text>
+      <text x="160" y="305" fill="var(--text3)" font-size="9" text-anchor="middle">路由图表与插图资产</text>
+
+      <!-- Action 6 -->
+      <rect x="280" y="265" width="200" height="50" rx="8" fill="var(--surface2)" stroke="var(--orange)" stroke-width="1" class="anim-node" style="animation-delay:1.3s"/>
+      <text x="380" y="287" fill="var(--orange)" font-size="11" font-weight="700" text-anchor="middle">6. review_chapter</text>
+      <text x="380" y="305" fill="var(--text3)" font-size="9" text-anchor="middle">调用审查子智能体</text>
+
+      <!-- Action 7 -->
+      <rect x="500" y="265" width="200" height="50" rx="8" fill="var(--surface2)" stroke="var(--pink)" stroke-width="1" class="anim-node" style="animation-delay:1.4s"/>
+      <text x="600" y="287" fill="var(--pink)" font-size="11" font-weight="700" text-anchor="middle">7. revise_chapter</text>
+      <text x="600" y="305" fill="var(--text3)" font-size="9" text-anchor="middle">按需修订（条件触发）</text>
+
+      <!-- Action 8 -->
+      <rect x="720" y="265" width="200" height="50" rx="8" fill="var(--surface2)" stroke="var(--teal)" stroke-width="1" class="anim-node" style="animation-delay:1.5s"/>
+      <text x="820" y="287" fill="var(--teal)" font-size="11" font-weight="700" text-anchor="middle">8. polish_chapter</text>
+      <text x="820" y="305" fill="var(--text3)" font-size="9" text-anchor="middle">润色（评分≥88可跳过）</text>
+
+      <!-- Action 9 -->
+      <rect x="380" y="335" width="240" height="50" rx="8" fill="var(--surface2)" stroke="var(--green)" stroke-width="2" class="anim-node" style="animation-delay:1.6s"/>
+      <text x="500" y="357" fill="var(--green)" font-size="11" font-weight="700" text-anchor="middle">9. persist_chapter</text>
+      <text x="500" y="375" fill="var(--text3)" font-size="9" text-anchor="middle">保存章节与更新状态</text>
+
+      <!-- Decision diamond -->
+      <polygon points="500,420 560,450 500,480 440,450" fill="var(--amber-bg)" stroke="var(--amber)" stroke-width="1.5"/>
+      <text x="500" y="455" fill="var(--amber)" font-size="11" font-weight="700" text-anchor="middle">更多章?</text>
+
+      <!-- Yes arrow loops back -->
+      <path d="M440 450 L350 450 L350 490 L80 490 L80 225 L60 225" stroke="var(--green)" stroke-width="1.5" fill="none" marker-end="url(#arrowW)" class="anim-flow" stroke-dasharray="4 3"/>
+      <text x="200" y="505" fill="var(--green)" font-size="10" font-weight="600">是 → 下一章</text>
+
+      <!-- No arrow to complete -->
+      <line x1="560" y1="450" x2="650" y2="450" stroke="var(--amber)" stroke-width="2" marker-end="url(#arrowW)"/>
+      <rect x="650" y="430" width="200" height="40" rx="20" fill="var(--amber-bg)" stroke="var(--amber)" stroke-width="2"/>
+      <text x="750" y="456" fill="var(--amber)" font-size="13" font-weight="800" text-anchor="middle">管线完成</text>
+      <text x="610" y="440" fill="var(--text3)" font-size="10" font-weight="600">否</text>
+    </svg>
+  </div>
+</div>
+
+<!-- ═══════════ 5. ORCHESTRATOR ═══════════ -->
+<div id="orchestrator" class="section">
+  <div class="section-title"><div class="ico" style="background:var(--amber-bg);color:var(--amber)">🎼</div>ChapterOrchestrator 编排器</div>
+  <div class="section-desc">确定性动作规划器，为每章生成 9 个动作序列。默认全为 required=True，revise 和 polish 根据审查结果条件跳过。</div>
+
+  <div class="bento bento-2">
+    <div class="card">
+      <h3>📋 9 个确定性动作</h3>
+      <table class="tbl">
+        <tr><th>#</th><th>动作</th><th>子智能体/模块</th><th>条件</th></tr>
+        <tr><td>1</td><td>read_outline</td><td>ContextPackageBuilder</td><td><span class="tag tag-green">必执行</span></td></tr>
+        <tr><td>2</td><td>retrieve_knowledge</td><td>KnowledgeRetriever</td><td><span class="tag tag-blue">有知识库时</span></td></tr>
+        <tr><td>3</td><td>build_context</td><td>ContextPackageBuilder</td><td><span class="tag tag-green">必执行</span></td></tr>
+        <tr><td>4</td><td>write_chapter</td><td>WriterAgent</td><td><span class="tag tag-green">必执行</span></td></tr>
+        <tr><td>5</td><td>route_visual_assets</td><td>VisualAssetRouter</td><td><span class="tag tag-green">必执行</span></td></tr>
+        <tr><td>6</td><td>review_chapter</td><td>ReviewerAgent</td><td><span class="tag tag-green">必执行</span></td></tr>
+        <tr><td>7</td><td>revise_chapter</td><td>ReviserAgent</td><td><span class="tag tag-orange">评分&lt;80时</span></td></tr>
+        <tr><td>8</td><td>polish_chapter</td><td>PolisherAgent</td><td><span class="tag tag-amber">评分&lt;88或有严重问题</span></td></tr>
+        <tr><td>9</td><td>persist_chapter</td><td>ChapterPersistence</td><td><span class="tag tag-green">必执行</span></td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h3>🎯 条件跳过逻辑</h3>
+      <div class="feat"><div class="fi" style="background:var(--pink-bg);color:var(--pink)">✏️</div><div class="ft"><h4>revise_chapter 条件触发</h4><p>审查评分 ≥80 分时跳过修订，标记 "review score passed"，节约一次 LLM 调用</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--teal-bg);color:var(--teal)">✨</div><div class="ft"><h4>polish_chapter 智能跳过</h4><p>评分 ≥88 且无 critical/warning 问题时跳过润色；短章节（&lt;1200字）评分 ≥82 也可跳过</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--cyan-bg);color:var(--cyan)">📚</div><div class="ft"><h4>retrieve_knowledge 可选</h4><p>has_knowledge=False 时标记为非必需，无知识库时自动跳过检索</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--amber-bg);color:var(--amber)">📊</div><div class="ft"><h4>预算自适应</h4><p>chapter_word_count ≤3000 时上下文预算 ×0.85，≥8000 时 ×1.15</p></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 6. CHECKPOINT ═══════════ -->
+<div id="checkpoint" class="section">
+  <div class="section-title"><div class="ico" style="background:var(--green-bg);color:var(--green)">💾</div>检查点与断点续传</div>
+  <div class="section-desc">PipelineCheckpointStore 为每章保存动作状态，支持断点续传和暂停/恢复/取消。</div>
+
+  <div class="bento bento-2">
+    <div class="card">
+      <h3>📋 检查点文件结构</h3>
+      <div class="code"><span class="cm"># state/pipeline_checkpoints/chapter_01.json</span>
+{
+  <span class="str">"chapter_number"</span>: <span class="ty">1</span>,
+  <span class="str">"updated_at"</span>: <span class="kw">"2026-05-20T14:30:00"</span>,
+  <span class="str">"actions"</span>: [
+    {
+      <span class="str">"name"</span>: <span class="kw">"read_outline"</span>,
+      <span class="str">"status"</span>: <span class="kw">"completed"</span>,
+      <span class="str">"output_summary"</span>: <span class="kw">"outline loaded"</span>
+    },
+    {
+      <span class="str">"name"</span>: <span class="kw">"write_chapter"</span>,
+      <span class="str">"status"</span>: <span class="kw">"running"</span>,
+      <span class="str">"started_at"</span>: <span class="ty">1716191400.0</span>
+    }
+  ],
+  <span class="str">"extra"</span>: {<span class="str">"stage"</span>: <span class="kw">"write_chapter"</span>}
+}</div>
+    </div>
+    <div class="card">
+      <h3>🎮 管线控制</h3>
+      <div class="feat"><div class="fi" style="background:var(--amber-bg);color:var(--amber)">⏸</div><div class="ft"><h4>pause() 暂停</h4><p>设置 _paused 标志，当前动作完成后在 _check_pause_cancel 处挂起</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--green-bg);color:var(--green)">▶</div><div class="ft"><h4>resume() 恢复</h4><p>清除 _paused 标志，管线从挂起点继续执行</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--red-bg);color:var(--red)">⏹</div><div class="ft"><h4>cancel() 取消</h4><p>设置 _cancelled 标志 + cancel_event，所有子智能体收到取消信号</p></div></div>
+      <div class="feat"><div class="fi" style="background:var(--blue-bg);color:var(--blue)">🔄</div><div class="ft"><h4>断点续传</h4><p>resume_from 参数指定起始阶段，已完成的章节自动跳过（scheduler.mark_completed）</p></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 7. SOURCE ═══════════ -->
+<div id="source" class="section">
+  <div class="section-title"><div class="ico" style="background:var(--blue-bg);color:var(--blue)">🗺️</div>核心源码导航</div>
+  <div class="section-desc">子智能体、技能和管线系统的全部源码文件。</div>
+  <div class="card">
+    <table class="tbl">
+      <tr><th>模块</th><th>文件路径</th><th>职责</th></tr>
+      <tr><td><span class="tag tag-amber">管线调度</span></td><td>agent/textbook/pipeline/runner.py</td><td>7 阶段管线主循环、子智能体编排、暂停/恢复/取消</td></tr>
+      <tr><td><span class="tag tag-amber">章节编排</span></td><td>agent/textbook/pipeline/orchestrator.py</td><td>9 动作确定性规划、检查点存储</td></tr>
+      <tr><td><span class="tag tag-amber">上下文构建</span></td><td>agent/textbook/pipeline/context_builder.py</td><td>低 Token 上下文包构建与预算控制</td></tr>
+      <tr><td><span class="tag tag-amber">章节持久化</span></td><td>agent/textbook/pipeline/chapter_persistence.py</td><td>章节保存与快照生成</td></tr>
+      <tr><td><span class="tag tag-amber">视觉资产路由</span></td><td>agent/textbook/pipeline/visual_asset_router.py</td><td>图表/插图资产路由与生成</td></tr>
+      <tr><td><span class="tag tag-amber">章节调度</span></td><td>agent/textbook/pipeline/scheduler.py</td><td>章节编号调度与完成追踪</td></tr>
+      <tr><td><span class="tag tag-purple">大纲智能体</span></td><td>agent/textbook/agents/outliner.py</td><td>OKR 递归分解大纲生成</td></tr>
+      <tr><td><span class="tag tag-blue">组装智能体</span></td><td>agent/textbook/agents/composer.py</td><td>上下文组装</td></tr>
+      <tr><td><span class="tag tag-green">写作智能体</span></td><td>agent/textbook/agents/writer.py</td><td>章节编写与视觉资产识别</td></tr>
+      <tr><td><span class="tag tag-orange">审查智能体</span></td><td>agent/textbook/agents/reviewer.py</td><td>双模式审查与评分</td></tr>
+      <tr><td><span class="tag tag-pink">修订智能体</span></td><td>agent/textbook/agents/reviser.py</td><td>定点修复</td></tr>
+      <tr><td><span class="tag tag-teal">润色智能体</span></td><td>agent/textbook/agents/polisher.py</td><td>风格统一与可读性提升</td></tr>
+      <tr><td><span class="tag tag-cyan">技能管理</span></td><td>agent/skills/manager.py</td><td>技能加载、启用/禁用、提示词注入</td></tr>
+      <tr><td><span class="tag tag-cyan">技能服务</span></td><td>agent/skills/service.py</td><td>技能 CRUD、远程安装、URL/包下载</td></tr>
+    </table>
+  </div>
+</div>
+
+</div>
+
+<div class="footer">
+  <p>TextBookAgent 子智能体与技能系统技术解析 · 基于项目源码深度分析生成</p>
+  <p style="margin-top:6px">PipelineRunner · ChapterOrchestrator · 6 Agents · 4 Skills · 7 Phases</p>
+</div>
+
+<script>
+const nav=document.querySelector('.topnav .links');
+const links=nav.querySelectorAll('a');
+const sections=document.querySelectorAll('.section[id]');
+const obs=new IntersectionObserver(entries=>{
+  entries.forEach(e=>{
+    if(e.isIntersecting){
+      links.forEach(l=>l.classList.remove('active'));
+      const a=nav.querySelector(`a[href="#${e.target.id}"]`);
+      if(a)a.classList.add('active');
+    }
+  });
+},{threshold:.3});
+sections.forEach(s=>obs.observe(s));
+</script>
+</body>
+</html>

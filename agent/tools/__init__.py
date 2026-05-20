@@ -99,8 +99,8 @@ def _import_browser_tool():
         logger.info(
             f"[Tools] BrowserTool not loaded - missing dependency: {e}\n"
             f"  To enable browser tool, run:\n"
-            f"    pip install playwright\n"
-            f"    playwright install chromium"
+            f"    python -m pip install -r requirements.txt\n"
+            f"    python -m playwright install chromium"
         )
         return None
     except Exception as e:

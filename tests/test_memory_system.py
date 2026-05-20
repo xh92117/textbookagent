@@ -41,6 +41,31 @@ def test_memory_sync_indexes_textbook_truth_files(tmp_path):
     assert any(result.path == "textbooks/tb_demo/state/status.json" for result in results)
 
 
+def test_memory_sync_indexes_project_profile_files(tmp_path):
+    system_root = tmp_path / "system"
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    (project_root / "USER.md").write_text("用户偏好：简洁交互，教材质量优先。", encoding="utf-8")
+    (project_root / "MEMORY.md").write_text("长期记忆：知识库检索必须规范化。", encoding="utf-8")
+
+    async def run():
+        manager = MemoryManager(
+            MemoryConfig(workspace_root=str(system_root), project_workspace_root=str(project_root)),
+            embedding_provider=None,
+        )
+        await manager.sync(force=True)
+        tool = MemoryGetTool(manager)
+        get_result = tool.execute({"path": "USER.md"})
+        results = await manager.search("教材质量优先", max_results=5, min_score=0.0)
+        manager.close()
+        return get_result, results
+
+    get_result, results = asyncio.run(run())
+    assert get_result.status == "success"
+    assert "教材质量优先" in get_result.result
+    assert any(result.path == "USER.md" for result in results)
+
+
 def test_memory_search_tool_works_inside_running_event_loop(tmp_path):
     memory_file = tmp_path / "MEMORY.md"
     memory_file.write_text("长期记忆：土木工程智能体需要读取状态文件。", encoding="utf-8")

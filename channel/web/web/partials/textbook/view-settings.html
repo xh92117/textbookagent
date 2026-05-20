@@ -1,0 +1,169 @@
+<div class="view-page" id="view-settings">
+                    <div class="settings-page">
+                        <div class="settings-header">
+                            <div>
+                                <h1>系统配置</h1>
+                                <p>集中管理模型、Agent、工作区与安全设置。</p>
+                            </div>
+                            <span class="settings-version">TextBookAgent v2.1</span>
+                        </div>
+
+                        <div class="settings-tabs" role="tablist" aria-label="系统配置分类">
+                            <button type="button" class="settings-tab active" data-settings-tab="model" onclick="switchSettingsTab('model')"><i class="fas fa-brain"></i><span>模型</span></button>
+                            <button type="button" class="settings-tab" data-settings-tab="agent" onclick="switchSettingsTab('agent')"><i class="fas fa-robot"></i><span>Agent</span></button>
+                            <button type="button" class="settings-tab" data-settings-tab="workspace" onclick="switchSettingsTab('workspace')"><i class="fas fa-folder-open"></i><span>工作区</span></button>
+                            <button type="button" class="settings-tab" data-settings-tab="security" onclick="switchSettingsTab('security')"><i class="fas fa-shield-halved"></i><span>安全</span></button>
+                            <button type="button" class="settings-tab" data-settings-tab="about" onclick="switchSettingsTab('about')"><i class="fas fa-circle-info"></i><span>关于</span></button>
+                        </div>
+
+                        <div class="settings-tab-pane active" id="tab-model">
+                            <div class="settings-section section-model">
+                                <div class="section-header">
+                                    <div class="section-icon icon-model"><i class="fas fa-layer-group"></i></div>
+                                    <div>
+                                        <div class="section-title">模型池</div>
+                                        <div class="section-desc">维护可用模型，并为不同任务分配合适模型。</div>
+                                    </div>
+                                </div>
+                                <div class="model-pool" id="settingModelPool"></div>
+                                <button type="button" class="btn-add-model" onclick="clearModelEditor()"><i class="fas fa-plus"></i><span>添加模型</span></button>
+                                <div class="model-editor">
+                                    <input type="hidden" id="settingEditModelId">
+                                    <div class="form-grid">
+                                        <div class="form-group">
+                                            <div class="form-label">模型供应商</div>
+                                            <select class="form-select" id="settingModelProvider" onchange="onModelProviderChange()"></select>
+                                        </div>
+                                        <div class="form-group">
+                                            <div class="form-label">模型名称 <span class="label-badge required">必填</span></div>
+                                            <input type="text" class="form-input mono" id="settingModelName" placeholder="如 deepseek-chat / qwen-max">
+                                        </div>
+                                    </div>
+                                    <div class="form-grid mt-12">
+                                        <div class="form-group">
+                                            <div class="form-label">API 密钥 <span class="label-badge optional">可选</span></div>
+                                            <div class="form-input-wrap">
+                                                <input type="password" class="form-input mono" id="settingModelApiKey" placeholder="sk-...">
+                                                <button type="button" class="input-action" onclick="togglePwd(this)" title="显示或隐藏密钥"><i class="fas fa-eye"></i></button>
+                                            </div>
+                                            <div class="form-hint">留空会继续使用已保存的供应商密钥。</div>
+                                        </div>
+                                        <div class="form-group">
+                                            <div class="form-label">API Base URL <span class="label-badge optional">可选</span></div>
+                                            <input type="text" class="form-input mono" id="settingModelApiBase" placeholder="https://api.example.com/v1">
+                                            <div class="form-hint">兼容 OpenAI 格式的服务地址。</div>
+                                        </div>
+                                    </div>
+                                    <div class="editor-actions">
+                                        <button type="button" class="btn-secondary" onclick="clearModelEditor()"><i class="fas fa-xmark"></i> 清空</button>
+                                        <button type="button" class="btn-save" onclick="addOrUpdateChatModel()"><i class="fas fa-check"></i> 保存模型</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="settings-section section-model role-section">
+                                <div class="section-header">
+                                    <div class="section-icon icon-role"><i class="fas fa-users-gear"></i></div>
+                                    <div>
+                                        <div class="section-title">模型角色分配</div>
+                                        <div class="section-desc">让对话、审查、配图和知识库各用最合适的模型。</div>
+                                    </div>
+                                </div>
+                                <div class="model-role-grid">
+                                    <div class="model-role-card"><div class="role-icon"><i class="fas fa-comments"></i></div><div class="role-name">AI 对话</div><div class="role-model">默认交互模型</div><select class="role-select" id="settingActiveChatModel"></select></div>
+                                    <div class="model-role-card"><div class="role-icon"><i class="fas fa-magnifying-glass-chart"></i></div><div class="role-name">内容审查</div><div class="role-model">质量评估模型</div><select class="role-select" id="settingReviewModelChoice"></select></div>
+                                    <div class="model-role-card"><div class="role-icon"><i class="fas fa-image"></i></div><div class="role-name">插图生成</div><div class="role-model">图像生成模型</div><select class="role-select" id="settingImageModelChoice"></select></div>
+                                </div>
+                                <div class="form-group mt-14">
+                                    <div class="form-label">知识库整理模型</div>
+                                    <select class="form-select" id="settingKnowledgeModelChoice"></select>
+                                    <div class="form-hint">用于文档解析、摘要整理与检索增强。</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="settings-tab-pane" id="tab-agent">
+                            <div class="settings-section section-agent">
+                                <div class="section-header">
+                                    <div class="section-icon icon-agent"><i class="fas fa-robot"></i></div>
+                                    <div>
+                                        <div class="section-title">Agent 运行参数</div>
+                                        <div class="section-desc">控制上下文、步骤上限与模型请求等待时间。</div>
+                                    </div>
+                                </div>
+                                <div class="form-grid">
+                                    <div class="form-group"><div class="form-label">上下文 Token 上限</div><input type="number" class="form-input" id="settingMaxTokens" min="1000" max="5000000" step="1000"><div class="form-hint">超过后会触发分层压缩。</div></div>
+                                    <div class="form-group"><div class="form-label">对话轮数上限</div><input type="number" class="form-input" id="settingMaxTurns" min="1" max="100" step="1"><div class="form-hint">限制单次任务保留的历史轮数。</div></div>
+                                    <div class="form-group"><div class="form-label">工具步骤上限</div><input type="number" class="form-input" id="settingMaxSteps" min="1" max="80" step="1"><div class="form-hint">避免 Agent 陷入无意义循环。</div></div>
+                                    <div class="form-group"><div class="form-label">请求超时（秒）</div><input type="number" class="form-input" id="settingTimeout" min="30" max="600" step="10"><div class="form-hint">单次模型 API 请求最长等待时间。</div></div>
+                                </div>
+                                <div class="section-divider"></div>
+                                <div class="toggle-row"><div class="toggle-info"><div class="toggle-title">Deep Thinking 深度思考</div><div class="toggle-desc">允许 Agent 在复杂任务中使用更充分的推理。</div></div><label class="toggle-switch"><input type="checkbox" id="settingThinking"><span class="toggle-slider"></span></label></div>
+                                <div class="toggle-row"><div class="toggle-info"><div class="toggle-title">自动工具调用</div><div class="toggle-desc">保持 Agent 自动选择搜索、文件、知识库等工具。</div></div><label class="toggle-switch"><input type="checkbox" id="settingAutoTools" checked disabled><span class="toggle-slider"></span></label></div>
+                            </div>
+                        </div>
+
+                        <div class="settings-tab-pane" id="tab-workspace">
+                            <div class="settings-section section-workspace">
+                                <div class="section-header">
+                                    <div class="section-icon icon-workspace"><i class="fas fa-folder-open"></i></div>
+                                    <div>
+                                        <div class="section-title">工作区路径</div>
+                                        <div class="section-desc">设置教材、知识库、运行记录的存放位置。</div>
+                                    </div>
+                                </div>
+                                <div class="workspace-summary">
+                                    <div class="workspace-summary-item"><div class="summary-label">当前工作区</div><div class="summary-value" id="settingWorkspaceCurrent">-</div></div>
+                                    <div class="workspace-summary-item"><div class="summary-label">系统目录</div><div class="summary-value" id="settingSystemDir">-</div></div>
+                                </div>
+                                <div class="form-group">
+                                    <div class="form-label">活动工作区</div>
+                                    <input type="text" class="form-input mono" id="settingActiveWorkspace" placeholder="如 C:\\Users\\你\\Documents\\TextBook Workspace">
+                                    <div class="form-hint">留空则继续使用当前默认工作区。</div>
+                                <div class="form-group">
+                                    <div class="form-label">教材库根目录</div>
+                                    <input type="text" class="form-input mono" id="settingTextbooksStorageDir" placeholder="默认：工作区\textbooks">
+                                    <div class="form-hint">该目录用于存放不同教材 ID 文件夹；例如该项为 ...\textbooks 时，章节会写入 ...\textbooks\教材ID\chapters。留空则默认使用当前工作区下的 textbooks。</div>
+                                </div>
+                                </div>
+                                <div class="section-divider"></div>
+                                <label class="check-row"><input type="checkbox" id="settingWorkspaceSplit"><div><div class="check-label">启用工作区隔离</div><div class="check-desc">将系统目录和项目数据分开管理，降低误操作风险。</div></div></label>
+                            </div>
+                        </div>
+
+                        <div class="settings-tab-pane" id="tab-security">
+                            <div class="settings-section section-security">
+                                <div class="section-header">
+                                    <div class="section-icon icon-security"><i class="fas fa-shield-halved"></i></div>
+                                    <div><div class="section-title">访问安全</div><div class="section-desc">修改 Web 入口密码。</div></div>
+                                </div>
+                                <div class="form-group">
+                                    <div class="form-label">登录密码</div>
+                                    <div class="form-input-wrap"><input type="password" class="form-input mono" id="settingPassword" placeholder="留空表示不修改当前密码"><button type="button" class="input-action" onclick="togglePwd(this)" title="显示或隐藏密码"><i class="fas fa-eye"></i></button></div>
+                                    <div class="form-hint">保存后新密码会写入 config.json。</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="settings-tab-pane" id="tab-about">
+                            <div class="settings-section section-about">
+                                <div class="section-header">
+                                    <div class="section-icon icon-about"><i class="fas fa-circle-info"></i></div>
+                                    <div><div class="section-title">关于 TextBookAgent</div><div class="section-desc">当前系统能力与配置概览。</div></div>
+                                </div>
+                                <div class="about-grid">
+                                    <div class="about-card"><div class="about-value">v2.1</div><div class="about-label">系统版本</div></div>
+                                    <div class="about-card"><div class="about-value" id="settingModelCount">0</div><div class="about-label">模型数量</div></div>
+                                    <div class="about-card"><div class="about-value" id="settingBrowserStatus">可启用</div><div class="about-label">浏览器工具</div></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="info-box settings-info"><i class="fas fa-lightbulb"></i><div class="info-content"><strong>提示：</strong>保存配置会写入 config.json；模型密钥留空时不会覆盖已有密钥。</div></div>
+                        <div class="save-bar">
+                            <div class="save-status" id="saveStatus"><i class="fas fa-circle-check"></i> 配置已加载</div>
+                            <button type="button" class="btn-secondary" onclick="loadSettings()"><i class="fas fa-arrow-rotate-left"></i> 重载</button>
+                            <button type="button" class="btn-save" onclick="saveSettings()"><i class="fas fa-floppy-disk"></i> 保存配置</button>
+                        </div>
+                    </div>
+                </div>

@@ -51,3 +51,25 @@ def test_knowledge_capture_skips_search_results_and_short_content(tmp_path):
     assert "Search result pages" in json.loads(search_result.result)["reason"]
     assert json.loads(short_result.result)["useful"] is False
     assert not (tmp_path / "knowledge" / "sources").exists()
+
+
+def test_knowledge_capture_saves_concise_high_signal_extraction(tmp_path):
+    tool = KnowledgeCapture({"cwd": str(tmp_path)})
+    concise = (
+        "Reflexion proposes verbal self-reflection for language agents: an actor executes tasks, "
+        "an evaluator scores outcomes, and self-reflection converts feedback into memory for later trials. "
+        "Use it to explain reflection-style agent improvement."
+    )
+
+    result = tool.execute({
+        "url": "https://arxiv.org/abs/2303.11366",
+        "title": "Reflexion",
+        "content": concise,
+        "reason": "Use when writing the textbook section about Reflexion and agent self-improvement.",
+        "book_id": "tb_demo",
+        "tags": ["Reflexion", "agent pattern"],
+    })
+
+    payload = json.loads(result.result)
+    assert payload["useful"] is True
+    assert payload["status"] == "saved"

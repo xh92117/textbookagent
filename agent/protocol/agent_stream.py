@@ -8,7 +8,11 @@ import time
 from typing import List, Dict, Any, Optional, Callable, Tuple
 
 from agent.protocol.models import LLMRequest, LLMModel
-from agent.protocol.message_utils import sanitize_claude_messages, compress_turn_to_text_only
+from agent.protocol.message_utils import (
+    sanitize_claude_messages,
+    compress_turn_to_text_only,
+    build_context_state_board,
+)
 from agent.tools.base_tool import BaseTool, ToolResult
 from common.log import logger
 
@@ -1635,6 +1639,7 @@ class AgentStreamExecutor:
             
             if old_count > len(self.messages):
                 logger.info(f"   重建消息列表: {old_count} -> {len(self.messages)} 条消息")
+            self._inject_context_state_board(turns, reason="rebuild")
             return
 
         # Token limit exceeded — progressive compression strategy:
@@ -1678,6 +1683,7 @@ class AgentStreamExecutor:
             for turn in turns:
                 new_messages.extend(turn['messages'])
             self.messages = new_messages
+            self._inject_context_state_board(turns, reason="token-compress")
             return
 
         # Phase 2: Discard oldest turns, keeping at least 3
@@ -1704,11 +1710,58 @@ class AgentStreamExecutor:
         
         old_count = len(self.messages)
         self.messages = new_messages
+        self._inject_context_state_board(turns, reason="token-trim")
 
         logger.info(
             f"📦 渐进式压缩完成: {old_count} -> {len(self.messages)} 条消息，"
             f"~{current_tokens + system_tokens} tokens"
         )
+
+    def _inject_context_state_board(self, turns: List[Dict], reason: str = ""):
+        """Inject a compact operational state board into the latest user text."""
+        board = build_context_state_board(turns)
+        if not board:
+            return
+
+        marker = "[System: Current task state board]"
+        for msg in self.messages:
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "text":
+                    continue
+                text = block.get("text", "")
+                if marker in text:
+                    block["text"] = self._strip_context_state_board(text)
+
+        for msg in reversed(self.messages):
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    original = (block.get("text") or "").strip()
+                    block["text"] = f"{board}\n\n---\n\n{original}"
+                    logger.info(
+                        f"📌 Context state board injected ({len(board)} chars, reason={reason})"
+                    )
+                    return
+
+    @staticmethod
+    def _strip_context_state_board(text: str) -> str:
+        marker = "[System: Current task state board]"
+        if marker not in text:
+            return text
+        parts = text.split("\n\n---\n\n", 1)
+        if len(parts) == 2 and marker in parts[0]:
+            return parts[1].strip()
+        before, _, after = text.partition(marker)
+        if "\n\n---\n\n" in after:
+            return (before + after.split("\n\n---\n\n", 1)[1]).strip()
+        return before.strip()
 
     def _clear_session_db(self):
         """

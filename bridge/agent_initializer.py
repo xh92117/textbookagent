@@ -58,7 +58,6 @@ class AgentInitializer:
         
         # Initialize workspace
         from agent.prompt import ensure_workspace, load_context_files, PromptBuilder
-        from agent.prompt.builder import ContextFile
         workspace_files = ensure_workspace(workspace_root, create_templates=True)
         
         if session_id is None:
@@ -79,9 +78,6 @@ class AgentInitializer:
             workspace_root,
             files_to_load=["AGENT.md", "USER.md", "RULE.md", "BOOTSTRAP.md"],
         )
-        memory_bootstrap = self._build_memory_bootstrap_context(workspace_root, session_id)
-        if memory_bootstrap:
-            context_files.append(ContextFile(path="SYSTEM_MEMORY_BOOTSTRAP.md", content=memory_bootstrap))
         
         # Initialize skill manager
         skill_manager = self._initialize_skill_manager(workspace_root, session_id)

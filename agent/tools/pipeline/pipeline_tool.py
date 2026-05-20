@@ -62,6 +62,12 @@ class StartPipeline(BaseTool):
     def __init__(self, config: dict = None):
         self.config = config or {}
 
+    @staticmethod
+    def _tb_get(textbook, key: str, default=None):
+        if isinstance(textbook, dict):
+            return textbook.get(key, default)
+        return getattr(textbook, key, default)
+
     def execute(self, args: Dict[str, Any]) -> ToolResult:
         try:
             from bridge.textbook_bridge import get_bridge
@@ -96,17 +102,19 @@ class StartPipeline(BaseTool):
             if title:
                 textbooks = bridge.list_textbooks()
                 for tb in textbooks:
-                    if tb.get("title") == title or tb.get("id") == title:
-                        found_id = tb.get("id")
+                    tb_title = self._tb_get(tb, "title", "")
+                    tb_id = self._tb_get(tb, "id", "")
+                    if tb_title == title or tb_id == title:
+                        found_id = tb_id
                         logger.info(f"[StartPipeline] Found existing textbook by title: book_id={found_id}")
                         result = bridge.start_pipeline(found_id, sse_queue=None, requirement=research_evidence)
                         if "error" in result:
                             return ToolResult.fail(result["error"])
                         return ToolResult.success({
                             "book_id": found_id,
-                            "title": tb.get("title", title),
+                            "title": tb_title or title,
                             "status": result.get("status", "running"),
-                            "message": f"教材《{tb.get('title', title)}》编制管线已启动，共{tb.get('total_chapters', 10)}章。管线将在后台自动执行，从当前教材状态继续编制。",
+                            "message": f"教材《{tb_title or title}》编制管线已启动，共{self._tb_get(tb, 'total_chapters', 10)}章。管线将在后台自动执行，从当前教材状态继续编制。",
                             "pipeline_status": {
                                 "book_id": found_id,
                                 "status": result.get("status", "running"),

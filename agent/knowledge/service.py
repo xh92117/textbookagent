@@ -5,6 +5,7 @@ import shutil
 import time
 import hashlib
 import zipfile
+from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
@@ -272,7 +273,7 @@ class KnowledgeService:
             return True, ""
         if not url.startswith(("http://", "https://")):
             return False, "URL must be http or https."
-        if len(content) < 300:
+        if len(content) < 180:
             return False, "Content is too short to be a useful knowledge source."
         try:
             from urllib.parse import urlparse
@@ -499,7 +500,7 @@ class KnowledgeService:
 
     def _normalize_formula_blocks(self, text: str) -> str:
         lines = []
-        formula_re = re.compile(r"(?=.*[=+\-*/^])(?=.*[A-Za-zα-ωΑ-Ω])^[A-Za-zα-ωΑ-Ω0-9\s_{}()[\].,+\-*/^=<>≤≥%:;|]+$")
+        formula_re = re.compile(r"(?=.*[=+\-*/^])(?=.*[A-Za-z\u0391-\u03A9\u03B1-\u03C9])^[A-Za-z\u0391-\u03A9\u03B1-\u03C90-9\s_{}()[\].,+\-*/^=<>\u2264\u2265%:;|]+$")
         for raw in (text or "").splitlines():
             line = raw.strip()
             if line and formula_re.match(line) and len(line) <= 180 and not line.startswith("|"):
@@ -508,7 +509,65 @@ class KnowledgeService:
                 lines.append(raw)
         return "\n".join(lines)
 
+    def _normalization_terms(self, *values) -> list:
+        """Return stable search terms for metadata recall."""
+        terms = []
+        seen = set()
+        for value in values:
+            if isinstance(value, (list, tuple, set)):
+                candidates = value
+            else:
+                candidates = re.findall(r"[\u4e00-\u9fffA-Za-z0-9_-]{2,}", str(value or ""))
+            for item in candidates:
+                term = str(item or "").strip().lower()
+                term = re.sub(r"[_\-\s]+", "", term)
+                if len(term) < 2 or term in seen:
+                    continue
+                seen.add(term)
+                terms.append(term)
+                if len(terms) >= 80:
+                    return terms
+        return terms
+
+    def _asset_filter_config(self) -> dict:
+        return {
+            "enabled": bool(conf().get("knowledge_extract_assets", True)),
+            "skip_logo_watermark": bool(conf().get("knowledge_skip_logo_watermark_assets", True)),
+            "min_width": int(conf().get("knowledge_min_asset_width", 120) or 120),
+            "min_height": int(conf().get("knowledge_min_asset_height", 120) or 120),
+            "min_area": int(conf().get("knowledge_min_asset_area", 20000) or 20000),
+        }
+
+    def _image_size_from_bytes(self, data: bytes) -> tuple:
+        try:
+            from PIL import Image
+            with Image.open(BytesIO(data)) as img:
+                return img.size
+        except Exception:
+            return (0, 0)
+
+    def _should_keep_extracted_asset(self, data: bytes, name: str = "", width: int = 0, height: int = 0) -> tuple:
+        cfg = self._asset_filter_config()
+        if not cfg["enabled"]:
+            return False, "asset extraction disabled"
+        lower_name = (name or "").lower()
+        if cfg["skip_logo_watermark"] and any(token in lower_name for token in ("logo", "watermark", "stamp", "seal", "header", "footer")):
+            return False, "likely logo/watermark by name"
+        if not width or not height:
+            width, height = self._image_size_from_bytes(data)
+        if not width or not height:
+            return True, ""
+        area = width * height
+        if width < cfg["min_width"] or height < cfg["min_height"] or area < cfg["min_area"]:
+            return False, f"small image {width}x{height}"
+        aspect = max(width / max(height, 1), height / max(width, 1))
+        if cfg["skip_logo_watermark"] and aspect > 8:
+            return False, f"banner-like image {width}x{height}"
+        return True, ""
+
     def _extract_assets_for_wiki(self, file_path: str, wiki_dir: str, source_id: str) -> list:
+        if not self._asset_filter_config()["enabled"]:
+            return []
         asset_dir = os.path.join(wiki_dir, "assets", source_id, "images")
         assets = []
         ext = os.path.splitext(file_path)[1].lower()
@@ -520,11 +579,16 @@ class KnowledgeService:
                         suffix = os.path.splitext(name)[1].lower() or ".bin"
                         if suffix not in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".emf", ".wmf"):
                             continue
+                        data = zf.read(name)
+                        keep, reason = self._should_keep_extracted_asset(data, name=name)
+                        if not keep:
+                            logger.info(f"[KnowledgeService] DOCX image skipped ({reason}): {name}")
+                            continue
                         os.makedirs(asset_dir, exist_ok=True)
                         filename = f"image_{idx:03d}{suffix}"
                         out_path = os.path.join(asset_dir, filename)
                         with open(out_path, "wb") as f:
-                            f.write(zf.read(name))
+                            f.write(data)
                         rel = os.path.relpath(out_path, wiki_dir).replace("\\", "/")
                         assets.append({
                             "id": f"{source_id}_image_{idx:03d}",
@@ -546,6 +610,17 @@ class KnowledgeService:
                         data = extracted.get("image")
                         suffix = "." + (extracted.get("ext") or "png")
                         if not data:
+                            continue
+                        width = int(extracted.get("width") or image_info[2] or 0)
+                        height = int(extracted.get("height") or image_info[3] or 0)
+                        keep, reason = self._should_keep_extracted_asset(
+                            data,
+                            name=f"page_{page_idx + 1}_xref_{xref}{suffix}",
+                            width=width,
+                            height=height,
+                        )
+                        if not keep:
+                            logger.info(f"[KnowledgeService] PDF image skipped ({reason}): page {page_idx + 1}, xref {xref}")
                             continue
                         image_idx += 1
                         os.makedirs(asset_dir, exist_ok=True)
@@ -844,7 +919,7 @@ class KnowledgeService:
 
     def _split_markdown_sections(self, content: str) -> list:
         heading_re = re.compile(
-            r"^\s*(#{1,6})\s+(.+?)\s*$|^\s*((?:第\s*[\u4e00-\u4e5d\u5341\u767e\u5343\u4e07\d]+\s*[\u7ae0\u8282\u7bc7\u90e8]|Chapter\s+\d+)\s*[^\n]{0,80})\s*$",
+            r"^\s*(#{1,6})\s+(.+?)\s*$|^\s*((?:\u7b2c\s*[\u4e00-\u9fff\d]+\s*[\u7ae0\u8282\u7bc7\u90e8]|Chapter\s+\d+)\s*[^\n]{0,80})\s*$",
             re.I,
         )
         sections = []
@@ -900,8 +975,8 @@ class KnowledgeService:
         if stripped.startswith("#"):
             return True
         if primary:
-            return bool(re.search(r"第\s*[\u4e00-\u4e5d\u5341\u767e\u5343\u4e07\d]+\s*[\u7ae0\u8282\u7bc7\u90e8]|Chapter\s+\d+", stripped, re.I))
-        if any(ch in stripped for ch in "=<>≤≥+-*/^"):
+            return bool(re.search(r"\u7b2c\s*[\u4e00-\u9fff\d]+\s*[\u7ae0\u8282\u7bc7\u90e8]|Chapter\s+\d+", stripped, re.I))
+        if any(ch in stripped for ch in "=<>\u2264\u2265+-*/^"):
             return False
         chinese_count = len(re.findall(r"[\u4e00-\u9fff]", stripped))
         alpha_count = len(re.findall(r"[A-Za-z]", stripped))
@@ -987,13 +1062,13 @@ class KnowledgeService:
         text = (chunk.get("text") or "").strip()
         title = (chunk.get("title") or os.path.splitext(source_name)[0] or "Document").strip()
         compact = re.sub(r"\s+", " ", text)
-        first_sentence = re.split(r"(?<=[。！？.!?])\s*", compact, maxsplit=1)[0].strip()
+        first_sentence = re.split(r"(?<=[\u3002\uff01\uff1f.!?])\s*", compact, maxsplit=1)[0].strip()
         summary = first_sentence or compact[:180]
         if len(summary) > 220:
             summary = summary[:217].rstrip() + "..."
 
         words = re.findall(r"[\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_-]{1,}", compact)
-        stopwords = {"the", "and", "for", "with", "that", "this", "from", "into", "正文", "内容", "本文", "进行", "可以", "以及"}
+        stopwords = {"the", "and", "for", "with", "that", "this", "from", "into", "\u6b63\u6587", "\u5185\u5bb9", "\u672c\u6587", "\u8fdb\u884c", "\u53ef\u4ee5", "\u4ee5\u53ca"}
         keywords = []
         for word in words:
             normalized = word.strip()
@@ -1004,11 +1079,11 @@ class KnowledgeService:
             if len(keywords) >= 10:
                 break
 
-        topic_hint = "、".join(keywords[:4]) if keywords else title
+        topic_hint = "\u3001".join(keywords[:4]) if keywords else title
         use_when = f"Use this chunk when the task needs evidence, definitions, examples, or source details about {topic_hint}."
-        if re.search(r"步骤|流程|方法|算法|procedure|method|workflow", compact, re.I):
+        if re.search(r"\u6b65\u9aa4|\u6d41\u7a0b|\u65b9\u6cd5|\u7b97\u6cd5|procedure|method|workflow", compact, re.I):
             content_type = "procedure"
-        elif re.search(r"定义|概念|概述|原理|definition|concept", compact, re.I):
+        elif re.search(r"\u5b9a\u4e49|\u6982\u5ff5|\u6982\u8ff0|\u539f\u7406|definition|concept", compact, re.I):
             content_type = "concept"
         elif re.search(r"数据|实验|案例|结果|计算|表|公式|example|case|result", compact, re.I):
             content_type = "evidence"
@@ -1357,6 +1432,15 @@ class KnowledgeService:
                 "summary": metadata["summary"],
                 "use_when": metadata["use_when"],
                 "keywords": metadata["keywords"],
+                "normalized_terms": self._normalization_terms(
+                    chunk["title"],
+                    chunk.get("section", chunk["title"]),
+                    metadata["summary"],
+                    metadata["use_when"],
+                    metadata["keywords"],
+                    related_entities,
+                    metadata.get("source_quote", ""),
+                ),
                 "content_type": metadata["content_type"],
                 "source_quote": metadata.get("source_quote", ""),
                 "related_entities": related_entities,
@@ -1470,59 +1554,6 @@ class KnowledgeService:
             "assets": len(assets),
             "wiki_dir": wiki_dir,
         }
-
-    def parse_document(self, file_path: str, book_id: str = "") -> dict:
-        if not file_path or ".." in file_path:
-            raise ValueError("invalid file path")
-        if not os.path.isfile(file_path):
-            raise FileNotFoundError(f"file not found: {file_path}")
-        ext = os.path.splitext(file_path)[1].lower()
-        content = ""
-        if ext == ".md":
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-        elif ext in (".txt", ".csv", ".json"):
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read()
-        elif ext in (".pdf", ".doc", ".docx"):
-            content = self._extract_text(file_path)
-            if not content.strip():
-                content = f"[binary document: {os.path.basename(file_path)}]"
-        else:
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read()
-        if not content.strip():
-            return {"entries": [], "organized_count": 0}
-        all_entries = []
-        chunk_size = 6000
-        chunks = [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
-        max_chunks = 5
-        chunks = chunks[:max_chunks]
-        try:
-            llm = self._get_llm()
-            for idx, chunk in enumerate(chunks):
-                prompt = (
-                    "请分析以下文档内容，提取知识条目。对每个知识条目，输出JSON数组，每个元素包含：\n"
-                    "- title: 知识条目标题\n"
-                    "- summary: 简短摘要（50字以内）\n"
-                    "- keywords: 关键词列表\n"
-                    "- related_concepts: 关联概念列表\n"
-                    "- category: 分类（如concepts, methods, entities, principles等）\n\n"
-                    f"文档内容（第{idx + 1}/{len(chunks)}段）：\n" + chunk
-                )
-                messages = [
-                    {"role": "system", "content": "你是一个知识库整理助手，擅长从文档中提取结构化知识条目。只输出JSON数组，不要其他文字。"},
-                    {"role": "user", "content": prompt}
-                ]
-                response = llm.call(messages, temperature=0.3)
-                entries = self._parse_llm_json(response)
-                if entries:
-                    all_entries.extend(entries)
-        except Exception as e:
-            logger.warning(f"[KnowledgeService] parse_document LLM failed, using fallback: {e}")
-            all_entries = self._fallback_parse(content)
-        organized = self._save_entries(all_entries, book_id)
-        return {"entries": all_entries, "organized_count": len(organized)}
 
     def parse_document(self, file_path: str, book_id: str = "") -> dict:
         if not file_path or ".." in file_path:
