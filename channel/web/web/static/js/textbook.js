@@ -1568,7 +1568,22 @@ function loadSettings() {
         if (maxSteps) maxSteps.value = data.agent_max_steps || 20;
         var thinking = document.getElementById('settingThinking');
         if (thinking) thinking.checked = data.enable_thinking || false;
+        renderWorkspaceSettings(data.workspace || {});
     }).catch(function(e) { console.error('Failed to load settings:', e); });
+}
+
+function renderWorkspaceSettings(workspace) {
+    workspace = workspace || {};
+    var active = workspace.active_workspace || '';
+    var systemDir = workspace.system_dir || '';
+    var activeInput = document.getElementById('settingActiveWorkspace');
+    var splitInput = document.getElementById('settingWorkspaceSplit');
+    var currentLabel = document.getElementById('settingWorkspaceCurrent');
+    var systemLabel = document.getElementById('settingSystemDir');
+    if (activeInput) activeInput.value = active;
+    if (splitInput) splitInput.checked = workspace.workspace_split_enabled !== false;
+    if (currentLabel) currentLabel.textContent = active || '-';
+    if (systemLabel) systemLabel.textContent = systemDir || '-';
 }
 
 function saveSettings() {
@@ -1590,6 +1605,12 @@ function saveSettings() {
     if (maxTurns) updates.agent_max_context_turns = parseInt(maxTurns.value) || 20;
     if (maxSteps) updates.agent_max_steps = parseInt(maxSteps.value) || 20;
     if (thinking) updates.enable_thinking = thinking.checked;
+    var activeWorkspace = document.getElementById('settingActiveWorkspace');
+    var workspaceSplit = document.getElementById('settingWorkspaceSplit');
+    if (activeWorkspace && activeWorkspace.value.trim()) {
+        updates.active_workspace = activeWorkspace.value.trim();
+    }
+    if (workspaceSplit) updates.workspace_split_enabled = workspaceSplit.checked;
     var providerSelect = document.getElementById('settingModelProvider');
     var keyInput = document.getElementById('settingModelApiKey');
     if (providerSelect && keyInput) {

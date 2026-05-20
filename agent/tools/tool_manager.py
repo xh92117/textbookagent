@@ -266,7 +266,8 @@ class ToolManager:
 
     def _mcp_json_path(self) -> str:
         import os
-        workspace = os.path.expanduser(conf().get("agent_workspace", "~/textbook_workspace"))
+        from common.app_paths import active_workspace
+        workspace = active_workspace()
         return os.path.join(workspace, "mcp.json")
 
     def _read_mcp_json_signature(self):

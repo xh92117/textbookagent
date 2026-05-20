@@ -65,9 +65,8 @@ class CloudClient(LinkAIClient):
             try:
                 from agent.skills.manager import SkillManager
                 from agent.skills.service import SkillService
-                from config import conf
-                from common.utils import expand_path
-                workspace_root = expand_path(conf().get("agent_workspace", "~/textbook_workspace"))
+                from common.app_paths import active_workspace
+                workspace_root = active_workspace()
                 manager = SkillManager(custom_dir=os.path.join(workspace_root, "skills"))
                 self._skill_service = SkillService(manager)
                 logger.debug("[CloudClient] SkillService initialised")
@@ -81,9 +80,8 @@ class CloudClient(LinkAIClient):
         if self._memory_service is None:
             try:
                 from agent.memory.service import MemoryService
-                from config import conf
-                from common.utils import expand_path
-                workspace_root = expand_path(conf().get("agent_workspace", "~/textbook_workspace"))
+                from common.app_paths import system_dir
+                workspace_root = system_dir()
                 self._memory_service = MemoryService(workspace_root)
                 logger.debug("[CloudClient] MemoryService initialised")
             except Exception as e:
@@ -96,9 +94,8 @@ class CloudClient(LinkAIClient):
         if self._knowledge_service is None:
             try:
                 from agent.knowledge.service import KnowledgeService
-                from config import conf
-                from common.utils import expand_path
-                workspace_root = expand_path(conf().get("agent_workspace", "~/textbook_workspace"))
+                from common.app_paths import active_workspace
+                workspace_root = active_workspace()
                 self._knowledge_service = KnowledgeService(workspace_root)
                 logger.debug("[CloudClient] KnowledgeService initialised")
             except Exception as e:

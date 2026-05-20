@@ -29,6 +29,25 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(o
 def _get_config_path():
     return os.path.join(PROJECT_ROOT, "config.json")
 
+
+def _reset_workspace_dependent_singletons():
+    try:
+        import bridge.textbook_bridge as tb
+        tb._bridge_instance = None
+    except Exception:
+        pass
+    try:
+        import agent.memory.conversation_store as conversation_store
+        conversation_store._store_instance = None
+    except Exception:
+        pass
+    try:
+        import agent.memory.config as memory_config
+        memory_config._global_memory_config = None
+    except Exception:
+        pass
+
+
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi", ".mov", ".mkv"}
 
@@ -90,9 +109,8 @@ def _require_auth():
 
 
 def _get_upload_dir() -> str:
-    from common.utils import expand_path
-    ws_root = expand_path(conf().get("agent_workspace", "~/textbook_workspace"))
-    tmp_dir = os.path.join(ws_root, "tmp")
+    from common.app_paths import tmp_dir as app_tmp_dir
+    tmp_dir = app_tmp_dir()
     os.makedirs(tmp_dir, exist_ok=True)
     return tmp_dir
 
@@ -791,6 +809,7 @@ class WebChannel(ChatChannel):
             '/api/feishu/register', 'FeishuRegisterHandler',
             '/api/tools', 'ToolsHandler',
             '/api/skills', 'SkillsHandler',
+            '/api/workspace', 'WorkspaceHandler',
             '/api/memory', 'MemoryHandler',
             '/api/memory/content', 'MemoryContentHandler',
             '/api/memory/query', 'MemoryQueryHandler',
@@ -1171,6 +1190,7 @@ class ConfigHandler:
         "ark_api_key", "minimax_api_key", "linkai_api_key", "custom_api_key",
         "agent_max_context_tokens", "agent_max_context_turns", "agent_max_steps",
         "enable_thinking", "web_password",
+        "active_workspace", "system_workspace", "workspace_split_enabled",
     }
 
     @staticmethod
@@ -1311,10 +1331,21 @@ class ConfigHandler:
                 "api_keys": api_keys_masked,
                 "providers": providers,
                 "web_password_masked": masked_pwd,
+                "workspace": self._workspace_payload(),
             }, ensure_ascii=False)
         except Exception as e:
             logger.error(f"Error getting config: {e}")
             return json.dumps({"status": "error", "message": str(e)})
+
+    @staticmethod
+    def _workspace_payload():
+        from common.app_paths import active_workspace, system_dir, system_root
+        return {
+            "active_workspace": active_workspace(),
+            "system_root": system_root(),
+            "system_dir": system_dir(),
+            "workspace_split_enabled": bool(conf().get("workspace_split_enabled", True)),
+        }
 
     def POST(self):
         _require_auth()
@@ -1333,7 +1364,7 @@ class ConfigHandler:
                     continue
                 if key in ("agent_max_context_tokens", "agent_max_context_turns", "agent_max_steps"):
                     value = int(value)
-                if key in ("use_linkai", "enable_thinking"):
+                if key in ("use_linkai", "enable_thinking", "workspace_split_enabled"):
                     value = bool(value)
                 local_config[key] = value
                 applied[key] = value
@@ -1441,6 +1472,13 @@ class ConfigHandler:
                     logger.info("[WebChannel] Bridge bot routing reset due to config change")
                 except Exception as reset_err:
                     logger.warning(f"[WebChannel] Failed to reset bridge: {reset_err}")
+
+            workspace_keys = {"active_workspace", "workspace_dir", "system_workspace", "workspace_split_enabled"}
+            if any(k in applied for k in workspace_keys):
+                from common.app_paths import ensure_active_workspace, ensure_system_dir
+                ensure_active_workspace()
+                ensure_system_dir()
+                _reset_workspace_dependent_singletons()
 
             return json.dumps({"status": "success", "applied": applied}, ensure_ascii=False)
         except Exception as e:
@@ -2127,8 +2165,8 @@ class FeishuRegisterHandler:
 
 def _get_workspace_root():
     """Resolve the agent workspace directory."""
-    from common.utils import expand_path
-    return expand_path(conf().get("agent_workspace", "~/textbook_workspace"))
+    from common.app_paths import ensure_active_workspace
+    return ensure_active_workspace()
 
 
 def _get_textbook_bridge():
@@ -2299,14 +2337,80 @@ class SkillsHandler:
             return json.dumps({"status": "error", "message": str(e)})
 
 
+class WorkspaceHandler:
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            from common.app_paths import active_workspace, ensure_active_workspace, ensure_system_dir, system_dir, system_root
+            ensure_active_workspace()
+            ensure_system_dir()
+            return json.dumps({
+                "status": "success",
+                "active_workspace": active_workspace(),
+                "system_root": system_root(),
+                "system_dir": system_dir(),
+                "workspace_split_enabled": bool(conf().get("workspace_split_enabled", True)),
+            }, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Workspace API error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+    def POST(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            body = json.loads(web.data() or b"{}")
+            active = str(body.get("active_workspace", "") or body.get("workspace_dir", "")).strip()
+            split_enabled = body.get("workspace_split_enabled", None)
+            if not active:
+                return json.dumps({"status": "error", "message": "active_workspace is required"}, ensure_ascii=False)
+            active = os.path.abspath(os.path.expanduser(active))
+            from common.app_paths import system_root
+            if os.path.normcase(active) == os.path.normcase(system_root()):
+                return json.dumps({"status": "error", "message": "工作区不能直接选择系统区根目录"}, ensure_ascii=False)
+            os.makedirs(active, exist_ok=True)
+
+            local_config = conf()
+            local_config["active_workspace"] = active
+            if split_enabled is not None:
+                local_config["workspace_split_enabled"] = bool(split_enabled)
+
+            config_path = _get_config_path()
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    file_cfg = json.load(f)
+            else:
+                file_cfg = {}
+            file_cfg["active_workspace"] = active
+            if split_enabled is not None:
+                file_cfg["workspace_split_enabled"] = bool(split_enabled)
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(file_cfg, f, ensure_ascii=False, indent=2)
+
+            from common.app_paths import ensure_active_workspace, ensure_system_dir, system_dir
+            ensure_active_workspace()
+            ensure_system_dir()
+            _reset_workspace_dependent_singletons()
+            return json.dumps({
+                "status": "success",
+                "active_workspace": active,
+                "system_dir": system_dir(),
+            }, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Workspace update error: {e}", exc_info=True)
+            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+
+
 class MemoryHandler:
     def GET(self):
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.memory.service import MemoryService
+            from common.app_paths import system_dir
             params = web.input(page='1', page_size='20', category='memory')
-            workspace_root = _get_workspace_root()
+            workspace_root = system_dir()
             service = MemoryService(workspace_root)
             result = service.list_files(
                 page=int(params.page), page_size=int(params.page_size),
@@ -2324,10 +2428,11 @@ class MemoryContentHandler:
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.memory.service import MemoryService
+            from common.app_paths import system_dir
             params = web.input(filename='', category='memory')
             if not params.filename:
                 return json.dumps({"status": "error", "message": "filename required"})
-            workspace_root = _get_workspace_root()
+            workspace_root = system_dir()
             service = MemoryService(workspace_root)
             result = service.get_content(params.filename, category=params.category)
             return json.dumps({"status": "success", **result}, ensure_ascii=False)
@@ -2346,6 +2451,7 @@ class MemoryQueryHandler:
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.memory import MemoryQueryService
+            from common.app_paths import system_dir
             params = web.input(
                 session_id='',
                 process_id='',
@@ -2353,7 +2459,7 @@ class MemoryQueryHandler:
                 page_size='20',
                 include_textbook_history='1',
             )
-            service = MemoryQueryService(_get_workspace_root())
+            service = MemoryQueryService(system_dir())
             result = service.query(
                 session_id=params.session_id,
                 process_id=params.process_id,
@@ -2373,8 +2479,8 @@ class SchedulerHandler:
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.tools.scheduler.task_store import TaskStore
-            workspace_root = _get_workspace_root()
-            store_path = os.path.join(workspace_root, "scheduler", "tasks.json")
+            from common.app_paths import system_dir
+            store_path = os.path.join(system_dir(), "scheduler", "tasks.json")
             store = TaskStore(store_path)
             tasks = store.list_tasks()
             return json.dumps({"status": "success", "tasks": tasks}, ensure_ascii=False)

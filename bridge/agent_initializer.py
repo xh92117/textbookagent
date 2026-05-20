@@ -11,7 +11,6 @@ from typing import Optional, List
 from agent.protocol import Agent
 from agent.tools import ToolManager
 from common.log import logger
-from common.utils import expand_path
 
 
 class AgentInitializer:
@@ -45,9 +44,10 @@ class AgentInitializer:
             Initialized agent instance
         """
         from config import conf
-        
-        # Get workspace from config
-        workspace_root = expand_path(conf().get("agent_workspace", "~/textbook_workspace"))
+        from common.app_paths import ensure_active_workspace
+
+        # Business workspace used by tools and project files.
+        workspace_root = ensure_active_workspace()
         
         # Migrate API keys
         self._migrate_config_to_env(workspace_root)

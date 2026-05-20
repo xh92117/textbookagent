@@ -12,9 +12,8 @@ def main():
     book_id = args.get("book_id", "")
     action = args.get("action", "organize")
 
-    from common.utils import expand_path
-    from config import conf
-    workspace_root = expand_path(conf().get("agent_workspace", "~/textbook_workspace"))
+    from common.app_paths import active_workspace
+    workspace_root = active_workspace()
     service = KnowledgeService(workspace_root)
 
     if action == "organize":

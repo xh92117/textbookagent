@@ -6,7 +6,6 @@ import os
 from typing import Optional
 from config import conf
 from common.log import logger
-from common.utils import expand_path
 from bridge.context import Context, ContextType
 from bridge.reply import Reply, ReplyType
 
@@ -31,9 +30,8 @@ def init_scheduler(agent_bridge) -> bool:
         from agent.tools.scheduler.task_store import TaskStore
         from agent.tools.scheduler.scheduler_service import SchedulerService
         
-        # Get workspace from config
-        workspace_root = expand_path(conf().get("agent_workspace", "~/textbook_workspace"))
-        store_path = os.path.join(workspace_root, "scheduler", "tasks.json")
+        from common.app_paths import system_dir
+        store_path = os.path.join(system_dir(), "scheduler", "tasks.json")
         
         # Create task store
         _task_store = TaskStore(store_path)

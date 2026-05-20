@@ -100,6 +100,63 @@ select option {
     background: linear-gradient(90deg, var(--phase-outline), var(--phase-review));
 }
 
+.settings-block-workspace::before {
+    background: linear-gradient(90deg, var(--accent), var(--secondary));
+}
+
+.settings-workspace-summary {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+
+.settings-workspace-summary > div {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: color-mix(in srgb, var(--card) 76%, var(--accent) 7%);
+}
+
+.settings-workspace-summary span {
+    display: block;
+    font-size: 11px;
+    color: var(--muted-fg);
+    margin-bottom: 4px;
+}
+
+.settings-workspace-summary strong {
+    display: block;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--foreground);
+    word-break: break-all;
+}
+
+.settings-help {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--muted-fg);
+    line-height: 1.5;
+}
+
+.settings-check-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    color: var(--foreground);
+    font-size: 13px;
+    line-height: 1.45;
+    cursor: pointer;
+}
+
+.settings-check-row input {
+    width: 16px;
+    height: 16px;
+    margin-top: 1px;
+    flex: 0 0 auto;
+}
+
 .settings-model-card {
     display: flex;
     align-items: center;

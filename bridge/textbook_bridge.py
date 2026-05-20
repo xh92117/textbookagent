@@ -25,10 +25,8 @@ def get_bridge():
     global _bridge_instance
     with _bridge_lock:
         if _bridge_instance is None:
-            from config import conf
-            from common.utils import expand_path
-            data_dir = os.path.join(expand_path(conf().get("agent_workspace", "~/textbook_workspace")), "textbooks")
-            _bridge_instance = TextbookBridge(data_dir=data_dir)
+            from common.app_paths import textbooks_dir
+            _bridge_instance = TextbookBridge(data_dir=textbooks_dir())
         return _bridge_instance
 
 
@@ -183,16 +181,16 @@ class _LightweightLLM:
 class TextbookBridge:
 
     def __init__(self, data_dir=None):
+        workspace_root = None
         if data_dir is None:
-            from config import conf
-            from common.utils import expand_path
-            ws = expand_path(conf().get("agent_workspace", "~/textbook_workspace"))
-            data_dir = os.path.join(ws, "textbooks")
+            from common.app_paths import active_workspace, textbooks_dir
+            workspace_root = active_workspace()
+            data_dir = textbooks_dir()
         self.data_dir = data_dir
         os.makedirs(self.data_dir, exist_ok=True)
         self.textbooks = {}
         self.active_pipelines = {}
-        self._memory_manager = TextbookMemoryManager(self.data_dir)
+        self._memory_manager = TextbookMemoryManager(self.data_dir, workspace_root=workspace_root)
         self._sse_broadcast_queues = []
         self._sse_lock = threading.Lock()
 
@@ -914,7 +912,8 @@ class TextbookBridge:
         return default_preferences
 
     def save_chat_message(self, session_id: str, role: str, content: str, tool_calls: list = None) -> dict:
-        chat_dir = os.path.join(os.path.dirname(self.data_dir), "chat_history")
+        from common.app_paths import chat_history_dir
+        chat_dir = chat_history_dir()
         os.makedirs(chat_dir, exist_ok=True)
         chat_file = os.path.join(chat_dir, f"{session_id}.json")
         message = {
@@ -946,7 +945,8 @@ class TextbookBridge:
         return {"saved": True, "session_id": session_id, "count": len(messages)}
 
     def load_chat_history(self, session_id: str) -> list:
-        chat_dir = os.path.join(os.path.dirname(self.data_dir), "chat_history")
+        from common.app_paths import chat_history_dir
+        chat_dir = chat_history_dir()
         chat_file = os.path.join(chat_dir, f"{session_id}.json")
         if not os.path.exists(chat_file):
             return []
@@ -954,7 +954,8 @@ class TextbookBridge:
             return json.load(f)
 
     def list_chat_sessions(self) -> list:
-        chat_dir = os.path.join(os.path.dirname(self.data_dir), "chat_history")
+        from common.app_paths import chat_history_dir
+        chat_dir = chat_history_dir()
         if not os.path.exists(chat_dir):
             return []
         sessions = []
@@ -978,7 +979,8 @@ class TextbookBridge:
         return sessions
 
     def clear_chat_history(self, session_id: str) -> dict:
-        chat_dir = os.path.join(os.path.dirname(self.data_dir), "chat_history")
+        from common.app_paths import chat_history_dir
+        chat_dir = chat_history_dir()
         chat_file = os.path.join(chat_dir, f"{session_id}.json")
         if os.path.exists(chat_file):
             os.remove(chat_file)

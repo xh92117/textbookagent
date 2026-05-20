@@ -117,7 +117,8 @@ class PipelineRunner:
             return ""
         try:
             from agent.knowledge.retriever import KnowledgeRetriever
-            retriever = KnowledgeRetriever(self.memory_manager.workspace_dir, book_id)
+            workspace_root = getattr(self.memory_manager, "workspace_root", self.memory_manager.workspace_dir)
+            retriever = KnowledgeRetriever(workspace_root, book_id)
             return retriever.format_compact_evidence_pack(chapter_hint, metadata_limit=max(limit, 8), excerpt_limit=3, excerpt_chars=500)
         except Exception:
             return ""
@@ -260,6 +261,7 @@ class PipelineRunner:
 
         scheduler = ChapterScheduler(total_chapters)
         book_dir = os.path.join(self.memory_manager.workspace_dir, book_id) if self.memory_manager else ''
+        workspace_root = getattr(self.memory_manager, "workspace_root", self.memory_manager.workspace_dir) if self.memory_manager else os.path.dirname(os.path.dirname(book_dir))
         persistence = ChapterPersistence(book_dir) if book_dir else None
         context_builder = ContextPackageBuilder(self.memory_manager)
         orchestrator = ChapterOrchestrator()
@@ -387,7 +389,7 @@ class PipelineRunner:
                 router = VisualAssetRouter(
                     book_dir=book_dir,
                     book_id=book_id,
-                    workspace_root=self.memory_manager.workspace_dir if self.memory_manager else os.path.dirname(os.path.dirname(book_dir)),
+                    workspace_root=workspace_root,
                 )
                 for idx, req in enumerate(chart_reqs, start=1):
                     desc = req.get('description', '')

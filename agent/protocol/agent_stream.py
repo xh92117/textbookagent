@@ -1125,10 +1125,8 @@ class AgentStreamExecutor:
     def _record_work_state(self, tool_name: str, arguments: dict, status: str, result: str):
         try:
             from agent.memory.work_state import WorkStateManager
-            from common.utils import expand_path
-            from config import conf
-            workspace_root = expand_path(conf().get("agent_workspace", "~/textbook_workspace"))
-            mgr = WorkStateManager(workspace_root)
+            from common.app_paths import system_dir
+            mgr = WorkStateManager(system_dir())
             result_summary = ""
             if isinstance(result, str) and len(result) > 200:
                 result_summary = result[:200] + "..."

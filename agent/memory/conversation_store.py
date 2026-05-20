@@ -984,9 +984,8 @@ def get_conversation_store() -> ConversationStore:
             from agent.memory.config import get_default_memory_config
             db_path = get_default_memory_config().get_db_path()
         except Exception:
-            from common.utils import expand_path
-            from config import conf
-            db_path = Path(expand_path(conf().get("agent_workspace", "~/textbook_workspace"))) / "memory" / "long-term" / "index.db"
+            from common.app_paths import system_dir
+            db_path = Path(system_dir()) / "memory" / "long-term" / "index.db"
 
         _store_instance = ConversationStore(db_path)
         logger.debug(f"[ConversationStore] Using shared DB at: {db_path}")

@@ -12,9 +12,8 @@ from pathlib import Path
 
 
 def _default_workspace():
-    from common.utils import expand_path
-    from config import conf
-    return expand_path(conf().get("agent_workspace", "~/textbook_workspace"))
+    from common.app_paths import system_dir
+    return system_dir()
 
 
 @dataclass

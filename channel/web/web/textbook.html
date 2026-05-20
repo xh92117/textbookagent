@@ -528,6 +528,33 @@
                                 </label>
                             </div>
                         </div>
+                        <div class="settings-block settings-block-workspace">
+                            <h3 style="font-size:14px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px;">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 7V5a2 2 0 0 1 2-2h4l2 2h4"/></svg>
+                                工作区与系统区
+                            </h3>
+                            <div class="settings-workspace-summary">
+                                <div>
+                                    <span>当前工作区</span>
+                                    <strong id="settingWorkspaceCurrent">-</strong>
+                                </div>
+                                <div>
+                                    <span>系统区</span>
+                                    <strong id="settingSystemDir">-</strong>
+                                </div>
+                            </div>
+                            <div class="detail-section">
+                                <div class="detail-label">业务工作区路径</div>
+                                <input type="text" id="settingActiveWorkspace" class="settings-input" placeholder="例如 C:\Users\你\Documents\TextBook Workspace">
+                                <div class="settings-help">新建教材、知识库、导出文件和项目资产将写入该目录。</div>
+                            </div>
+                            <div class="detail-section">
+                                <label class="settings-check-row">
+                                    <input type="checkbox" id="settingWorkspaceSplit">
+                                    <span>启用系统区隔离，将记忆、会话、日志和任务状态放入 system/</span>
+                                </label>
+                            </div>
+                        </div>
                     </div>
                     <div style="background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:16px;font-size:12px;color:var(--fg);line-height:1.6;">
                         <strong>💡 提示：</strong>配置修改后将自动保存到 config.json 文件，并立即生效

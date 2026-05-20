@@ -53,10 +53,8 @@ class ChatService:
         process_recorder = None
         try:
             from agent.memory import RealtimeMemoryRecorder
-            from common.utils import expand_path
-            from config import conf
-            workspace_root = expand_path(conf().get("agent_workspace", "~/textbook_workspace"))
-            process_recorder = RealtimeMemoryRecorder(workspace_root)
+            from common.app_paths import system_dir
+            process_recorder = RealtimeMemoryRecorder(system_dir())
             process_recorder.start_process(session_id, process_id, query, channel_type=channel_type)
         except Exception as e:
             logger.debug(f"[ChatService] realtime process memory start skipped: {e}")

@@ -4,7 +4,6 @@ import copy
 import json
 import logging
 import os
-import pickle
 
 from common.log import logger
 
@@ -189,6 +188,10 @@ available_setting = {
     "subscribe_msg": "",  # 订阅消息, 支持: wechatmp, wechatmp_service, wechatcom_app
     "debug": False,  # 是否开启debug模式，开启后会打印更多日志
     "appdata_dir": "",  # 数据目录
+    "system_workspace": "",  # 系统区根目录；为空时沿用 agent_workspace
+    "active_workspace": "",  # 当前业务工作区；为空时沿用 agent_workspace
+    "workspace_dir": "",  # active_workspace 的兼容别名
+    "workspace_split_enabled": True,  # 是否将系统文件放入 system/ 子目录
     # 插件配置
     "plugin_trigger_prefix": "$",  # 规范插件提供聊天相关指令的前缀，建议不要和管理员指令前缀"#"冲突
     # 是否使用全局插件配置
@@ -274,9 +277,11 @@ class Config(dict):
         return self.user_datas[user]
 
     def load_user_datas(self):
+        json_path = os.path.join(get_appdata_dir(), "user_datas.json")
         try:
-            with open(os.path.join(get_appdata_dir(), "user_datas.pkl"), "rb") as f:
-                self.user_datas = pickle.load(f)
+            with open(json_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                self.user_datas = loaded if isinstance(loaded, dict) else {}
                 logger.debug("[Config] User datas loaded.")
         except FileNotFoundError as e:
             logger.debug("[Config] User datas file not found, ignore.")
@@ -286,8 +291,8 @@ class Config(dict):
 
     def save_user_datas(self):
         try:
-            with open(os.path.join(get_appdata_dir(), "user_datas.pkl"), "wb") as f:
-                pickle.dump(self.user_datas, f)
+            with open(os.path.join(get_appdata_dir(), "user_datas.json"), "w", encoding="utf-8") as f:
+                json.dump(self.user_datas, f, ensure_ascii=False, indent=2)
                 logger.info("[Config] User datas saved.")
         except Exception as e:
             logger.info("[Config] User datas error: {}".format(e))
@@ -351,15 +356,7 @@ def load_config():
             continue
         if name in available_setting:
             logger.info("[INIT] override config by environ args: {}={}".format(name, value))
-            try:
-                config[name] = eval(value)
-            except Exception:
-                if value == "false":
-                    config[name] = False
-                elif value == "true":
-                    config[name] = True
-                else:
-                    config[name] = value
+            config[name] = _parse_env_value(value)
 
     if config.get("debug", False):
         logger.setLevel(logging.DEBUG)
@@ -478,12 +475,32 @@ def read_file(path):
         return f.read()
 
 
+def _parse_env_value(value: str):
+    raw = str(value)
+    lowered = raw.lower()
+    if lowered == "false":
+        return False
+    if lowered == "true":
+        return True
+    if lowered == "null":
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return raw
+
+
 def conf():
     return config
 
 
 def get_appdata_dir():
-    data_path = os.path.join(get_root(), conf().get("appdata_dir", ""))
+    configured = conf().get("appdata_dir", "")
+    if configured:
+        data_path = os.path.join(get_root(), configured)
+    else:
+        from common.app_paths import system_dir
+        data_path = system_dir()
     if not os.path.exists(data_path):
         logger.info("[INIT] data path not exists, create it: {}".format(data_path))
         os.makedirs(data_path)

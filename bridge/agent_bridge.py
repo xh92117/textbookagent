@@ -436,10 +436,8 @@ class AgentBridge:
             process_recorder = None
             try:
                 from agent.memory import RealtimeMemoryRecorder
-                from common.utils import expand_path
-                from config import conf
-                workspace_root = expand_path(conf().get("agent_workspace", "~/textbook_workspace"))
-                process_recorder = RealtimeMemoryRecorder(workspace_root)
+                from common.app_paths import system_dir
+                process_recorder = RealtimeMemoryRecorder(system_dir())
                 process_recorder.start_process(session_id or "default", process_id, query, channel_type=(context.get("channel_type") or "") if context else "")
             except Exception as mem_err:
                 logger.debug(f"[AgentBridge] realtime process memory start skipped: {mem_err}")
@@ -980,10 +978,10 @@ class AgentBridge:
         """
         import os
         from dotenv import load_dotenv
-        from config import conf
+        from common.app_paths import active_workspace
 
         # Reload environment variables from .env file
-        workspace_root = expand_path(conf().get("agent_workspace", "~/textbook_workspace"))
+        workspace_root = active_workspace()
         env_file = os.path.join(workspace_root, '.env')
 
         if os.path.exists(env_file):

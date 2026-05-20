@@ -8,7 +8,6 @@ import threading
 from datetime import datetime
 from typing import Dict, List, Optional
 from pathlib import Path
-from common.utils import expand_path
 
 
 class TaskStore:
@@ -24,9 +23,8 @@ class TaskStore:
             store_path: Path to tasks.json file. Defaults to ~/cow/scheduler/tasks.json
         """
         if store_path is None:
-            from config import conf
-            ws = expand_path(conf().get("agent_workspace", "~/textbook_workspace"))
-            store_path = os.path.join(ws, "scheduler", "tasks.json")
+            from common.app_paths import system_dir
+            store_path = os.path.join(system_dir(), "scheduler", "tasks.json")
         
         self.store_path = store_path
         self.lock = threading.Lock()

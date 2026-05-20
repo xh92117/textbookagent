@@ -1015,13 +1015,12 @@ class CowCliPlugin(Plugin):
     def _create_standalone_flush_manager():
         """Create a MemoryFlushManager without a running agent (for pre-init dream)."""
         from pathlib import Path
-        from config import conf
-        from common.utils import expand_path
+        from common.app_paths import system_dir
         from agent.memory.summarizer import MemoryFlushManager
         from bridge.bridge import Bridge
         from bridge.agent_bridge import AgentLLMModel
 
-        workspace = Path(expand_path(conf().get("agent_workspace", "~/textbook_workspace")))
+        workspace = Path(system_dir())
         flush_mgr = MemoryFlushManager(workspace_dir=workspace)
         flush_mgr.llm_model = AgentLLMModel(Bridge())
         return flush_mgr
@@ -1065,11 +1064,8 @@ class CowCliPlugin(Plugin):
 
     def _knowledge_stats(self) -> str:
         from config import conf
-        from common.utils import expand_path
-        knowledge_dir = os.path.join(
-            expand_path(conf().get("agent_workspace", "~/textbook_workspace")),
-            "knowledge"
-        )
+        from common.app_paths import knowledge_dir as app_knowledge_dir
+        knowledge_dir = app_knowledge_dir()
         if not os.path.isdir(knowledge_dir):
             return "📚 知识库目录不存在\n\n💡 开启知识库: /knowledge on"
 
@@ -1112,12 +1108,8 @@ class CowCliPlugin(Plugin):
         return "\n".join(lines)
 
     def _knowledge_tree(self) -> str:
-        from config import conf
-        from common.utils import expand_path
-        knowledge_dir = os.path.join(
-            expand_path(conf().get("agent_workspace", "~/textbook_workspace")),
-            "knowledge"
-        )
+        from common.app_paths import knowledge_dir as app_knowledge_dir
+        knowledge_dir = app_knowledge_dir()
         if not os.path.isdir(knowledge_dir):
             return "📚 知识库目录不存在\n\n💡 开启知识库: /knowledge on"
 

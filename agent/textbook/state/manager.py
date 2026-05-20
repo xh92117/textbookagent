@@ -5,8 +5,15 @@ from .truth_files import TruthFileManager
 
 
 class TextbookMemoryManager:
-    def __init__(self, workspace_dir: str, base_memory_manager=None):
+    def __init__(self, workspace_dir: str, base_memory_manager=None, workspace_root: str = None):
         self.workspace_dir = workspace_dir
+        self.textbooks_dir = workspace_dir
+        if workspace_root:
+            self.workspace_root = workspace_root
+        elif os.path.basename(os.path.normpath(workspace_dir)).lower() == "textbooks":
+            self.workspace_root = os.path.dirname(os.path.normpath(workspace_dir))
+        else:
+            self.workspace_root = workspace_dir
         self.base_memory = base_memory_manager
         self._book_managers: Dict[str, TruthFileManager] = {}
 
