@@ -10,6 +10,7 @@ from agent.tools.bash.bash import Bash
 from agent.tools.ls.ls import Ls
 from agent.tools.send.send import Send
 from agent.tools.pipeline.pipeline_tool import StartPipeline
+from agent.tools.knowledge_capture.knowledge_capture import KnowledgeCapture
 
 # Import memory tools
 from agent.tools.memory.memory_search import MemorySearchTool
@@ -135,6 +136,7 @@ __all__ = [
     'Ls',
     'Send',
     'StartPipeline',
+    'KnowledgeCapture',
     'MemorySearchTool',
     'MemoryGetTool',
     'EnvConfig',

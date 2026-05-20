@@ -170,6 +170,127 @@ class KnowledgeService:
         rel_path = os.path.relpath(dest_path, self.knowledge_dir).replace("\\", "/")
         return {"name": file_name, "category": category, "path": rel_path, "size": file_size, "status": "ready"}
 
+    def save_web_source(
+        self,
+        url: str,
+        title: str,
+        content: str,
+        reason: str = "",
+        book_id: str = "",
+        tags: Optional[list] = None,
+        force: bool = False,
+    ) -> dict:
+        """Save a useful web source as Markdown in the knowledge sources directory."""
+        url = (url or "").strip()
+        title = (title or "").strip() or "Web source"
+        content = self._normalize_web_source_content(content)
+        reason = (reason or "").strip()
+        tags = [str(tag).strip() for tag in (tags or []) if str(tag).strip()]
+
+        useful, rejection_reason = self._is_useful_web_source(url, content, reason, force=force)
+        if not useful:
+            return {"useful": False, "reason": rejection_reason, "status": "skipped"}
+
+        target_dir = os.path.join(self._resolve_book_dir(book_id), "sources")
+        target_dir = os.path.normpath(target_dir)
+        knowledge_dir_norm = os.path.normpath(self.knowledge_dir)
+        if not target_dir.startswith(knowledge_dir_norm + os.sep) and target_dir != knowledge_dir_norm:
+            raise ValueError("target path outside knowledge dir")
+        os.makedirs(target_dir, exist_ok=True)
+
+        content_hash = hashlib.sha256(f"{url}\n{content}".encode("utf-8", errors="ignore")).hexdigest()[:12]
+        slug = self._safe_slug(title, "web")
+        file_name = f"web_{slug}_{content_hash}.md"
+        dest_path = os.path.join(target_dir, file_name)
+        if os.path.exists(dest_path):
+            rel_path = os.path.relpath(dest_path, self.knowledge_dir).replace("\\", "/")
+            return {
+                "useful": True,
+                "status": "exists",
+                "name": file_name,
+                "path": rel_path,
+                "size": os.path.getsize(dest_path),
+            }
+
+        captured_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+        markdown = self._format_web_source_markdown(
+            title=title,
+            url=url,
+            content=content,
+            reason=reason,
+            tags=tags,
+            captured_at=captured_at,
+            content_hash=content_hash,
+        )
+        with open(dest_path, "w", encoding="utf-8") as f:
+            f.write(markdown)
+
+        self.sync_compat_index(book_id)
+        rel_path = os.path.relpath(dest_path, self.knowledge_dir).replace("\\", "/")
+        return {
+            "useful": True,
+            "status": "saved",
+            "name": file_name,
+            "path": rel_path,
+            "size": os.path.getsize(dest_path),
+            "content_hash": content_hash,
+        }
+
+    def _normalize_web_source_content(self, content: str) -> str:
+        content = (content or "").replace("\r\n", "\n").replace("\r", "\n")
+        content = re.sub(r"\n{3,}", "\n\n", content)
+        return "\n".join(line.rstrip() for line in content.split("\n")).strip()
+
+    def _is_useful_web_source(self, url: str, content: str, reason: str, force: bool = False) -> tuple:
+        if force:
+            return True, ""
+        if not url.startswith(("http://", "https://")):
+            return False, "URL must be http or https."
+        if len(content) < 300:
+            return False, "Content is too short to be a useful knowledge source."
+        try:
+            from urllib.parse import urlparse
+            host = urlparse(url).netloc.lower()
+        except Exception:
+            host = ""
+        if any(search_host in host for search_host in ("google.", "baidu.", "bing.", "duckduckgo.", "search.brave.")):
+            return False, "Search result pages should not be stored as knowledge sources; fetch the original result URL."
+        if len(reason) < 12:
+            return False, "A usefulness reason is required so future agents know when to use this source."
+        return True, ""
+
+    def _format_web_source_markdown(
+        self,
+        title: str,
+        url: str,
+        content: str,
+        reason: str,
+        tags: list,
+        captured_at: str,
+        content_hash: str,
+    ) -> str:
+        safe_title = title.replace("\n", " ").strip()
+        tag_lines = "\n".join(f"  - {tag}" for tag in tags) if tags else "  - web"
+        return (
+            "---\n"
+            "source_type: web\n"
+            f"title: {json.dumps(safe_title, ensure_ascii=False)}\n"
+            f"url: {json.dumps(url, ensure_ascii=False)}\n"
+            f"captured_at: {captured_at}\n"
+            f"content_hash: {content_hash}\n"
+            "tags:\n"
+            f"{tag_lines}\n"
+            "---\n\n"
+            f"# {safe_title}\n\n"
+            "## Source\n\n"
+            f"- URL: {url}\n"
+            f"- Captured at: {captured_at}\n\n"
+            "## Use When\n\n"
+            f"{reason or 'Use this source when its topic matches the current textbook section.'}\n\n"
+            "## Extracted Content\n\n"
+            f"{content}\n"
+        )
+
     def list_sources(self, book_id: str = "") -> dict:
         if book_id and (".." in book_id or "/" in book_id or "\\" in book_id):
             raise ValueError("invalid book_id")

@@ -10,6 +10,7 @@ triggers:
   - 最新资料
 allowed-tools:
   - web_fetch
+  - knowledge_capture
 ---
 
 # Multi Search Engine
@@ -27,7 +28,8 @@ This skill follows the ClawHub `gpyangyoujun/multi-search-engine` pattern: choos
 3. Fetch search result pages with `web_fetch`.
 4. Open the most relevant result URLs with `web_fetch`.
 5. Extract only high-signal facts: definitions, constraints, examples, data, dates, standards, and source URLs.
-6. Write a compact evidence pack for downstream textbook writing.
+6. For each original source page that is credible, relevant, and reusable, call `knowledge_capture` to save it into `knowledge/<book_id>/sources` when a `book_id` is known, or `knowledge/sources` otherwise. Do not save Google/Baidu/Bing result pages.
+7. Write a compact evidence pack for downstream textbook writing.
 
 ## Search URLs
 
@@ -69,4 +71,5 @@ Return this structure to the writing agent:
 - Prefer primary sources, official docs, standards, papers, university course pages, and reputable publishers.
 - Do not copy long passages. Paraphrase and keep source URLs.
 - For textbook chapters, use search results to enrich content with grounded examples, not to inflate prose.
+- Save only durable, high-value pages with `knowledge_capture`; skip duplicates, thin pages, ads, and search-result pages.
 - If search fails, explicitly say which engine failed and continue with available local knowledge.

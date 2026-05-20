@@ -12,6 +12,7 @@ allowed-tools:
   - write
   - bash
   - web_fetch
+  - knowledge_capture
 ---
 
 # Chapter Writing
@@ -61,6 +62,7 @@ Write textbook chapter content based on the outline and context, including conce
   - Syntax: `write("<file_path>", "<content>")`
 - `bash`: Execute sandbox for chart generation (used with sandbox skill)
 - `web_fetch`: Fetch search result pages and source pages through the multi-search-engine skill
+- `knowledge_capture`: Save useful, reusable web source pages into the knowledge source directory
 
 ## Output Specification
 
@@ -85,6 +87,8 @@ Report the following upon completion:
 Before writing a chapter, run an enrichment pass unless the user explicitly says not to use external material.
 
 1. Use the `multi-search-engine` skill with `web_fetch` to build a small Web Evidence Pack for the chapter topic. Do not use Bocha `web_search`.
+   - When a fetched original source is credible and reusable for future chapters, save it with `knowledge_capture` and include why it is useful.
+   - Do not save search-result pages or low-signal pages.
 2. Read the LLM-WIKI knowledge base under `knowledge/_llm_wiki/` when present:
    - `index.json` contains `chunks` with `summary`, `use_when`, `keywords`, and `content_type`.
    - Select chunks by matching the chapter objective/key concepts against `use_when` and `keywords`.

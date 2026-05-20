@@ -14,6 +14,7 @@ allowed-tools:
   - read
   - write
   - web_fetch
+  - knowledge_capture
 ---
 
 # Full Textbook Generation
@@ -91,6 +92,7 @@ The pipeline must produce rich textbook chapters, not only dry generated prose.
 Before starting or while composing chapters:
 
 1. Use `multi-search-engine` with `web_fetch` for curriculum/reference search. Do not use Bocha `web_search`.
+   - Save credible reusable original source pages with `knowledge_capture`; do not save search-result pages.
 2. Use the LLM-WIKI knowledge routing structure (`knowledge/_llm_wiki/index.json`) to select relevant chunks by `summary`, `use_when`, and `keywords`.
 3. Ensure each chapter context package includes:
    - local outline and previous chapter summary
