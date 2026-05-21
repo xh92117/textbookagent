@@ -60,7 +60,7 @@ def test_textbook_chapter_append_replace_and_validate(tmp_path, monkeypatch):
     assert status["current_phase"] == "persist_chapter"
 
 
-def test_textbook_chapter_rejects_duplicate_append_and_large_chunks(tmp_path, monkeypatch):
+def test_textbook_chapter_appends_duplicate_heading_and_accepts_large_chunks(tmp_path, monkeypatch):
     bridge = _bridge(tmp_path)
     book = _book(bridge)
     monkeypatch.setattr("bridge.textbook_bridge.get_bridge", lambda: bridge)
@@ -82,8 +82,11 @@ def test_textbook_chapter_rejects_duplicate_append_and_large_chunks(tmp_path, mo
         "heading": "## 1.1 绪论",
         "content": "重复内容",
     })
-    assert duplicate.status == "error"
-    assert "already exists" in duplicate.result
+    assert duplicate.status == "success"
+    assert duplicate.result["action"] == "appended_existing"
+    chapter = bridge.get_chapter(book.id, 1)
+    assert "内容" in chapter
+    assert "重复内容" in chapter
 
     huge = tool.execute({
         "action": "write_chapter",
@@ -91,5 +94,5 @@ def test_textbook_chapter_rejects_duplicate_append_and_large_chunks(tmp_path, mo
         "chapter_num": 1,
         "content": "太长" * 7000,
     })
-    assert huge.status == "error"
-    assert "content too large" in huge.result
+    assert huge.status == "success"
+    assert huge.result["warning"].startswith("Large content accepted")

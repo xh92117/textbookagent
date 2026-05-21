@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import json
 from typing import Any, Dict, Tuple
 
 from agent.tools.base_tool import BaseTool, ToolResult
@@ -48,6 +49,7 @@ class TextbookChapterTool(BaseTool):
     }
 
     MAX_CHUNK_CHARS = 12000
+    WARN_CHUNK_CHARS = 12000
     MOJIBAKE_MARKERS = ("锛", "绗", "鏂", "鍦", "涓", "瀹", "鎴", "鐨", "鏄")
 
     def __init__(self, config: dict = None):
@@ -83,11 +85,6 @@ class TextbookChapterTool(BaseTool):
                 content = args.get("content", "")
                 if not isinstance(content, str):
                     return ToolResult.fail("content must be a string")
-                if len(content) > self.MAX_CHUNK_CHARS:
-                    return ToolResult.fail(
-                        f"content too large for one call ({len(content)} chars). "
-                        f"Split by section or subsection under {self.MAX_CHUNK_CHARS} chars."
-                    )
                 if action == "write_chapter":
                     return self._write_chapter(mgr, book_id, chapter_num, content, bool(args.get("completed", False)))
                 heading = str(args.get("heading", "")).strip()
@@ -116,20 +113,21 @@ class TextbookChapterTool(BaseTool):
         mgr.write_chapter(chapter_num, content)
         self._write_metadata(mgr, chapter_num, content, completed)
         self._update_status(mgr, book_id, chapter_num, "persist_chapter" if completed else "write_chapter")
-        return ToolResult.success(self._result_payload(mgr, book_id, chapter_num, "written", content, completed))
+        return ToolResult.success(self._result_payload(mgr, book_id, chapter_num, "written", content, completed, source_chars=len(content)))
 
     def _append_section(self, mgr, book_id: str, chapter_num: int, heading: str, content: str, completed: bool) -> ToolResult:
         existing = mgr.read_chapter(chapter_num)
         section = self._normalize_section(heading, content)
         if heading and self._find_heading(existing, heading)[0] >= 0:
-            return ToolResult.fail(
-                f"section already exists: {heading}. Use replace_section to update it instead of appending a duplicate."
-            )
-        combined = (existing.rstrip() + "\n\n" + section.rstrip() + "\n") if existing.strip() else section.rstrip() + "\n"
+            combined = self._append_to_existing_section(existing, heading, section)
+            action = "appended_existing"
+        else:
+            combined = (existing.rstrip() + "\n\n" + section.rstrip() + "\n") if existing.strip() else section.rstrip() + "\n"
+            action = "appended"
         mgr.write_chapter(chapter_num, combined)
         self._write_metadata(mgr, chapter_num, combined, completed)
         self._update_status(mgr, book_id, chapter_num, "persist_chapter" if completed else "write_chapter")
-        return ToolResult.success(self._result_payload(mgr, book_id, chapter_num, "appended", combined, completed, heading))
+        return ToolResult.success(self._result_payload(mgr, book_id, chapter_num, action, combined, completed, heading, source_chars=len(content)))
 
     def _replace_section(self, mgr, book_id: str, chapter_num: int, heading: str, content: str, completed: bool) -> ToolResult:
         existing = mgr.read_chapter(chapter_num)
@@ -141,7 +139,7 @@ class TextbookChapterTool(BaseTool):
         mgr.write_chapter(chapter_num, updated)
         self._write_metadata(mgr, chapter_num, updated, completed)
         self._update_status(mgr, book_id, chapter_num, "persist_chapter" if completed else "write_chapter")
-        return ToolResult.success(self._result_payload(mgr, book_id, chapter_num, "replaced", updated, completed, heading))
+        return ToolResult.success(self._result_payload(mgr, book_id, chapter_num, "replaced", updated, completed, heading, source_chars=len(content)))
 
     def _validate(self, mgr, book_id: str, chapter_num: int) -> Dict[str, Any]:
         path = mgr._chapter_path(chapter_num)
@@ -169,8 +167,18 @@ class TextbookChapterTool(BaseTool):
             **encoding,
         }
 
-    def _result_payload(self, mgr, book_id: str, chapter_num: int, action: str, content: str, completed: bool, heading: str = "") -> Dict[str, Any]:
-        return {
+    def _result_payload(
+        self,
+        mgr,
+        book_id: str,
+        chapter_num: int,
+        action: str,
+        content: str,
+        completed: bool,
+        heading: str = "",
+        source_chars: int = 0,
+    ) -> Dict[str, Any]:
+        payload = {
             "book_id": book_id,
             "chapter_num": chapter_num,
             "action": action,
@@ -181,6 +189,12 @@ class TextbookChapterTool(BaseTool):
             "encoding": self._validate_text(content),
             "message": "Chapter content saved through canonical UTF-8 textbook_chapter tool.",
         }
+        if source_chars > self.WARN_CHUNK_CHARS:
+            payload["warning"] = (
+                f"Large content accepted ({source_chars} chars). "
+                "For faster streaming, prefer subsection-sized calls next time."
+            )
+        return payload
 
     def _status_payload(self, mgr, book_id: str, chapter_num: int) -> Dict[str, Any]:
         return {
@@ -252,6 +266,23 @@ class TextbookChapterTool(BaseTool):
                 end = heading_end + match.start()
                 break
         return start, end
+
+    @classmethod
+    def _append_to_existing_section(cls, existing: str, heading: str, section: str) -> str:
+        start, end = cls._find_section_bounds(existing, heading)
+        if start < 0:
+            return (existing.rstrip() + "\n\n" + section.rstrip() + "\n") if existing.strip() else section.rstrip() + "\n"
+        body = section.strip()
+        if body.startswith(heading.strip()):
+            body = body[len(heading.strip()):].strip()
+        if not body:
+            return existing
+        prefix = existing[:end].rstrip()
+        suffix = existing[end:].lstrip()
+        updated = prefix + "\n\n" + body.rstrip() + "\n"
+        if suffix:
+            updated += "\n" + suffix
+        return updated
 
     @classmethod
     def _validate_text(cls, text: str) -> Dict[str, Any]:

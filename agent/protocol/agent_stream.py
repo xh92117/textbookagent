@@ -177,6 +177,37 @@ class AgentStreamExecutor:
         except Exception:
             return DEFAULT_LLM_STREAM_IDLE_TIMEOUT_SECONDS
 
+    def _tool_call_stall_timeout_seconds(self) -> int:
+        """Maximum seconds to wait for a finished-looking tool call tail packet.
+
+        Some OpenAI-compatible providers keep sending heartbeat/empty chunks
+        after a complete tool call has already streamed. The lower-level idle
+        guard cannot catch that because chunks are still arriving, so we stop
+        once the accumulated tool call arguments are stable and parseable.
+        """
+        try:
+            from config import conf
+            value = int(conf().get("agent_stream_tool_call_stall_timeout_seconds", 60) or 0)
+            return max(1, value) if value > 0 else 0
+        except Exception:
+            return 60
+
+    @staticmethod
+    def _tool_calls_parseable(tool_calls_buffer: Dict[int, Dict[str, str]]) -> bool:
+        if not tool_calls_buffer:
+            return False
+        for tc in tool_calls_buffer.values():
+            if not tc.get("name"):
+                return False
+            args_str = tc.get("arguments") or ""
+            if not args_str.strip():
+                return False
+            try:
+                json.loads(args_str)
+            except Exception:
+                return False
+        return True
+
     def _iter_stream_with_idle_timeout(self, stream, timeout_seconds: int):
         if not timeout_seconds:
             yield from stream
@@ -734,6 +765,9 @@ class AgentStreamExecutor:
         _first_chunk_received = False
         _stream_start_time = time.time()
         _content_len_at_last_log = 0
+        _tool_call_stall_timeout = self._tool_call_stall_timeout_seconds()
+        _last_meaningful_delta_time = time.time()
+        _last_tool_signature = ""
 
         full_content = ""
         full_reasoning = ""
@@ -751,6 +785,20 @@ class AgentStreamExecutor:
                     break
 
                 now = time.time()
+                if (
+                    _tool_call_stall_timeout
+                    and tool_calls_buffer
+                    and now - _last_meaningful_delta_time >= _tool_call_stall_timeout
+                    and self._tool_calls_parseable(tool_calls_buffer)
+                ):
+                    logger.warning(
+                        "[Agent] LLM tool-call stream stalled after "
+                        f"{int(now - _last_meaningful_delta_time)}s; "
+                        "closing partial stream with complete parseable tool call"
+                    )
+                    stop_reason = stop_reason or "tool_call_stall_timeout"
+                    break
+
                 if not _first_chunk_received and now - _last_heartbeat_time >= _LLM_THINKING_HEARTBEAT_INTERVAL:
                     _last_heartbeat_time = now
                     elapsed = int(now - getattr(self, '_llm_call_start_time', now))
@@ -817,6 +865,7 @@ class AgentStreamExecutor:
 
                     reasoning_delta = delta.get("reasoning_content") or ""
                     if reasoning_delta:
+                        _last_meaningful_delta_time = now
                         full_reasoning += reasoning_delta
                         if self._is_thinking_enabled():
                             self._emit_event("reasoning_update", {"delta": reasoning_delta})
@@ -824,6 +873,7 @@ class AgentStreamExecutor:
                     # Handle text content
                     content_delta = delta.get("content") or ""
                     if content_delta:
+                        _last_meaningful_delta_time = now
                         # Filter out <think> tags from content
                         filtered_delta = self._filter_think_tags(content_delta)
                         full_content += filtered_delta
@@ -851,6 +901,11 @@ class AgentStreamExecutor:
                                     tool_calls_buffer[index]["name"] = func["name"]
                                 if func.get("arguments"):
                                     tool_calls_buffer[index]["arguments"] += func["arguments"]
+
+                        tool_signature = json.dumps(tool_calls_buffer, sort_keys=True, ensure_ascii=False)
+                        if tool_signature != _last_tool_signature:
+                            _last_tool_signature = tool_signature
+                            _last_meaningful_delta_time = now
 
                     # Preserve _gemini_raw_parts for Gemini thoughtSignature round-trip
                     # (direct Gemini: list of parts; LinkAI proxy: base64 string of JSON parts)

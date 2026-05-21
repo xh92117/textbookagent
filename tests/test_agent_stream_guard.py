@@ -10,6 +10,7 @@ import config as config_module
 from bridge.agent_bridge import AgentLLMModel
 from bridge.textbook_bridge import _LightweightLLM
 from agent.protocol.agent_stream import AgentStreamExecutor
+from agent.protocol.models import LLMModel
 from agent.tools.bash.bash import Bash
 
 
@@ -80,6 +81,53 @@ def test_agent_executor_max_steps_summary_uses_local_excerpt():
     ]
 
     assert "2.1-2.3" in executor._latest_assistant_text_excerpt()
+
+
+def test_agent_executor_closes_stalled_parseable_tool_call(monkeypatch):
+    monkeypatch.setattr(
+        config_module,
+        "conf",
+        lambda: {
+            "agent_stream_idle_timeout_seconds": 10,
+            "agent_stream_tool_call_stall_timeout_seconds": 1,
+        },
+    )
+
+    class FakeModel(LLMModel):
+        def call_stream(self, request):
+            yield {
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call_test",
+                            "function": {
+                                "name": "textbook_chapter",
+                                "arguments": '{"action":"status","book_id":"tb_1","chapter_num":4}',
+                            },
+                        }]
+                    }
+                }]
+            }
+            while True:
+                time.sleep(0.2)
+                yield {"choices": [{"delta": {}}]}
+
+    executor = AgentStreamExecutor(
+        agent=None,
+        model=FakeModel(),
+        system_prompt="",
+        tools=[],
+        messages=[],
+    )
+
+    started = time.time()
+    content, tool_calls = executor._call_llm_stream(retry_on_empty=False)
+
+    assert content == ""
+    assert tool_calls[0]["name"] == "textbook_chapter"
+    assert tool_calls[0]["arguments"]["chapter_num"] == 4
+    assert time.time() - started < 4
 
 
 def test_bash_rejects_powershell_add_content_for_utf8_safety():
