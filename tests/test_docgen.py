@@ -1,6 +1,7 @@
 import sys
 import os
 import tempfile
+from docx.oxml.ns import qn
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -13,8 +14,8 @@ def test_style_templates():
     academic = get_template("academic")
     assert academic.name == "academic"
     assert academic.heading1_font == "黑体"
-    assert academic.heading1_size == 22
-    assert academic.body_font == "宋体"
+    assert academic.heading1_size == 16
+    assert academic.body_font == "仿宋"
     assert academic.body_size == 12
 
     modern = get_template("modern")
@@ -74,7 +75,7 @@ def test_converter_paragraph():
     assert italic_run is not None
     assert italic_run.italic is True
     assert code_run is not None
-    assert code_run.font.name == converter.template.code_font
+    assert code_run.font.name == "Times New Roman"
 
     assert p.paragraph_format.line_spacing == converter.template.body_line_spacing
 
@@ -86,7 +87,7 @@ def test_converter_code_block():
 
     last_p = converter.doc.paragraphs[-1]
     assert last_p.text == code
-    assert last_p.runs[0].font.name == converter.template.code_font
+    assert last_p.runs[0].font.name == "Times New Roman"
     assert last_p.paragraph_format.left_indent is not None
 
 
@@ -108,6 +109,48 @@ def test_converter_table():
 
     for run in table.rows[0].cells[0].paragraphs[0].runs:
         assert run.bold is True
+
+
+def test_converter_export_style_requirements():
+    converter = MarkdownToWordConverter()
+    converter.convert_markdown(
+        "# 一级标题 A1\n\n"
+        "正文 ABC 123\n\n"
+        "### 三级标题 B2\n\n"
+        "表1 示例表\n\n"
+        "| A | B |\n|---|---|\n| 1 | 2 |\n\n"
+        "注：这是注释。"
+    )
+
+    h1 = next(p for p in converter.doc.paragraphs if p.text == "一级标题 A1")
+    assert h1.paragraph_format.line_spacing == 1.5
+    assert h1.paragraph_format.space_before.pt == 8
+    assert h1.paragraph_format.space_after.pt == 8
+    assert h1.runs[0].font.size.pt == 16
+    assert h1.runs[0].bold is True
+    assert h1.runs[0]._element.rPr.rFonts.get(qn("w:ascii")) == "Times New Roman"
+    assert h1.runs[0]._element.rPr.rFonts.get(qn("w:eastAsia")) == "黑体"
+
+    body = next(p for p in converter.doc.paragraphs if p.text == "正文 ABC 123")
+    assert body.paragraph_format.line_spacing == 1.5
+    assert body.runs[0].font.size.pt == 12
+    assert body.runs[0]._element.rPr.rFonts.get(qn("w:ascii")) == "Times New Roman"
+    assert body.runs[0]._element.rPr.rFonts.get(qn("w:eastAsia")) == "仿宋"
+
+    h3 = next(p for p in converter.doc.paragraphs if p.text == "三级标题 B2")
+    assert h3.runs[0].bold in (False, None)
+    assert h3.runs[0].font.size.pt == 16
+
+    note = next(p for p in converter.doc.paragraphs if p.text.startswith("注："))
+    assert note.runs[0].font.size.pt == 10.5
+    assert note.runs[0]._element.rPr.rFonts.get(qn("w:eastAsia")) == "宋体"
+
+    table_para = converter.doc.tables[0].rows[1].cells[0].paragraphs[0]
+    assert table_para.paragraph_format.first_line_indent.pt == 0
+    assert table_para.paragraph_format.alignment == 1
+    assert table_para.paragraph_format.line_spacing == 1.0
+    assert table_para.runs[0].font.size.pt == 10.5
+    assert table_para.runs[0]._element.rPr.rFonts.get(qn("w:eastAsia")) == "仿宋"
 
 
 def test_converter_list():

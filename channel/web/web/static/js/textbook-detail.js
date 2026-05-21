@@ -257,20 +257,37 @@ function toggleChapterEditMode() {
     var saveBtn = document.getElementById('btnSaveChapter');
     var area = document.getElementById('chapterContentArea');
     if (chapterEditMode) {
-        btn.innerHTML = '<i class="fas fa-eye"></i> 预览';
+        btn.innerHTML = '<i class="fas fa-times"></i> 取消';
         saveBtn.style.display = '';
         var content = '';
         fetch('/api/textbook/' + currentBookId + '/chapters/' + currentChapterNum)
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 content = (data.status === 'success' && data.content) ? data.content : '';
-                area.innerHTML = '<textarea id="chapterEditor" style="width:100%;min-height:400px;padding:12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-mono);resize:vertical;background:var(--card);color:var(--fg);box-sizing:border-box;">' + content.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</textarea>';
+                area.innerHTML =
+                    '<div class="chapter-editor-shell">' +
+                        '<div class="chapter-editor-actions">' +
+                            '<div class="chapter-editor-status">正在编辑，修改后请点击保存</div>' +
+                            '<div class="chapter-editor-buttons">' +
+                                '<button class="pipeline-btn" type="button" onclick="cancelChapterEdit()"><i class="fas fa-times"></i> 取消</button>' +
+                                '<button class="pipeline-btn primary" type="button" onclick="saveChapterEdit()"><i class="fas fa-save"></i> 保存</button>' +
+                            '</div>' +
+                        '</div>' +
+                        '<textarea id="chapterEditor" class="chapter-editor-textarea">' + escapeHtml(content) + '</textarea>' +
+                    '</div>';
             });
     } else {
-        btn.innerHTML = '<i class="fas fa-edit"></i> 编辑';
-        saveBtn.style.display = 'none';
-        loadChapterContent(currentChapterNum, null);
+        cancelChapterEdit();
     }
+}
+
+function cancelChapterEdit() {
+    chapterEditMode = false;
+    var btn = document.getElementById('btnToggleEdit');
+    var saveBtn = document.getElementById('btnSaveChapter');
+    if (btn) btn.innerHTML = '<i class="fas fa-edit"></i> 编辑';
+    if (saveBtn) saveBtn.style.display = 'none';
+    if (currentChapterNum) loadChapterContent(currentChapterNum, null);
 }
 
 function saveChapterEdit() {

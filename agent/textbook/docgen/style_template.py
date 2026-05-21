@@ -10,24 +10,24 @@ class StyleTemplate:
     margin_left: float = 3.17
     margin_right: float = 3.17
     heading1_font: str = "黑体"
-    heading1_size: int = 22
+    heading1_size: int = 16
     heading1_bold: bool = True
     heading1_alignment: str = "center"
     heading2_font: str = "黑体"
     heading2_size: int = 16
     heading2_bold: bool = True
     heading3_font: str = "黑体"
-    heading3_size: int = 14
-    heading3_bold: bool = True
-    body_font: str = "宋体"
+    heading3_size: int = 16
+    heading3_bold: bool = False
+    body_font: str = "仿宋"
     body_size: int = 12
     body_line_spacing: float = 1.5
     body_first_line_indent: int = 2
     code_font: str = "Consolas"
     code_size: int = 10
     code_background: str = "F5F5F5"
-    caption_font: str = "宋体"
-    caption_size: int = 10
+    caption_font: str = "仿宋"
+    caption_size: float = 10.5
     caption_alignment: str = "center"
 
 ACADEMIC_TEMPLATE = StyleTemplate(name="academic")

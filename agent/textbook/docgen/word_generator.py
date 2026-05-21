@@ -39,6 +39,9 @@ class MarkdownToWordConverter:
             style.font.size = Pt(size)
             style.font.bold = bold
             style.font.color.rgb = RGBColor(0, 0, 0)
+            style.paragraph_format.line_spacing = 1.5
+            style.paragraph_format.space_before = Pt(size * 0.5)
+            style.paragraph_format.space_after = Pt(size * 0.5)
             if align == "center":
                 style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
             rpr = style.element.get_or_add_rPr()
@@ -46,55 +49,107 @@ class MarkdownToWordConverter:
             if rFonts is None:
                 rFonts = rpr.makeelement(qn('w:rFonts'), {})
                 rpr.insert(0, rFonts)
+            rFonts.set(qn('w:ascii'), 'Times New Roman')
+            rFonts.set(qn('w:hAnsi'), 'Times New Roman')
             rFonts.set(qn('w:eastAsia'), font)
+
+        normal = self.doc.styles['Normal']
+        normal.font.name = self.template.body_font
+        normal.font.size = Pt(self.template.body_size)
+        normal.paragraph_format.line_spacing = self.template.body_line_spacing
+        rpr = normal.element.get_or_add_rPr()
+        rFonts = rpr.find(qn('w:rFonts'))
+        if rFonts is None:
+            rFonts = rpr.makeelement(qn('w:rFonts'), {})
+            rpr.insert(0, rFonts)
+        rFonts.set(qn('w:ascii'), 'Times New Roman')
+        rFonts.set(qn('w:hAnsi'), 'Times New Roman')
+        rFonts.set(qn('w:eastAsia'), self.template.body_font)
+
+    @staticmethod
+    def _set_run_font(run, east_asia: str, size: float, *, ascii_font: str = "Times New Roman", bold=None, italic=None):
+        run.font.name = ascii_font
+        run.font.size = Pt(size)
+        if bold is not None:
+            run.bold = bold
+        if italic is not None:
+            run.italic = italic
+        rpr = run._element.get_or_add_rPr()
+        rFonts = rpr.find(qn('w:rFonts'))
+        if rFonts is None:
+            rFonts = rpr.makeelement(qn('w:rFonts'), {})
+            rpr.insert(0, rFonts)
+        rFonts.set(qn('w:ascii'), ascii_font)
+        rFonts.set(qn('w:hAnsi'), ascii_font)
+        rFonts.set(qn('w:eastAsia'), east_asia)
+
+    @staticmethod
+    def _set_paragraph_spacing(paragraph, *, line_spacing=1.5, before=0, after=0, first_line_indent=None, alignment=None):
+        paragraph.paragraph_format.line_spacing = line_spacing
+        paragraph.paragraph_format.space_before = Pt(before)
+        paragraph.paragraph_format.space_after = Pt(after)
+        if first_line_indent is not None:
+            paragraph.paragraph_format.first_line_indent = first_line_indent
+        if alignment is not None:
+            paragraph.paragraph_format.alignment = alignment
 
     def add_title(self, title: str):
         p = self.doc.add_heading(title, level=0)
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for run in p.runs:
+            self._set_run_font(run, "黑体", 16, bold=True)
+        self._set_paragraph_spacing(p, line_spacing=1.5, before=8, after=8)
 
     def add_heading(self, text: str, level: int):
         if level < 1 or level > 3:
             level = 3
         heading = self.doc.add_heading('', level=level)
         self._add_formatted_runs(heading, text)
+        east_asia = "黑体"
+        bold = level in (1, 2)
+        for run in heading.runs:
+            self._set_run_font(run, east_asia, 16, bold=bold)
+        self._set_paragraph_spacing(heading, line_spacing=1.5, before=8, after=8)
 
     def add_paragraph(self, text: str):
         p = self.doc.add_paragraph()
         self._add_formatted_runs(p, text)
-        p.paragraph_format.first_line_indent = Pt(self.template.body_size * self.template.body_first_line_indent)
-        p.paragraph_format.line_spacing = self.template.body_line_spacing
+        self._style_body_paragraph(p)
         return p
+
+    def _style_body_paragraph(self, paragraph):
+        self._set_paragraph_spacing(
+            paragraph,
+            line_spacing=1.5,
+            first_line_indent=Pt(self.template.body_size * self.template.body_first_line_indent),
+        )
+        for run in paragraph.runs:
+            self._set_run_font(run, self.template.body_font, self.template.body_size)
 
     def _add_formatted_runs(self, paragraph, text: str):
         parts = re.split(r'(\*\*.*?\*\*|\*.*?\*|`[^`]+`)', text)
         for part in parts:
             if part.startswith('**') and part.endswith('**'):
                 run = paragraph.add_run(part[2:-2])
-                run.bold = True
-                run.font.name = self.template.body_font
-                run.font.size = Pt(self.template.body_size)
+                self._set_run_font(run, self.template.body_font, self.template.body_size, bold=True)
             elif part.startswith('*') and part.endswith('*') and not part.startswith('**'):
                 run = paragraph.add_run(part[1:-1])
-                run.italic = True
-                run.font.name = self.template.body_font
-                run.font.size = Pt(self.template.body_size)
+                self._set_run_font(run, self.template.body_font, self.template.body_size, italic=True)
             elif part.startswith('`') and part.endswith('`'):
                 run = paragraph.add_run(part[1:-1])
-                run.font.name = self.template.code_font
-                run.font.size = Pt(self.template.code_size)
+                self._set_run_font(run, self.template.body_font, self.template.body_size)
             else:
                 run = paragraph.add_run(part)
-                run.font.name = self.template.body_font
-                run.font.size = Pt(self.template.body_size)
+                self._set_run_font(run, self.template.body_font, self.template.body_size)
 
     def add_code_block(self, code: str, language: str = ""):
         p = self.doc.add_paragraph()
         run = p.add_run(code)
-        run.font.name = self.template.code_font
-        run.font.size = Pt(self.template.code_size)
+        self._set_run_font(run, self.template.body_font, self.template.body_size)
         p.paragraph_format.left_indent = Cm(1.0)
         p.paragraph_format.space_before = Pt(6)
         p.paragraph_format.space_after = Pt(6)
+        p.paragraph_format.line_spacing = 1.5
 
     def add_image(self, image_path: str, caption: str = "", width: float = None):
         if os.path.exists(image_path):
@@ -105,8 +160,9 @@ class MarkdownToWordConverter:
             if caption:
                 p = self.doc.add_paragraph(caption)
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                p.runs[0].font.name = self.template.caption_font
-                p.runs[0].font.size = Pt(self.template.caption_size)
+                self._set_paragraph_spacing(p, line_spacing=1.5, after=5.25, alignment=WD_ALIGN_PARAGRAPH.CENTER)
+                for run in p.runs:
+                    self._set_run_font(run, "仿宋", 10.5)
 
     def add_table(self, headers: List[str], rows: List[List[str]]):
         table = self.doc.add_table(rows=len(rows)+1, cols=len(headers))
@@ -114,29 +170,64 @@ class MarkdownToWordConverter:
         for i, header in enumerate(headers):
             cell = table.rows[0].cells[i]
             cell.text = header
-            for run in cell.paragraphs[0].runs:
-                run.bold = True
         for r, row in enumerate(rows):
             for c, val in enumerate(row):
                 table.rows[r+1].cells[c].text = val
+        self._style_table(table)
+
+    def _style_table(self, table):
+        for row_idx, row in enumerate(table.rows):
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    self._set_paragraph_spacing(
+                        paragraph,
+                        line_spacing=1.0,
+                        first_line_indent=Pt(0),
+                        alignment=WD_ALIGN_PARAGRAPH.CENTER,
+                    )
+                    for run in paragraph.runs:
+                        self._set_run_font(run, "仿宋", 10.5)
+                        if row_idx == 0:
+                            run.bold = True
 
     def add_bullet_list(self, items: List[str]):
         for item in items:
             p = self.doc.add_paragraph(style='List Bullet')
             self._add_formatted_runs(p, item)
+            self._style_body_paragraph(p)
 
     def add_numbered_list(self, items: List[str]):
         for item in items:
             p = self.doc.add_paragraph(style='List Number')
             self._add_formatted_runs(p, item)
+            self._style_body_paragraph(p)
 
     def add_quote(self, text: str):
         p = self.doc.add_paragraph()
         p.paragraph_format.left_indent = Cm(1.5)
         self._add_formatted_runs(p, text)
+        self._style_body_paragraph(p)
         for run in p.runs:
             run.italic = True
             run.font.color.rgb = RGBColor(100, 100, 100)
+
+    def add_caption(self, text: str, kind: str = "figure"):
+        p = self.doc.add_paragraph()
+        p.add_run(text)
+        before = 5.25 if kind == "table" else 0
+        after = 5.25 if kind == "figure" else 0
+        self._set_paragraph_spacing(p, line_spacing=1.5, before=before, after=after, alignment=WD_ALIGN_PARAGRAPH.CENTER)
+        for run in p.runs:
+            self._set_run_font(run, "仿宋", 10.5)
+        return p
+
+    def add_note(self, text: str):
+        p = self.doc.add_paragraph()
+        p.add_run(text)
+        self._set_paragraph_spacing(p, line_spacing=1.5)
+        for run in p.runs:
+            self._set_run_font(run, "宋体", 10.5)
+        return p
 
     def convert_markdown(self, markdown_text: str):
         lines = markdown_text.split('\n')
@@ -212,6 +303,12 @@ class MarkdownToWordConverter:
                     caption = match.group(1)
                     path = match.group(2)
                     self.add_image(path, caption)
+            elif re.match(r'^(表|Table)\s*[\d一二三四五六七八九十]+', stripped, re.IGNORECASE):
+                self.add_caption(stripped, kind="table")
+            elif re.match(r'^(图|Figure)\s*[\d一二三四五六七八九十]+', stripped, re.IGNORECASE):
+                self.add_caption(stripped, kind="figure")
+            elif re.match(r'^注[:：]', stripped):
+                self.add_note(stripped)
             else:
                 self.add_paragraph(stripped)
 
