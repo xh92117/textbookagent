@@ -1,6 +1,7 @@
 import json
 import hashlib
 import hmac
+import os
 import time
 from typing import Any, Dict
 
@@ -78,3 +79,15 @@ def require_auth():
             {"Content-Type": "application/json; charset=utf-8"},
             json.dumps({"status": "error", "message": "Unauthorized"}),
         )
+
+
+def get_workspace_root() -> str:
+    from common.app_paths import ensure_active_workspace
+    return ensure_active_workspace()
+
+
+def get_upload_dir() -> str:
+    from common.app_paths import tmp_dir as app_tmp_dir
+    tmp_dir = app_tmp_dir()
+    os.makedirs(tmp_dir, exist_ok=True)
+    return tmp_dir
