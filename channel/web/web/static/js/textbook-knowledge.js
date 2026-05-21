@@ -1,31 +1,40 @@
 // Knowledge base management, graph, organize progress, file browser.
 // Split from textbook.js; loaded as classic scripts to preserve existing globals.
 function loadKnowledgePage() {
-    loadKnowledgeBookSelector();
-    loadKnowledgeSources();
-    loadKnowledgeStatus();
-    loadKnowledgeGraph('', 'knowledgeGraphArea');
+    var select = document.getElementById('knowledgeBookSelect');
+    var preferredBookId = select ? select.value : '';
+    loadKnowledgeBookSelector(preferredBookId).then(function(bookId) {
+        var selectedBookId = bookId || preferredBookId || '';
+        loadKnowledgeSources(selectedBookId);
+        loadKnowledgeStatus(selectedBookId);
+        loadKnowledgeGraph(selectedBookId, 'knowledgeGraphArea');
+    });
     initKnowledgeBrowserResize();
 }
 
-function loadKnowledgeBookSelector() {
+function loadKnowledgeBookSelector(preferredBookId) {
     var select = document.getElementById('knowledgeBookSelect');
-    if (!select) return;
-    fetch(API_BASE + '/api/textbook')
+    if (!select) return Promise.resolve(preferredBookId || '');
+    return fetch(API_BASE + '/api/textbook')
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data.status === 'success') {
                 var books = data.textbooks || [];
-                var currentVal = select.value;
+                var currentVal = preferredBookId || select.value;
                 var html = '<option value="">全部知识库</option>';
                 books.forEach(function(b) {
                     html += '<option value="' + escapeHtml(b.id) + '">' + escapeHtml(b.title || b.id) + '</option>';
                 });
                 select.innerHTML = html;
                 if (currentVal) select.value = currentVal;
+                return select.value || '';
             }
+            return preferredBookId || select.value || '';
         })
-        .catch(function(err) { console.error('Load book selector error:', err); });
+        .catch(function(err) {
+            console.error('Load book selector error:', err);
+            return preferredBookId || select.value || '';
+        });
 }
 
 function onKnowledgeBookChange() {
@@ -286,20 +295,25 @@ function renderKnowledgeGraph(container, nodes, edges) {
 }
 
 function loadKnowledgeSources(bookId) {
-    let url = '/api/knowledge/list';
+    let url = API_BASE + '/api/knowledge/list';
     if (bookId) url += '?book_id=' + encodeURIComponent(bookId);
     fetch(url)
         .then(r => r.json())
         .then(data => {
             if (data.status === 'success') {
-                renderKnowledgeSources(data.root_files || [], data.tree || [], bookId || '');
+                renderKnowledgeSources((data.root_files || data.files || []), data.tree || [], bookId || '');
+            } else {
+                renderKnowledgeSourceError(data.message || '加载知识库文件失败');
             }
         })
-        .catch(err => console.error('Load knowledge sources error:', err));
+        .catch(function(err) {
+            console.error('Load knowledge sources error:', err);
+            renderKnowledgeSourceError(String(err));
+        });
 }
 
 function loadKnowledgeStatus(bookId) {
-    var url = '/api/knowledge/status';
+    var url = API_BASE + '/api/knowledge/status';
     if (bookId) url += '?book_id=' + encodeURIComponent(bookId);
     fetch(url)
         .then(r => r.json())
@@ -339,6 +353,17 @@ function renderKnowledgeSources(rootFiles, tree, bookId) {
     if (previewEl) previewEl.innerHTML = '<div class="knowledge-file-preview-empty">选择左侧文件查看内容</div>';
 }
 
+function renderKnowledgeSourceError(message) {
+    var treeEl = document.getElementById('knowledgeFileTree');
+    var previewEl = document.getElementById('knowledgeFilePreview');
+    if (treeEl) {
+        treeEl.innerHTML = '<div class="knowledge-empty">加载知识库文件失败：' + escapeHtml(message || 'unknown error') + '</div>';
+    }
+    if (previewEl) {
+        previewEl.innerHTML = '<div class="knowledge-file-preview-empty">请检查后端日志或重新进入知识库页面</div>';
+    }
+}
+
 function renderKnowledgeDirNode(group, bookId, depth) {
     var files = group.files || [];
     var children = group.children || [];
@@ -371,7 +396,7 @@ function readKnowledgeFile(path, bookId, node) {
     var params = new URLSearchParams();
     params.set('path', path);
     if (bookId) params.set('book_id', bookId);
-    fetch('/api/knowledge/read?' + params.toString())
+    fetch(API_BASE + '/api/knowledge/read?' + params.toString())
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (!previewEl) return;
@@ -437,7 +462,7 @@ function uploadKnowledgeDoc(bookId, category) {
         formData.append('file', input.files[0]);
         if (bookId) formData.append('book_id', bookId);
         if (category) formData.append('category', category);
-        fetch('/api/knowledge/upload', {method: 'POST', body: formData})
+        fetch(API_BASE + '/api/knowledge/upload', {method: 'POST', body: formData})
             .then(r => r.json())
             .then(data => {
                 if (data.status === 'success') {
