@@ -1,4 +1,5 @@
 from agent.textbook.agents.writer import WriterAgent
+from agent.textbook.pipeline.visual_asset_router import VisualAssetRouter
 
 
 def test_writer_parses_structured_visual_assets_before_markers():

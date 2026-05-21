@@ -6,6 +6,8 @@ import hashlib
 from collections import Counter, defaultdict
 from typing import List, Dict
 
+from common.log import logger
+
 
 class KnowledgeRetriever:
     """Lightweight retrieval over LLM-WIKI metadata.
@@ -31,8 +33,8 @@ class KnowledgeRetriever:
                 data = json.load(f)
             if isinstance(data, dict):
                 return data
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(f"Failed to load knowledge index {self.index_path}: {exc}")
         return {"sources": [], "chunks": [], "pages": [], "entities": [], "relations": []}
 
     @staticmethod
@@ -77,7 +79,8 @@ class KnowledgeRetriever:
         try:
             with open(full_path, "r", encoding="utf-8") as f:
                 text = f.read()
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Failed to read knowledge chunk excerpt {rel_path}: {exc}")
             return ""
         if text.startswith("---"):
             parts = text.split("---", 2)
@@ -141,6 +144,34 @@ class KnowledgeRetriever:
                 scores[chunk_id] += 0.25
         return scores
 
+    def _rerank_scores(self, query: str, chunks: Dict[str, dict]) -> Dict[str, float]:
+        """Cheap lexical rerank to improve precision before building LLM context."""
+        query_terms = set(self._tokens(query))
+        normalized_query_terms = set(self._normalized_terms(query))
+        if not query_terms and not normalized_query_terms:
+            return {}
+        scores = defaultdict(float)
+        for chunk_id, chunk in chunks.items():
+            title_terms = set(self._tokens(chunk.get("title", "")))
+            section_terms = set(self._tokens(chunk.get("section", "")))
+            keyword_terms = set(self._tokens(" ".join(chunk.get("keywords") or [])))
+            entity_terms = set(self._tokens(" ".join(chunk.get("related_entities") or [])))
+            chunk_norm_terms = set(str(t).lower() for t in (chunk.get("normalized_terms") or []))
+            chunk_norm_terms.update(self._normalized_terms(self._chunk_text_for_scoring(chunk)))
+
+            direct_overlap = len(query_terms & (title_terms | section_terms | keyword_terms | entity_terms))
+            normalized_overlap = len(normalized_query_terms & chunk_norm_terms)
+            coverage = direct_overlap / max(len(query_terms), 1)
+            normalized_coverage = normalized_overlap / max(len(normalized_query_terms), 1)
+
+            scores[chunk_id] += coverage * 2.0
+            scores[chunk_id] += normalized_coverage * 1.8
+            scores[chunk_id] += len(query_terms & title_terms) * 1.2
+            scores[chunk_id] += len(query_terms & section_terms) * 0.8
+            scores[chunk_id] += len(query_terms & keyword_terms) * 0.7
+            scores[chunk_id] += len(query_terms & entity_terms) * 0.5
+        return scores
+
     def _graph_expansion_details(self, seed_ids: List[str]) -> Dict[str, dict]:
         seed_set = set(seed_ids)
         details = defaultdict(lambda: {"score": 0.0, "reasons": []})
@@ -190,10 +221,12 @@ class KnowledgeRetriever:
             return []
         bm25 = self._bm25_scores(query)
         meta = self._metadata_scores(query)
+        rerank = self._rerank_scores(query, chunks)
         combined = defaultdict(float)
         for chunk_id in chunks:
             combined[chunk_id] += bm25.get(chunk_id, 0.0)
             combined[chunk_id] += meta.get(chunk_id, 0.0)
+            combined[chunk_id] += rerank.get(chunk_id, 0.0)
         seeds = [
             cid
             for cid, score in sorted(combined.items(), key=lambda item: item[1], reverse=True)
@@ -213,6 +246,7 @@ class KnowledgeRetriever:
             evidence.append({
                 "chunk_id": chunk_id,
                 "score": round(float(score), 4),
+                "rerank_score": round(float(rerank.get(chunk_id, 0.0)), 4),
                 "title": chunk.get("title", chunk_id),
                 "section": chunk.get("section", ""),
                 "summary": chunk.get("summary", ""),
@@ -240,13 +274,15 @@ class KnowledgeRetriever:
                 "source_count": len(self.index.get("sources", []) or []),
                 "relation_count": len(self.index.get("relations", []) or []),
                 "top_chunks": [],
-            }
+        }
         bm25 = self._bm25_scores(query)
         meta = self._metadata_scores(query)
+        rerank = self._rerank_scores(query, chunks)
         combined = defaultdict(float)
         for chunk_id in chunks:
             combined[chunk_id] += bm25.get(chunk_id, 0.0)
             combined[chunk_id] += meta.get(chunk_id, 0.0)
+            combined[chunk_id] += rerank.get(chunk_id, 0.0)
         seeds = [
             cid
             for cid, score in sorted(combined.items(), key=lambda item: item[1], reverse=True)
@@ -270,6 +306,7 @@ class KnowledgeRetriever:
                     "chunk_id": chunk_id,
                     "title": chunks.get(chunk_id, {}).get("title", chunk_id),
                     "score": round(float(score), 4),
+                    "rerank_score": round(float(rerank.get(chunk_id, 0.0)), 4),
                     "graph_expanded": chunk_id in graph_details,
                     "graph_reason": "; ".join(graph_details.get(chunk_id, {}).get("reasons", [])[:2]),
                     "path": chunks.get(chunk_id, {}).get("path", ""),
@@ -293,6 +330,8 @@ class KnowledgeRetriever:
                 lines.append(f"Use when: {item['use_when']}")
             if item.get("keywords"):
                 lines.append("Keywords: " + ", ".join(str(k) for k in item["keywords"][:8]))
+            if item.get("rerank_score"):
+                lines.append(f"Rerank score: {item['rerank_score']}")
             if item.get("graph_reason"):
                 lines.append(f"Graph reason: {item['graph_reason']}")
             lines.append(f"Citation: knowledge/_llm_wiki/{item.get('path', '')}")
@@ -322,6 +361,8 @@ class KnowledgeRetriever:
                 lines.append("Keywords: " + ", ".join(str(k) for k in item["keywords"][:10]))
             if item.get("entities"):
                 lines.append("Entities: " + ", ".join(str(e) for e in item["entities"][:10]))
+            if item.get("rerank_score"):
+                lines.append(f"Rerank score: {item['rerank_score']}")
             if item.get("graph_reason"):
                 lines.append(f"Graph reason: {item['graph_reason']}")
             lines.append(f"Citation: knowledge/_llm_wiki/{item.get('path', '')}")
@@ -339,7 +380,7 @@ class KnowledgeRetriever:
             "limit": limit,
             "excerpt_chars": excerpt_chars,
             "index_mtime": round(index_mtime, 6),
-            "version": "retriever-v3",
+            "version": "retriever-v4",
         }, ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
@@ -355,7 +396,8 @@ class KnowledgeRetriever:
                 data = json.load(f)
             if isinstance(data, dict) and isinstance(data.get("evidence"), list):
                 return data["evidence"]
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Failed to read retrieval cache {path}: {exc}")
             return None
         return None
 
@@ -364,5 +406,5 @@ class KnowledgeRetriever:
             os.makedirs(self.cache_dir, exist_ok=True)
             with open(self._cache_path(key), "w", encoding="utf-8") as f:
                 json.dump({"evidence": evidence}, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"Failed to write retrieval cache {self._cache_path(key)}: {exc}")

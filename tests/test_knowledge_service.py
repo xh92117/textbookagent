@@ -293,6 +293,8 @@ def test_retriever_reports_graph_reason_and_diagnostics():
         assert diagnostics["chunk_count"] == 3
         assert diagnostics["graph_expanded_count"] >= 1
         assert diagnostics["top_chunks"]
+        assert any(item.get("rerank_score", 0) > 0 for item in diagnostics["top_chunks"])
+        assert "Rerank score:" in pack
         assert "Graph reason:" in pack
 
 

@@ -3,8 +3,9 @@ import re
 import shutil
 import textwrap
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
+from common.log import logger
 from ..sandbox.chart_generator import ChartGenerator
 from ..sandbox.executor import SandboxExecutor
 from ..sandbox.image_prompt import ImageGenerationRequest, ImagePromptEngineer
@@ -47,33 +48,53 @@ class VisualAssetRouter:
     def resolve_chart(self, description: str, chapter_num: int, index: int, chart_type: str = "auto") -> VisualAssetDecision:
         filename = f"chapter{chapter_num}_chart{index}.png"
         path = self._generate_chart(description, filename, chart_type=chart_type)
-        if path:
+        ok, reason = self._validate_asset(path, min_width=320, min_height=220)
+        if ok:
             return VisualAssetDecision(description, "chart", "code_chart", path, "success", "generated from local code templates")
-        return VisualAssetDecision(description, "chart", "code_chart", "", "failed", "chart generation failed")
+        return VisualAssetDecision(description, "chart", "code_chart", path or "", "failed", f"chart generation failed: {reason}")
 
     def resolve_image(self, description: str, chapter_num: int, index: int, image_type: str = "illustration") -> VisualAssetDecision:
         if self.is_chart_like(description):
             filename = f"chapter{chapter_num}_img{index}.png"
             path = self._generate_diagram(description, filename)
-            if path:
+            ok, reason = self._validate_asset(path, min_width=320, min_height=220)
+            if ok:
                 return VisualAssetDecision(description, "diagram", "code_diagram", path, "success", "image request classified as chart-like diagram")
+            logger.warning(f"Generated diagram rejected by asset gate: {reason}")
 
         kb = self._find_knowledge_image(description)
         if kb:
             target = self._copy_asset(kb["path"], f"chapter{chapter_num}_img{index}")
-            if target:
+            ok, reason = self._validate_asset(target, min_width=160, min_height=120)
+            if ok:
                 return VisualAssetDecision(description, "image", "knowledge_base", target, "success", "matched indexed knowledge image", [kb.get("summary", "")])
+            logger.warning(f"Knowledge image rejected by asset gate: {reason}")
 
         web = self._find_web_image(description)
         if web:
             return VisualAssetDecision(description, "image", "web", web, "success", "matched web image")
 
         model = self._generate_model_image(description, chapter_num, index, image_type=image_type)
-        if model.status == "success":
+        ok, reason = self._validate_asset(model.path, min_width=320, min_height=220)
+        if model.status == "success" and ok:
             return model
+        if model.status == "success":
+            model.status = "failed"
+            model.reason = f"image model output rejected by asset gate: {reason}"
 
         fallback = self._generate_fallback(description, f"chapter{chapter_num}_img{index}.png", reason=model.reason)
-        return VisualAssetDecision(description, "image", "fallback", fallback, "success" if fallback else "failed", "image model failed; generated readable local fallback")
+        ok, fallback_reason = self._validate_asset(fallback, min_width=320, min_height=220)
+        if ok:
+            return VisualAssetDecision(
+                description,
+                "image",
+                "fallback",
+                fallback,
+                "success",
+                "image model unavailable or invalid; inserted clearly labeled local placeholder",
+                [model.reason, "placeholder=true"],
+            )
+        return VisualAssetDecision(description, "image", "fallback", fallback or "", "failed", f"fallback generation failed: {fallback_reason}")
 
     def is_chart_like(self, description: str) -> bool:
         text = (description or "").lower()
@@ -101,7 +122,8 @@ class VisualAssetRouter:
             else:
                 result = chart_gen.generate_line_chart("list(range(1, 7))", "[62, 70, 79, 83, 88, 92]", title=desc, filename=filename)
             return self._pick_output(result, filename)
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"Chart generation failed: {exc}")
             return ""
 
     def _generate_diagram(self, desc: str, filename: str) -> str:
@@ -131,7 +153,8 @@ class VisualAssetRouter:
             draw.text((70, 850), caption, fill="#475569", font=font_body)
             img.save(path, "PNG")
             return path
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"Diagram generation failed: {exc}")
             return ""
 
     def _find_knowledge_image(self, description: str) -> Optional[dict]:
@@ -142,7 +165,8 @@ class VisualAssetRouter:
             import json
             with open(index_path, "r", encoding="utf-8") as f:
                 index = json.load(f)
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"Failed to read knowledge image index: {exc}")
             return None
         candidates = []
         terms = set(re.findall(r"[\u4e00-\u9fffA-Za-z0-9_-]{2,}", description or ""))
@@ -167,7 +191,8 @@ class VisualAssetRouter:
         try:
             shutil.copyfile(source_path, target)
             return target
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"Failed to copy knowledge image asset: {exc}")
             return ""
 
     def _find_web_image(self, description: str) -> str:
@@ -206,7 +231,8 @@ class VisualAssetRouter:
                 draw.text((110, 700), "Generated locally after image service failure.", fill="#64748b", font=self._font(24))
             img.save(path, "PNG")
             return path
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"Fallback image generation failed: {exc}")
             return ""
 
     def _pick_output(self, result, filename: str) -> str:
@@ -214,6 +240,45 @@ class VisualAssetRouter:
             return ""
         exact = [p for p in result.output_files if os.path.basename(p) == filename]
         return exact[0] if exact else result.output_files[0]
+
+    def _validate_asset(self, path: str, min_width: int = 160, min_height: int = 120) -> Tuple[bool, str]:
+        if not path:
+            return False, "empty path"
+        if path.startswith(("http://", "https://")):
+            return True, "remote asset"
+        if not os.path.isfile(path):
+            return False, "file not found"
+        try:
+            size = os.path.getsize(path)
+        except OSError as exc:
+            return False, f"cannot stat file: {exc}"
+        if size < 1024:
+            return False, f"file too small ({size} bytes)"
+
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".svg":
+            try:
+                text = open(path, "r", encoding="utf-8", errors="ignore").read(4096)
+            except Exception as exc:
+                return False, f"cannot read svg: {exc}"
+            if "<svg" not in text.lower():
+                return False, "not a valid svg"
+            return True, "valid svg"
+
+        try:
+            from PIL import Image, ImageStat
+
+            with Image.open(path) as img:
+                width, height = img.size
+                if width < min_width or height < min_height:
+                    return False, f"image too small ({width}x{height})"
+                sample = img.convert("RGB").resize((64, 64))
+                stat = ImageStat.Stat(sample)
+                if max(stat.var or [0]) < 2.0:
+                    return False, "image appears blank or near-solid"
+                return True, f"valid image ({width}x{height}, {size} bytes)"
+        except Exception as exc:
+            return False, f"cannot decode image: {exc}"
 
     def _radar_code(self, title: str) -> str:
         return f"""
