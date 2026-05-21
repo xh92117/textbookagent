@@ -626,6 +626,8 @@ class WebChannel(ChatChannel):
                             f"[Canonical image directory: {image_dir}]\n"
                             f"[Canonical chart directory: {chart_dir}]\n"
                             f"[Path rule: When writing this textbook, write chapter files ONLY under the canonical chapter directory. Do not create chapters/ directly under the workspace root. Use chapter_001.md style filenames unless an existing chapter file uses another compatible name.]\n"
+                            f"[Tool rule: Use textbook_chapter for chapter read/write/append/replace/encoding validation. Do not use bash/PowerShell Add-Content/Set-Content/Out-File for Chinese chapter Markdown.]\n"
+                            f"[State rule: If the current textbook already has outline/review or chapter progress, continue from the next unfinished section. Do not restart outline generation, outline review, or earlier completed stages unless the user explicitly asks.]\n"
                             f"[Visual rule: If the chapter text promises a figure, illustration, diagram, chart, or table visualization, create the corresponding asset with the image model or sandbox/chart tool and reference it from the chapter Markdown.]\n"
                             f"[Outline]\n{outline[:4000] if outline else 'No outline yet'}\n\n"
                             f"{prompt}"

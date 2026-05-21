@@ -454,6 +454,8 @@ def build_context_state_board(turns: List[Dict], max_events: int = 36) -> str:
 
     lines.append("Loop guard: if an action appears under read/saved/written/progress/failures, treat it as already attempted unless the user explicitly asks to redo it.")
     lines.append("Next-step rule: if enough chapter evidence has already been gathered, write/save the chapter instead of searching or rereading skills again.")
+    lines.append("Textbook state-machine rule: never regenerate outline/review/search when the state board shows chapter writing has started; continue the current chapter's next unfinished section or validate/save it.")
+    lines.append("Chapter writing rule: use textbook_chapter for chapter Markdown. Do not use bash/PowerShell to append Chinese textbook text.")
     return "\n".join(lines)
 
 
@@ -487,6 +489,15 @@ def _summarize_tool_event(tool_name: str, tool_args: dict, block: Dict) -> str:
     if tool_name in ("write", "file_write"):
         path = tool_args.get("path", "")
         return f"WROTE file: {path or _compact_line(first, 180)}"
+
+    if tool_name == "textbook_chapter":
+        action = tool_args.get("action", "")
+        book_id = tool_args.get("book_id", "")
+        chapter = tool_args.get("chapter_num", "")
+        heading = tool_args.get("heading", "")
+        if is_failed:
+            return f"FAILED textbook_chapter: {action} ch{chapter} {heading} | {_compact_line(first, 140)}"
+        return f"WROTE textbook_chapter: {action} book={book_id} ch={chapter} {heading}"
 
     if tool_name in ("bash", "shell", "command"):
         command = tool_args.get("command", "")

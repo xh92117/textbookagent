@@ -334,9 +334,24 @@ class TruthFileManager:
             and previous_chapter is not None
             and int(current_chapter) == int(previous_chapter)
         )
+        next_chapter = (
+            current_chapter is not None
+            and previous_chapter is not None
+            and int(current_chapter) > int(previous_chapter)
+        )
         if previous.get('status') == 'completed' and run_status != 'completed':
             regression = True
         elif same_chapter and current_rank < previous_rank:
+            regression = True
+        elif (
+            previous_rank >= self.STATUS_PHASE_ORDER['chapter_actions_planned']
+            and current_rank < previous_rank
+            and not next_chapter
+        ):
+            # Once chapter work has begun for a textbook, status updates must
+            # not silently jump back to outline/review/planning. This catches
+            # free-form agent loops where the model re-enters "understand task"
+            # or "regenerate outline" after writing has already started.
             regression = True
         if regression:
             current_phase = previous_phase

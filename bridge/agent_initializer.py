@@ -399,7 +399,7 @@ class AgentInitializer:
 
                 if tool:
                     # Apply workspace config to file operation tools
-                    if tool_name in ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls', 'web_fetch', 'knowledge_capture', 'send', 'browser']:
+                    if tool_name in ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls', 'web_fetch', 'knowledge_capture', 'textbook_chapter', 'send', 'browser']:
                         tool.config = file_config
                         tool.cwd = file_config.get("cwd", getattr(tool, 'cwd', None))
                         if 'memory_manager' in file_config:

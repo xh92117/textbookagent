@@ -171,6 +171,7 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
         "terminal": "管理后台进程",
         "web_search": "网络搜索",
         "web_fetch": "获取URL内容",
+        "textbook_chapter": "教材章节专用读写/追加/替换/编码检查工具",
         "browser": "控制浏览器（关键结果或需要协助可截图发送给用户）",
         "memory_search": "搜索记忆",
         "memory_get": "读取记忆内容",
@@ -184,7 +185,7 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
     tool_order = [
         "read", "write", "edit", "ls", "grep", "find",
         "bash", "terminal",
-        "web_search", "web_fetch", "browser",
+        "web_search", "web_fetch", "textbook_chapter", "browser",
         "memory_search", "memory_get",
         "env_config", "scheduler", "send", "vision",
     ]
@@ -219,6 +220,8 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
         "- URL链接直接放在回复文本中即可，系统会自动处理和渲染。无需下载后使用send工具发送",
         "- 写入中文教材文件时，优先使用 write 或 edit 工具；追加内容用 edit 且 oldText 为空。不要用 bash 调用 PowerShell Add-Content/Set-Content/Out-File 写中文文件，避免 Windows 编码破坏。",
         "- 单次工具参数保持短小。大段章节内容必须按小节或更小块分批写入，每块建议不超过 6000 字符；JSON 参数解析失败后，应缩小块大小并继续，不要改用 shell 拼接长字符串。",
+        "- 编写、续写、替换或检查教材章节时，优先使用 textbook_chapter 工具。它会自动定位教材ID目录、按UTF-8保存、更新章节元数据和状态，避免手写路径或用shell拼接文件。",
+        "- 教材任务必须遵守状态板：已完成的大纲/审查/已写章节不得重新生成；如果状态显示正在写某章，只能继续该章的下一小节、校验或保存，除非用户明确要求回退。",
         "",
     ]
 

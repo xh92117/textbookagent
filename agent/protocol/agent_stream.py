@@ -1084,9 +1084,14 @@ class AgentStreamExecutor:
         if "_parse_error" in tool_call:
             parse_error = tool_call["_parse_error"]
             logger.error(f"Skipping tool execution due to parse error: {parse_error}")
+            recovery_hint = self._tool_parse_recovery_hint(tool_name)
             result = {
                 "status": "error",
-                "result": f"Failed to parse tool arguments. {parse_error}. Please ensure your tool call uses valid JSON format with all required parameters.",
+                "result": (
+                    f"Failed to parse tool arguments. {parse_error}. "
+                    "Please ensure your tool call uses valid JSON format with all required parameters."
+                    f"{recovery_hint}"
+                ),
                 "execution_time": 0
             }
             self._record_tool_result(tool_name, arguments, False)
@@ -1206,6 +1211,17 @@ class AgentStreamExecutor:
             self._record_work_state(tool_name, arguments, "error", str(e))
 
             return error_result
+
+    @staticmethod
+    def _tool_parse_recovery_hint(tool_name: str) -> str:
+        if tool_name in {"write", "edit", "bash", "textbook_chapter"}:
+            return (
+                "\n\nRecovery rule for chapter writing: your next tool call must be a smaller "
+                "textbook_chapter call. Use action=append_section or replace_section with one "
+                "section/subsection under 6000 characters. Do not use bash or PowerShell to "
+                "write Chinese Markdown."
+            )
+        return "\n\nRecovery rule: retry with a smaller, strictly valid JSON argument object."
 
     def _capture_tool_error_memory(
             self,

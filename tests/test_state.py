@@ -142,6 +142,18 @@ def test_truth_file_status_allows_next_chapter_restart():
         assert next_chapter['regression_blocked'] is False
 
 
+def test_truth_file_status_blocks_textbook_level_phase_regression():
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        mgr = TruthFileManager(os.path.join(tmp, "book1"))
+        first = mgr.update_status(total_chapters=3, current_chapter=2, current_phase='write_chapter')
+        regressed = mgr.update_status(total_chapters=3, current_chapter=None, current_phase='outline')
+        assert first['current_phase'] == 'write_chapter'
+        assert regressed['current_chapter'] == 2
+        assert regressed['current_phase'] == 'write_chapter'
+        assert regressed['regression_blocked'] is True
+
+
 def test_outline_review_state_tracks_outline_hash():
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:

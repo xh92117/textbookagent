@@ -92,6 +92,12 @@ def test_bash_rejects_powershell_add_content_for_utf8_safety():
     assert "Encoding safety guard" in str(result.result)
 
 
+def test_parse_error_recovery_hint_prefers_textbook_chapter():
+    hint = AgentStreamExecutor._tool_parse_recovery_hint("edit")
+    assert "textbook_chapter" in hint
+    assert "Do not use bash or PowerShell" in hint
+
+
 def test_knowledge_stream_guard_returns_partial_sse_when_done_is_missing(monkeypatch):
     monkeypatch.setattr(
         config_module,
