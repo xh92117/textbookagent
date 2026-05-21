@@ -5,6 +5,7 @@ config.json
 channel/config.json.bak-path-bug
 run.log
 *.log
+logs/
 *.bundle
 tests/logs/
 server-test.*.log

@@ -29,7 +29,8 @@ ENVIRONMENT: All API keys from env_config are auto-injected. Use $VAR_NAME direc
 
 SAFETY:
 - Freely create/modify/delete files within the workspace
-- For destructive commands out of workspace, explain and confirm first"""
+- Destructive commands targeting absolute paths outside the workspace are blocked
+- Remote script execution patterns such as curl|sh or Invoke-Expression are blocked"""
 
     params: dict = {
         "type": "object",
@@ -55,6 +56,10 @@ SAFETY:
         self.default_timeout = self.config.get("timeout", 30)
         # Enable safety mode by default (can be disabled in config)
         self.safety_mode = self.config.get("safety_mode", True)
+        self.workspace_root = os.path.realpath(self.config.get("workspace_root") or self.cwd)
+        self.allow_destructive_outside_workspace = bool(
+            self.config.get("allow_destructive_outside_workspace", False)
+        )
 
     def execute(self, args: Dict[str, Any]) -> ToolResult:
         """
@@ -278,11 +283,98 @@ SAFETY:
         if "if=/dev/zero" in command.lower() and "dd " in command.lower():
             return "This command can destroy disk data"
 
+        remote_script_warning = self._remote_script_warning(command)
+        if remote_script_warning:
+            return remote_script_warning
+
+        destructive_warning = self._destructive_path_warning(command)
+        if destructive_warning:
+            return destructive_warning
+
         # Power control - match only as a standalone word (\b enforces word boundary)
         if re.search(r'\b(shutdown|reboot|halt|poweroff)\b', command.lower()):
             return "This command will shut down or restart the system"
 
         return ""
+
+    def _remote_script_warning(self, command: str) -> str:
+        lowered = command.lower()
+        if re.search(r'\b(curl|wget)\b.+\|\s*(sh|bash|zsh|python|python3|pwsh|powershell)\b', lowered):
+            return "This command downloads and executes a remote script"
+        if re.search(r'\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b', lowered) and re.search(
+            r'\b(iex|invoke-expression)\b', lowered
+        ):
+            return "This command downloads and executes a remote PowerShell script"
+        if "downloadstring" in lowered and re.search(r'\b(iex|invoke-expression)\b', lowered):
+            return "This command executes downloaded PowerShell content"
+        return ""
+
+    def _destructive_path_warning(self, command: str) -> str:
+        if self.allow_destructive_outside_workspace:
+            return ""
+
+        destructive_verbs = {"rm", "del", "erase", "rmdir", "rd", "remove-item"}
+        tokens = self._rough_tokens(command)
+        for index, token in enumerate(tokens):
+            verb = token.lower()
+            if verb not in destructive_verbs:
+                continue
+            candidates = tokens[index + 1:]
+            if verb == "remove-item":
+                candidates = self._powershell_remove_item_targets(candidates)
+            for candidate in candidates:
+                clean = self._clean_path_token(candidate)
+                if not clean or clean.startswith("-") or clean in {"/s", "/q"}:
+                    continue
+                if self._looks_like_shell_operator(clean):
+                    break
+                if os.path.isabs(clean):
+                    real = os.path.realpath(clean)
+                    if not self._is_within_workspace(real):
+                        return (
+                            "Destructive command targets an absolute path outside the workspace: "
+                            f"{clean}"
+                        )
+        return ""
+
+    @staticmethod
+    def _rough_tokens(command: str) -> list:
+        import shlex
+        try:
+            return shlex.split(command, posix=(os.name != "nt"))
+        except ValueError:
+            return command.split()
+
+    @staticmethod
+    def _powershell_remove_item_targets(tokens: list) -> list:
+        result = []
+        skip_next = False
+        path_flags = {"-path", "-literalpath"}
+        for idx, token in enumerate(tokens):
+            lowered = token.lower()
+            if skip_next:
+                result.append(token)
+                skip_next = False
+                continue
+            if lowered in path_flags and idx + 1 < len(tokens):
+                skip_next = True
+            elif not lowered.startswith("-"):
+                result.append(token)
+        return result
+
+    @staticmethod
+    def _clean_path_token(token: str) -> str:
+        return token.strip().strip("'\"")
+
+    @staticmethod
+    def _looks_like_shell_operator(token: str) -> bool:
+        return token in {"&&", "||", "|", ";", ">", ">>", "<"}
+
+    def _is_within_workspace(self, path: str) -> bool:
+        try:
+            return os.path.commonpath([self.workspace_root, path]) == self.workspace_root
+        except ValueError:
+            return False
 
     @staticmethod
     def _looks_like_powershell_file_write(command: str) -> bool:

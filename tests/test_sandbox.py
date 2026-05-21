@@ -24,6 +24,20 @@ def test_sandbox_forbidden_import():
     assert "forbidden" in result.stderr.lower(), f"stderr 应提及 forbidden，实际为 {result.stderr}"
 
 
+def test_sandbox_rejects_dynamic_import_escape():
+    executor = SandboxExecutor()
+    result = executor.execute("__import__('os').listdir('.')")
+    assert result.success is False
+    assert "forbidden call" in result.stderr.lower()
+
+
+def test_sandbox_rejects_direct_file_read():
+    executor = SandboxExecutor()
+    result = executor.execute("open('anything.txt').read()")
+    assert result.success is False
+    assert "forbidden call" in result.stderr.lower()
+
+
 def test_sandbox_timeout():
     executor = SandboxExecutor()
     result = executor.execute("import time\ntime.sleep(60)", timeout=2)

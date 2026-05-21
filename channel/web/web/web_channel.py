@@ -741,25 +741,38 @@ class WebChannel(ChatChannel):
     def startup(self):
         port = conf().get("web_port", 9899)
         host = conf().get("web_host", "127.0.0.1") or "127.0.0.1"
-        if host == "0.0.0.0" and not conf().get("web_password"):
-            logger.warning("[WebChannel] web_host=0.0.0.0 without web_password exposes the console on the LAN.")
+        public_hosts = {"0.0.0.0", "::", ""}
+        if (
+            host in public_hosts
+            and not conf().get("web_password")
+            and conf().get("web_require_password_on_public_host", True)
+        ):
+            raise RuntimeError(
+                "Refusing to start an unauthenticated public web console. "
+                "Set web_password, bind web_host to 127.0.0.1, or explicitly set "
+                "web_require_password_on_public_host=false."
+            )
+        if host in public_hosts and not conf().get("web_password"):
+            logger.warning("[WebChannel] Public web console is running without a password by explicit config.")
 
-        # 打印可用渠道类型提示
+        # Print available channel hints.
         logger.info(
-            "[WebChannel] 全部可用通道如下，可修改 config.json 配置文件中的 channel_type 字段进行切换，多个通道用逗号分隔：")
-        logger.info("[WebChannel]   1. weixin           - 微信")
-        logger.info("[WebChannel]   2. web              - 网页")
-        logger.info("[WebChannel]   3. terminal         - 终端")
-        logger.info("[WebChannel]   4. feishu           - 飞书")
-        logger.info("[WebChannel]   5. dingtalk         - 钉钉")
-        logger.info("[WebChannel]   6. wecom_bot        - 企微智能机器人")
-        logger.info("[WebChannel]   7. wechatcom_app    - 企微自建应用")
-        logger.info("[WebChannel]   8. wechatmp         - 个人公众号")
-        logger.info("[WebChannel]   9. wechatmp_service - 企业公众号")
-        logger.info("[WebChannel] ✅ Web控制台已运行")
-        logger.info(f"[WebChannel] 🌐 本地访问: http://localhost:{port}")
+            "[WebChannel] Available channels: edit channel_type in config.json; "
+            "separate multiple channels with commas."
+        )
+        logger.info("[WebChannel]   1. weixin           - WeChat")
+        logger.info("[WebChannel]   2. web              - Web console")
+        logger.info("[WebChannel]   3. terminal         - Terminal")
+        logger.info("[WebChannel]   4. feishu           - Feishu")
+        logger.info("[WebChannel]   5. dingtalk         - DingTalk")
+        logger.info("[WebChannel]   6. wecom_bot        - WeCom bot")
+        logger.info("[WebChannel]   7. wechatcom_app    - WeCom app")
+        logger.info("[WebChannel]   8. wechatmp         - WeChat public account")
+        logger.info("[WebChannel]   9. wechatmp_service - WeChat service account")
+        logger.info("[WebChannel] Web console is running")
+        logger.info(f"[WebChannel] Local access: http://localhost:{port}")
         if host == "0.0.0.0":
-            logger.info(f"[WebChannel] 🌍 服务器访问: http://YOUR_IP:{port} (请将YOUR_IP替换为服务器IP)")
+            logger.info(f"[WebChannel] Server access: http://YOUR_IP:{port} (replace YOUR_IP with the server IP)")
 
         try:
             import webbrowser
@@ -768,7 +781,7 @@ class WebChannel(ChatChannel):
         except Exception as e:
             logger.debug(f"[WebChannel] Could not open browser: {e}")
 
-        # 确保静态文件目录存在
+        # Ensure the static asset directory exists.
         static_dir = os.path.join(os.path.dirname(__file__), 'static')
         if not os.path.exists(static_dir):
             os.makedirs(static_dir)
@@ -777,10 +790,10 @@ class WebChannel(ChatChannel):
         urls = get_urls()
         app = web.application(urls, globals(), autoreload=False)
 
-        # 完全禁用web.py的HTTP日志输出
+        # Disable web.py request logging.
         web.httpserver.LogMiddleware.log = lambda self, status, environ: None
 
-        # 配置web.py的日志级别为ERROR
+        # Keep web.py internals quiet unless there is an error.
         logging.getLogger("web").setLevel(logging.ERROR)
         logging.getLogger("web.httpserver").setLevel(logging.ERROR)
 

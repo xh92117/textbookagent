@@ -4,7 +4,7 @@ import time
 
 import web
 
-from common.log import logger
+from common.log import get_log_path, logger
 from config import conf
 from channel.web.web.utils import (
     get_config_path, get_workspace_root, json_error, json_response, json_success,
@@ -493,12 +493,11 @@ class LogsHandler:
         web.header('Cache-Control', 'no-cache')
         web.header('X-Accel-Buffering', 'no')
 
-        from config import get_root
-        log_path = os.path.join(get_root(), "run.log")
+        log_path = get_log_path()
 
         def generate():
             if not os.path.isfile(log_path):
-                yield b"data: {\"type\": \"error\", \"message\": \"run.log not found\"}\n\n"
+                yield b"data: {\"type\": \"error\", \"message\": \"log file not found\"}\n\n"
                 return
 
             # Read last 200 lines for initial display

@@ -3,6 +3,7 @@ import sys
 import os
 import tempfile
 import time
+import ast
 from dataclasses import dataclass
 from typing import Optional
 
@@ -23,30 +24,53 @@ class SandboxResult:
 
 class SandboxExecutor:
     FORBIDDEN_IMPORTS = ['os', 'subprocess', 'shutil', 'socket', 'http', 'urllib', 'requests', 'sys']
+    FORBIDDEN_CALLS = {'eval', 'exec', 'compile', '__import__', 'open', 'input'}
+    FORBIDDEN_ATTRS = {'__subclasses__', '__globals__', '__code__', '__closure__'}
 
     def __init__(self, timeout: int = 30, output_dir: str = ""):
         self.timeout = timeout
         self.output_dir = output_dir or tempfile.mkdtemp(prefix="sandbox_")
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def _validate_code(self, code: str) -> bool:
-        for forbidden in self.FORBIDDEN_IMPORTS:
-            patterns = [
-                f'import {forbidden}',
-                f'from {forbidden}',
-            ]
-            for pattern in patterns:
-                if pattern in code:
-                    return False
-        return True
+    def _validate_code(self, code: str) -> tuple:
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as exc:
+            return False, f"Syntax error: {exc}"
+
+        forbidden_roots = set(self.FORBIDDEN_IMPORTS)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    root = alias.name.split(".", 1)[0]
+                    if root in forbidden_roots:
+                        return False, f"Forbidden import: {root}"
+            elif isinstance(node, ast.ImportFrom):
+                root = (node.module or "").split(".", 1)[0]
+                if root in forbidden_roots:
+                    return False, f"Forbidden import: {root}"
+            elif isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id in self.FORBIDDEN_CALLS:
+                    return False, f"Forbidden call: {node.func.id}"
+                if (
+                    isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "importlib"
+                    and node.func.attr == "import_module"
+                ):
+                    return False, "Forbidden call: importlib.import_module"
+            elif isinstance(node, ast.Attribute) and node.attr in self.FORBIDDEN_ATTRS:
+                return False, f"Forbidden attribute: {node.attr}"
+        return True, ""
 
     def execute(self, code: str, timeout: int = None) -> SandboxResult:
         timeout = timeout or self.timeout
 
-        if not self._validate_code(code):
+        valid, reason = self._validate_code(code)
+        if not valid:
             return SandboxResult(
                 success=False,
-                stderr="Code contains forbidden imports (os, subprocess, socket, etc.)",
+                stderr=reason or "Code contains forbidden sandbox operations",
                 exit_code=-1,
             )
 
@@ -58,14 +82,21 @@ class SandboxExecutor:
 
         try:
             start_time = time.time()
-            env = os.environ.copy()
+            env = {
+                key: value
+                for key, value in os.environ.items()
+                if key in {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME", "USERPROFILE"}
+            }
             env['MPLCONFIGDIR'] = tempfile.mkdtemp()
             env['PYTHONPATH'] = self.output_dir
+            env['PYTHONIOENCODING'] = 'utf-8'
 
             result = subprocess.run(
-                [sys.executable, script_path],
+                [sys.executable, "-I", script_path],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
                 cwd=self.output_dir,
                 env=env,

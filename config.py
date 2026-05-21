@@ -5,10 +5,10 @@ import json
 import logging
 import os
 
-from common.log import logger
+from common.log import configure_logging, logger
 
-# 灏嗘墍鏈夊彲鐢ㄧ殑閰嶇疆椤瑰啓鍦ㄥ瓧鍏搁噷, 璇蜂娇鐢ㄥ皬鍐欏瓧姣?
-# 姝ゅ鐨勯厤缃€兼棤瀹為檯鎰忎箟锛岀▼搴忎笉浼氳鍙栨澶勭殑閰嶇疆锛屼粎鐢ㄤ簬鎻愮ず鏍煎紡锛岃灏嗛厤缃姞鍏ュ埌config.json涓?
+# All supported config keys are listed here in lowercase.
+# Values in this table are defaults/schema hints; user settings should live in config.json.
 available_setting = {
     # openai api閰嶇疆
     "open_ai_api_key": "",  # openai api key
@@ -230,7 +230,12 @@ available_setting = {
     "web_port": 9899,
     "web_host": "127.0.0.1",  # Bind host; use 0.0.0.0 only when remote access is intentional and protected
     "web_password": "",  # Web console password; empty means no authentication required
+    "web_require_password_on_public_host": True,
     "web_session_expire_days": 30,  # Auth session expiry in days
+    "log_dir": "logs",
+    "log_file": "run.log",
+    "log_max_bytes": 5242880,
+    "log_backup_count": 5,
     "agent": True,  # 鏄惁寮€鍚疉gent妯″紡
     "agent_workspace": "~/textbook_workspace",  # agent宸ヤ綔绌洪棿璺緞锛岀敤浜庡瓨鍌╯kills銆乵emory绛?
     "agent_max_context_tokens": 50000,  # Agent模式下最大上下文tokens
@@ -354,13 +359,13 @@ def load_config():
     logger.info("")
     config_path = "./config.json"
     if not os.path.exists(config_path):
-        logger.info("閰嶇疆鏂囦欢涓嶅瓨鍦紝灏嗕娇鐢╟onfig-template.json妯℃澘")
+        logger.info("Config file not found; using config-template.json")
         config_path = "./config-template.json"
 
     config_str = read_file(config_path)
     logger.debug("[INIT] config str: {}".format(drag_sensitive(config_str)))
 
-    # 灏唈son瀛楃涓插弽搴忓垪鍖栦负dict绫诲瀷
+    # Deserialize JSON into the runtime Config object.
     config = Config(json.loads(config_str))
 
     # override config with environment variables.
@@ -378,9 +383,13 @@ def load_config():
         logger.setLevel(logging.DEBUG)
         logger.debug("[INIT] set log level to DEBUG")
 
+    configure_logging(config)
+    if config.get("debug", False):
+        logger.setLevel(logging.DEBUG)
+
     logger.info("[INIT] load config: {}".format(drag_sensitive(config)))
 
-    # 鎵撳嵃绯荤粺鍒濆鍖栦俊鎭?
+    # Print system initialization summary.
     logger.info("[INIT] ========================================")
     logger.info("[INIT] System Initialization")
     logger.info("[INIT] ========================================")
@@ -392,7 +401,7 @@ def load_config():
         workspace = config.get("agent_workspace", "~/textbook_workspace")
         logger.info("[INIT] Mode: Agent (workspace: {})".format(workspace))
     else:
-        logger.info("[INIT] Mode: Chat (鍦╟onfig.json涓缃?\"agent\":true 鍙惎鐢ˋgent妯″紡)")
+        logger.info('[INIT] Mode: Chat (set "agent": true in config.json to enable Agent mode)')
 
     logger.info("[INIT] Debug: {}".format(config.get("debug", False)))
     logger.info("[INIT] ========================================")

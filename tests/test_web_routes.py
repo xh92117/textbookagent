@@ -38,3 +38,24 @@ def test_web_handler_modules_do_not_redefine_shared_wrappers():
             if inspect.isfunction(value) and value.__module__ == module.__name__
         }
         assert not (defined & forbidden), f"{module.__name__} defines {defined & forbidden}"
+
+
+def test_web_channel_refuses_public_unauthenticated_console(monkeypatch):
+    monkeypatch.setattr(
+        web_channel,
+        "conf",
+        lambda: {
+            "web_port": 9899,
+            "web_host": "0.0.0.0",
+            "web_password": "",
+            "web_require_password_on_public_host": True,
+        },
+    )
+
+    channel = web_channel.WebChannel()
+    try:
+        channel.startup()
+    except RuntimeError as exc:
+        assert "unauthenticated public web console" in str(exc)
+    else:
+        raise AssertionError("startup should reject public unauthenticated console")

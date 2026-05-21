@@ -159,7 +159,8 @@ class ConfigHandler:
         "knowledge_organize_mode", "knowledge_fast_chunk_threshold", "knowledge_extract_assets",
         "knowledge_skip_logo_watermark_assets", "knowledge_min_asset_width",
         "knowledge_min_asset_height", "knowledge_min_asset_area",
-        "enable_thinking", "web_password",
+        "enable_thinking", "web_password", "web_require_password_on_public_host",
+        "log_dir", "log_file", "log_max_bytes", "log_backup_count",
         "active_workspace", "system_workspace", "workspace_split_enabled", "textbooks_storage_dir",
     }
 
@@ -303,6 +304,11 @@ class ConfigHandler:
                 "agent_context_reserve_tokens": local_config.get("agent_context_reserve_tokens", 0),
                 "agent_max_steps": local_config.get("agent_max_steps", 20),
                 "enable_thinking": bool(local_config.get("enable_thinking", False)),
+                "web_require_password_on_public_host": bool(local_config.get("web_require_password_on_public_host", True)),
+                "log_dir": local_config.get("log_dir", "logs"),
+                "log_file": local_config.get("log_file", "run.log"),
+                "log_max_bytes": local_config.get("log_max_bytes", 5242880),
+                "log_backup_count": local_config.get("log_backup_count", 5),
                 "api_bases": api_bases,
                 "api_keys": api_keys_masked,
                 "providers": providers,
@@ -342,10 +348,10 @@ class ConfigHandler:
                 if key in (
                     "agent_max_context_tokens", "agent_max_context_turns",
                     "agent_model_context_window", "agent_context_reserve_tokens",
-                    "agent_max_steps",
+                    "agent_max_steps", "log_max_bytes", "log_backup_count",
                 ):
                     value = int(value)
-                if key in ("use_linkai", "enable_thinking", "workspace_split_enabled"):
+                if key in ("use_linkai", "enable_thinking", "workspace_split_enabled", "web_require_password_on_public_host"):
                     value = bool(value)
                 local_config[key] = value
                 applied[key] = value
@@ -468,6 +474,11 @@ class ConfigHandler:
                 ensure_active_workspace()
                 ensure_system_dir()
                 reset_workspace_dependent_singletons()
+
+            log_keys = {"log_dir", "log_file", "log_max_bytes", "log_backup_count"}
+            if any(k in applied for k in log_keys):
+                from common.log import configure_logging
+                configure_logging(local_config)
 
             return json.dumps({"status": "success", "applied": applied}, ensure_ascii=False)
         except Exception as e:
