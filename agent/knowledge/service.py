@@ -55,6 +55,62 @@ class KnowledgeService:
             "enabled": conf().get("knowledge", True),
         }
 
+    def list_files_page(
+        self,
+        book_id: str = "",
+        offset: int = 0,
+        limit: int = 80,
+        path_prefix: str = "",
+        query: str = "",
+    ) -> dict:
+        base = self._resolve_book_dir(book_id)
+        if not os.path.isdir(base):
+            return {"files": [], "offset": 0, "limit": limit, "total": 0, "has_more": False}
+        offset = max(0, int(offset or 0))
+        limit = min(300, max(1, int(limit or 80)))
+        query = (query or "").strip().lower()
+        path_prefix = (path_prefix or "").strip().strip("/\\")
+        files = []
+        total_size = 0
+        allowed_exts = {".md", ".txt", ".json", ".csv"}
+        for root, dirs, names in os.walk(base):
+            dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+            rel_dir = os.path.relpath(root, base).replace("\\", "/")
+            if rel_dir == ".":
+                rel_dir = ""
+            if path_prefix and rel_dir and not rel_dir.startswith(path_prefix):
+                continue
+            for name in sorted(names):
+                if name.startswith(".") or os.path.splitext(name)[1].lower() not in allowed_exts:
+                    continue
+                full = os.path.join(root, name)
+                rel = os.path.relpath(full, base).replace("\\", "/")
+                if path_prefix and not rel.startswith(path_prefix):
+                    continue
+                if query and query not in rel.lower() and query not in name.lower():
+                    continue
+                size = os.path.getsize(full)
+                total_size += size
+                files.append({
+                    "name": name,
+                    "title": name.replace(".md", ""),
+                    "path": rel,
+                    "dir": rel.rsplit("/", 1)[0] if "/" in rel else "root",
+                    "size": size,
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(os.path.getmtime(full))),
+                })
+        total = len(files)
+        page = files[offset:offset + limit]
+        return {
+            "files": page,
+            "offset": offset,
+            "limit": limit,
+            "total": total,
+            "total_size": total_size,
+            "has_more": offset + limit < total,
+            "next_offset": offset + len(page),
+        }
+
     def _scan_dir(self, dir_path: str, stats: dict, base_dir: str, is_root: bool = False) -> tuple:
         files = []
         children = []
@@ -103,8 +159,9 @@ class KnowledgeService:
         if not os.path.isfile(full_path):
             raise FileNotFoundError(f"file not found: {rel_path}")
         with open(full_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        return {"content": content, "path": rel_path}
+            content = f.read(300000)
+            truncated = bool(f.read(1))
+        return {"content": content, "path": rel_path, "truncated": truncated, "max_chars": 300000}
 
     def build_graph(
         self,

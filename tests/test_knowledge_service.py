@@ -110,6 +110,29 @@ def test_organize_knowledge_force_reprocesses_indexed_sources():
         assert calls["parse"] - normal_calls == 1
 
 
+def test_list_files_page_paginates_and_filters_without_tree_payload():
+    with tempfile.TemporaryDirectory() as tmp:
+        service = KnowledgeService(tmp)
+        source_dir = os.path.join(tmp, "knowledge", "tb", "sources")
+        chunk_dir = os.path.join(tmp, "knowledge", "tb", "_llm_wiki", "chunks")
+        os.makedirs(source_dir, exist_ok=True)
+        os.makedirs(chunk_dir, exist_ok=True)
+        for i in range(7):
+            folder = source_dir if i < 3 else chunk_dir
+            with open(os.path.join(folder, f"file_{i:03d}.md"), "w", encoding="utf-8") as f:
+                f.write(f"# File {i}\n\ncontent")
+
+        page = service.list_files_page("tb", offset=2, limit=3)
+        assert page["total"] == 7
+        assert len(page["files"]) == 3
+        assert page["has_more"] is True
+        assert "tree" not in page
+
+        filtered = service.list_files_page("tb", query="file_006")
+        assert filtered["total"] == 1
+        assert filtered["files"][0]["name"] == "file_006.md"
+
+
 def test_get_status_reports_actual_wiki_chunk_counts():
     with tempfile.TemporaryDirectory() as tmp:
         service = KnowledgeService(tmp)

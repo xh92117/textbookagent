@@ -44,6 +44,8 @@
                     <div id="knowledgeSourceList" class="knowledge-file-browser">
                         <div class="knowledge-browser-sidebar">
                             <div class="knowledge-browser-title">文件查阅</div>
+                            <input id="knowledgeFileSearch" class="knowledge-file-search" placeholder="搜索文件..." oninput="onKnowledgeFileSearchInput()">
+                            <div id="knowledgeFileMeta" class="knowledge-file-meta"></div>
                             <div id="knowledgeFileTree" class="knowledge-file-tree">
                                 <div class="knowledge-empty">知识库文件将显示在此处</div>
                             </div>
@@ -57,6 +59,7 @@
                         <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px;">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--secondary)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
                             知识关联图谱
+                            <button class="pipeline-btn" id="btnLoadKnowledgeGraph" onclick="loadKnowledgeGraphOnDemand()" style="margin-left:auto;flex:0 0 auto;padding:6px 10px;">加载图谱</button>
                         </h3>
                         <div id="knowledgeGraphArea" style="min-height:200px;position:relative;overflow:auto;">
                             <div style="text-align:center;padding:40px 0;color:var(--muted-fg);font-size:13px;">点击"AI整理"后可查看知识关联图谱</div>

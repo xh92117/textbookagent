@@ -1,5 +1,17 @@
 // Knowledge base management, graph, organize progress, file browser.
 // Split from textbook.js; loaded as classic scripts to preserve existing globals.
+var knowledgeFileState = {
+    bookId: '',
+    offset: 0,
+    limit: 80,
+    total: 0,
+    hasMore: false,
+    loading: false,
+    query: '',
+    files: []
+};
+var knowledgeFileSearchTimer = null;
+
 function loadKnowledgePage() {
     var select = document.getElementById('knowledgeBookSelect');
     var preferredBookId = select ? select.value : '';
@@ -7,7 +19,7 @@ function loadKnowledgePage() {
         var selectedBookId = bookId || preferredBookId || '';
         loadKnowledgeSources(selectedBookId);
         loadKnowledgeStatus(selectedBookId);
-        loadKnowledgeGraph(selectedBookId, 'knowledgeGraphArea');
+        resetKnowledgeGraphPanel(selectedBookId);
     });
     initKnowledgeBrowserResize();
 }
@@ -42,7 +54,7 @@ function onKnowledgeBookChange() {
     var bookId = select ? select.value : '';
     loadKnowledgeSources(bookId);
     loadKnowledgeStatus(bookId);
-    loadKnowledgeGraph(bookId, 'knowledgeGraphArea');
+    resetKnowledgeGraphPanel(bookId);
 }
 
 function organizeKnowledge() {
@@ -87,7 +99,7 @@ function _pollOrganizeStatus(bookId, btn) {
                     showToast('整理完成: ' + (result.message || 'organized ' + (result.organized_count || 0) + ' entries'));
                     loadKnowledgeSources(bookId);
                     loadKnowledgeStatus(bookId);
-                    loadKnowledgeGraph(bookId, 'knowledgeGraphArea');
+                    resetKnowledgeGraphPanel(bookId);
                 } else if (data.status === 'error') {
                     clearInterval(pollInterval);
                     if (btn) { btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> AI整理'; }
@@ -154,11 +166,35 @@ function updateKnowledgeOrganizeProgress(prefix, data) {
     }
 }
 
+function resetKnowledgeGraphPanel(bookId) {
+    var container = document.getElementById('knowledgeGraphArea');
+    if (container) {
+        container.innerHTML = '<div class="knowledge-graph-empty">知识图谱较耗资源，点击“加载图谱”后再渲染当前知识库的关联数据。</div>';
+    }
+    var btn = document.getElementById('btnLoadKnowledgeGraph');
+    if (btn) {
+        btn.disabled = false;
+        btn.textContent = '加载图谱';
+        btn.dataset.bookId = bookId || '';
+    }
+}
+
+function loadKnowledgeGraphOnDemand() {
+    var select = document.getElementById('knowledgeBookSelect');
+    var bookId = select ? select.value : '';
+    var btn = document.getElementById('btnLoadKnowledgeGraph');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '加载中...';
+    }
+    loadKnowledgeGraph(bookId, 'knowledgeGraphArea');
+}
+
 function loadKnowledgeGraph(bookId, containerId) {
     var container = document.getElementById(containerId);
     if (!container) return;
     var params = new URLSearchParams();
-    params.set('limit', '140');
+    params.set('limit', '80');
     if (bookId) params.set('book_id', bookId);
     var url = API_BASE + '/api/knowledge/knowledge-graph?' + params.toString();
     fetch(url)
@@ -166,12 +202,22 @@ function loadKnowledgeGraph(bookId, containerId) {
         .then(function(data) {
             if (data.status === 'success') {
                 renderKnowledgeGraph(container, data.nodes || [], data.edges || []);
+                var btn = document.getElementById('btnLoadKnowledgeGraph');
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '重新加载图谱';
+                }
             } else {
                 container.innerHTML = '<div style="text-align:center;padding:30px 0;color:var(--muted-fg);font-size:13px;">加载图谱失败</div>';
             }
         })
         .catch(function(err) {
             container.innerHTML = '<div style="text-align:center;padding:30px 0;color:var(--muted-fg);font-size:13px;">加载图谱失败</div>';
+            var btn = document.getElementById('btnLoadKnowledgeGraph');
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = '加载图谱';
+            }
         });
 }
 
@@ -295,18 +341,61 @@ function renderKnowledgeGraph(container, nodes, edges) {
 }
 
 function loadKnowledgeSources(bookId) {
-    let url = API_BASE + '/api/knowledge/list';
-    if (bookId) url += '?book_id=' + encodeURIComponent(bookId);
-    fetch(url)
+    knowledgeFileState.bookId = bookId || '';
+    knowledgeFileState.offset = 0;
+    knowledgeFileState.total = 0;
+    knowledgeFileState.hasMore = false;
+    knowledgeFileState.files = [];
+    var previewEl = document.getElementById('knowledgeFilePreview');
+    if (previewEl) previewEl.innerHTML = '<div class="knowledge-file-preview-empty">选择左侧文件查看内容</div>';
+    loadKnowledgeFilePage(false);
+}
+
+function onKnowledgeFileSearchInput() {
+    clearTimeout(knowledgeFileSearchTimer);
+    knowledgeFileSearchTimer = setTimeout(function() {
+        var input = document.getElementById('knowledgeFileSearch');
+        knowledgeFileState.query = input ? input.value.trim() : '';
+        knowledgeFileState.offset = 0;
+        knowledgeFileState.files = [];
+        loadKnowledgeFilePage(false);
+    }, 250);
+}
+
+function loadKnowledgeFilePage(append) {
+    if (knowledgeFileState.loading) return;
+    knowledgeFileState.loading = true;
+    var treeEl = document.getElementById('knowledgeFileTree');
+    var metaEl = document.getElementById('knowledgeFileMeta');
+    if (treeEl && !append) treeEl.innerHTML = '<div class="knowledge-empty">正在加载文件...</div>';
+    var params = new URLSearchParams();
+    params.set('mode', 'page');
+    params.set('offset', String(append ? knowledgeFileState.offset : 0));
+    params.set('limit', String(knowledgeFileState.limit));
+    if (knowledgeFileState.bookId) params.set('book_id', knowledgeFileState.bookId);
+    if (knowledgeFileState.query) params.set('query', knowledgeFileState.query);
+    fetch(API_BASE + '/api/knowledge/list?' + params.toString())
         .then(r => r.json())
         .then(data => {
+            knowledgeFileState.loading = false;
             if (data.status === 'success') {
-                renderKnowledgeSources((data.root_files || data.files || []), data.tree || [], bookId || '');
+                var incoming = data.files || [];
+                knowledgeFileState.files = append ? knowledgeFileState.files.concat(incoming) : incoming;
+                knowledgeFileState.offset = data.next_offset || knowledgeFileState.files.length;
+                knowledgeFileState.total = data.total || knowledgeFileState.files.length;
+                knowledgeFileState.hasMore = !!data.has_more;
+                renderKnowledgeSources(knowledgeFileState.files, [], knowledgeFileState.bookId, {
+                    hasMore: knowledgeFileState.hasMore,
+                    total: knowledgeFileState.total,
+                    loaded: knowledgeFileState.files.length
+                });
+                if (metaEl) metaEl.textContent = '已加载 ' + knowledgeFileState.files.length + ' / ' + knowledgeFileState.total + ' 个文件';
             } else {
                 renderKnowledgeSourceError(data.message || '加载知识库文件失败');
             }
         })
         .catch(function(err) {
+            knowledgeFileState.loading = false;
             console.error('Load knowledge sources error:', err);
             renderKnowledgeSourceError(String(err));
         });
@@ -332,7 +421,7 @@ function loadKnowledgeStatus(bookId) {
         .catch(err => console.error('Load knowledge status error:', err));
 }
 
-function renderKnowledgeSources(rootFiles, tree, bookId) {
+function renderKnowledgeSources(rootFiles, tree, bookId, pageInfo) {
     const treeEl = document.getElementById('knowledgeFileTree');
     const previewEl = document.getElementById('knowledgeFilePreview');
     if (!treeEl) return;
@@ -345,12 +434,16 @@ function renderKnowledgeSources(rootFiles, tree, bookId) {
     }
     var html = '';
     if (rootFiles.length) {
-        html += '<div class="knowledge-tree-section">root</div>';
+        html += '<div class="knowledge-tree-section">files</div>';
         html += rootFiles.map(function(file) { return renderKnowledgeFileNode(file, bookId, 0); }).join('');
     }
     html += tree.map(function(group) { return renderKnowledgeDirNode(group, bookId, 0); }).join('');
+    if (pageInfo && pageInfo.hasMore) {
+        html += '<button type="button" class="knowledge-load-more" onclick="loadKnowledgeFilePage(true)">加载更多（' +
+            escapeHtml(String(pageInfo.loaded)) + '/' + escapeHtml(String(pageInfo.total)) + '）</button>';
+    }
     treeEl.innerHTML = html;
-    if (previewEl) previewEl.innerHTML = '<div class="knowledge-file-preview-empty">选择左侧文件查看内容</div>';
+    if (previewEl && !pageInfo) previewEl.innerHTML = '<div class="knowledge-file-preview-empty">选择左侧文件查看内容</div>';
 }
 
 function renderKnowledgeSourceError(message) {
@@ -406,7 +499,8 @@ function readKnowledgeFile(path, bookId, node) {
             }
             var content = data.content || '';
             var isMarkdown = /\.md$/i.test(path);
-            var body = isMarkdown ? '<div class="markdown-preview">' + renderMarkdown(content) + '</div>' : '<pre class="knowledge-text-preview">' + escapeHtml(content) + '</pre>';
+            var truncated = data.truncated ? '<div class="knowledge-preview-truncated">文件较大，预览已截断前 ' + escapeHtml(String(data.max_chars || 300000)) + ' 字符。</div>' : '';
+            var body = truncated + (isMarkdown ? '<div class="markdown-preview">' + renderMarkdown(content) + '</div>' : '<pre class="knowledge-text-preview">' + escapeHtml(content) + '</pre>');
             previewEl.innerHTML = body;
         })
         .catch(function(err) {
@@ -469,6 +563,7 @@ function uploadKnowledgeDoc(bookId, category) {
                     showToast('文档上传成功');
                     loadKnowledgeSources(bookId || '');
                     loadKnowledgeStatus(bookId || '');
+                    resetKnowledgeGraphPanel(bookId || '');
                 } else {
                     showToast('上传失败: ' + (data.message || ''), 'error');
                 }

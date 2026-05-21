@@ -18,9 +18,18 @@ class KnowledgeListHandler:
         require_auth()
         try:
             from agent.knowledge.service import KnowledgeService
-            params = web.input(book_id='')
+            params = web.input(book_id='', offset='', limit='', query='', path_prefix='', mode='page')
             svc = KnowledgeService(get_workspace_root())
-            result = svc.list_tree(book_id=params.book_id)
+            if params.mode == 'tree':
+                result = svc.list_tree(book_id=params.book_id)
+            else:
+                result = svc.list_files_page(
+                    book_id=params.book_id,
+                    offset=int(params.offset or 0),
+                    limit=int(params.limit or 80),
+                    query=params.query,
+                    path_prefix=params.path_prefix,
+                )
             return json_success(**result)
         except Exception as e:
             logger.error(f"[WebChannel] Knowledge list error: {e}")
