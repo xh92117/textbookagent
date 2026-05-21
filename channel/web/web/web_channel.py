@@ -24,6 +24,7 @@ from common.log import logger
 from common.run_events import RunStateRecorder, normalize_event
 from common.singleton import singleton
 from config import conf
+from channel.web.web.routes import get_urls
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -823,69 +824,7 @@ class WebChannel(ChatChannel):
             os.makedirs(static_dir)
             logger.debug(f"[WebChannel] Created static directory: {static_dir}")
 
-        urls = (
-            '/', 'RootHandler',
-            '/auth/login', 'AuthLoginHandler',
-            '/auth/check', 'AuthCheckHandler',
-            '/auth/logout', 'AuthLogoutHandler',
-            '/message', 'MessageHandler',
-            '/upload', 'UploadHandler',
-            '/uploads/(.*)', 'UploadsHandler',
-            '/api/file', 'FileServeHandler',
-            '/poll', 'PollHandler',
-            '/stream', 'StreamHandler',
-            '/chat', 'ChatHandler',
-            '/textbook', 'TextbookPageHandler',
-            '/config', 'ConfigHandler',
-            '/api/channels', 'ChannelsHandler',
-            '/api/weixin/qrlogin', 'WeixinQrHandler',
-            '/api/feishu/register', 'FeishuRegisterHandler',
-            '/api/tools', 'ToolsHandler',
-            '/api/skills', 'SkillsHandler',
-            '/api/workspace', 'WorkspaceHandler',
-            '/api/memory', 'MemoryHandler',
-            '/api/memory/content', 'MemoryContentHandler',
-            '/api/memory/query', 'MemoryQueryHandler',
-            '/api/knowledge/list', 'KnowledgeListHandler',
-            '/api/knowledge/read', 'KnowledgeReadHandler',
-            '/api/knowledge/graph', 'KnowledgeGraphHandler',
-            '/api/knowledge/upload', 'KnowledgeUploadHandler',
-            '/api/knowledge/sources', 'KnowledgeSourcesHandler',
-            '/api/knowledge/status', 'KnowledgeStatusHandler',
-            '/api/knowledge/link-skill', 'KnowledgeSkillLinkHandler',
-            '/api/knowledge/organize', 'KnowledgeOrganizeHandler',
-            '/api/knowledge/knowledge-graph', 'KnowledgeKnowledgeGraphHandler',
-            '/api/scheduler', 'SchedulerHandler',
-            '/api/sessions', 'SessionsHandler',
-            '/api/sessions/(.*)/generate_title', 'SessionTitleHandler',
-            '/api/sessions/(.*)/clear_context', 'SessionClearContextHandler',
-            '/api/sessions/(.*)', 'SessionDetailHandler',
-            '/api/history', 'HistoryHandler',
-            '/api/logs', 'LogsHandler',
-            '/api/version', 'VersionHandler',
-            '/api/textbook', 'TextbookHandler',
-            '/api/textbook/([^/]+)', 'TextbookDetailHandler',
-            '/api/textbook/([^/]+)/outline', 'TextbookOutlineHandler',
-            '/api/textbook/([^/]+)/chapters', 'TextbookChaptersHandler',
-            '/api/textbook/([^/]+)/chapters/([^/]+)', 'TextbookChapterDetailHandler',
-            '/api/textbook/([^/]+)/pipeline', 'TextbookPipelineHandler',
-            '/api/textbook/([^/]+)/pipeline/stream', 'TextbookPipelineStreamHandler',
-            '/api/textbook/([^/]+)/export', 'TextbookExportHandler',
-            '/api/textbook/([^/]+)/outline/versions', 'TextbookOutlineVersionHandler',
-            '/api/textbook/([^/]+)/outline/versions/([^/]+)', 'TextbookOutlineVersionDetailHandler',
-            '/api/textbook/([^/]+)/outline/versions/([^/]+)/restore', 'TextbookOutlineVersionRestoreHandler',
-            '/api/textbook/([^/]+)/review', 'TextbookReviewHandler',
-            '/api/textbook/([^/]+)/preferences', 'TextbookPreferencesHandler',
-            '/api/textbook/([^/]+)/assets/(.*)', 'TextbookAssetsHandler',
-            '/api/sandbox/execute', 'SandboxExecuteHandler',
-            '/api/sandbox/charts', 'SandboxChartHandler',
-            '/api/chat/save', 'ChatHistorySaveHandler',
-            '/api/chat/history/([^/]+)', 'ChatHistoryLoadHandler',
-            '/api/chat/sessions', 'ChatSessionsHandler',
-            '/api/chat/history/([^/]+)/clear', 'ChatHistoryClearHandler',
-            '/api/chat/cancel', 'ChatCancelHandler',
-            '/assets/(.*)', 'AssetsHandler',
-        )
+        urls = get_urls()
         app = web.application(urls, globals(), autoreload=False)
 
         # 完全禁用web.py的HTTP日志输出

@@ -109,6 +109,39 @@ def test_truth_file_status_tracks_completed_chapters():
         assert status['pipeline_id'] == 'pipe-test'
 
 
+def test_truth_file_status_blocks_same_chapter_phase_regression():
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        mgr = TruthFileManager(os.path.join(tmp, "book1"))
+        mgr.write_chapter(1, "chapter one " * 8)
+        first = mgr.update_status(
+            total_chapters=3,
+            current_chapter=1,
+            current_phase='review_chapter',
+            run_status='running',
+        )
+        regressed = mgr.update_status(
+            total_chapters=3,
+            current_chapter=1,
+            current_phase='write_chapter',
+            run_status='running',
+        )
+        assert first['current_phase'] == 'review_chapter'
+        assert regressed['current_phase'] == 'review_chapter'
+        assert regressed['regression_blocked'] is True
+
+
+def test_truth_file_status_allows_next_chapter_restart():
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        mgr = TruthFileManager(os.path.join(tmp, "book1"))
+        mgr.update_status(total_chapters=3, current_chapter=1, current_phase='persist_chapter')
+        next_chapter = mgr.update_status(total_chapters=3, current_chapter=2, current_phase='read_outline')
+        assert next_chapter['current_chapter'] == 2
+        assert next_chapter['current_phase'] == 'read_outline'
+        assert next_chapter['regression_blocked'] is False
+
+
 def test_outline_review_state_tracks_outline_hash():
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:

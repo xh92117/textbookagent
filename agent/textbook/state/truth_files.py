@@ -7,6 +7,23 @@ from datetime import datetime
 
 
 class TruthFileManager:
+    STATUS_PHASE_ORDER = {
+        'pipeline_started': 0,
+        'outline': 10,
+        'review_outline': 20,
+        'chapter_actions_planned': 90,
+        'read_outline': 100,
+        'retrieve_knowledge': 110,
+        'build_context': 120,
+        'write_chapter': 130,
+        'route_visual_assets': 140,
+        'review_chapter': 150,
+        'revise_chapter': 160,
+        'polish_chapter': 170,
+        'persist_chapter': 180,
+        'progress_updated': 185,
+        'pipeline_completed': 1000,
+    }
     TRUTH_FILES = {
         'outline': 'outline/outline.md',
         'knowledge_graph': 'outline/knowledge_graph.md',
@@ -306,12 +323,35 @@ class TruthFileManager:
         progress = self.get_progress()
         completed_chapters = self.list_completed_chapter_numbers()
         total = total_chapters or progress.get('total_chapters', 0) or 0
+        previous = self.get_status()
+        previous_chapter = previous.get('current_chapter')
+        previous_phase = previous.get('current_phase') or ""
+        previous_rank = int(previous.get('phase_rank', self.STATUS_PHASE_ORDER.get(previous_phase, -1)) or -1)
+        current_rank = self.STATUS_PHASE_ORDER.get(current_phase, previous_rank)
+        regression = False
+        same_chapter = (
+            current_chapter is not None
+            and previous_chapter is not None
+            and int(current_chapter) == int(previous_chapter)
+        )
+        if previous.get('status') == 'completed' and run_status != 'completed':
+            regression = True
+        elif same_chapter and current_rank < previous_rank:
+            regression = True
+        if regression:
+            current_phase = previous_phase
+            current_rank = previous_rank
+            current_chapter = previous_chapter
+            run_status = previous.get('status', run_status)
+
         payload = {
             'version': 'textbook-status-v1',
             'book_dir': self.book_dir,
             'status': run_status,
             'current_chapter': current_chapter,
             'current_phase': current_phase,
+            'phase_rank': current_rank,
+            'regression_blocked': regression,
             'completed_chapters': completed_chapters,
             'latest_completed_chapter': completed_chapters[-1] if completed_chapters else None,
             'total_chapters': total,
