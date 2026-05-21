@@ -2098,6 +2098,127 @@ body {
     padding: 0;
 }
 
+.run-event-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 0 12px 10px;
+}
+
+.run-stat {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(100,116,139,0.24);
+    color: #8ea3bb;
+    font: 800 11px/1 var(--font-mono);
+}
+
+.run-stat.running {
+    border-color: rgba(251,191,36,0.28);
+    color: #fbbf24;
+}
+
+.run-stat.success {
+    border-color: rgba(52,211,153,0.28);
+    color: #34d399;
+}
+
+.run-stat.error {
+    border-color: rgba(251,113,133,0.28);
+    color: #fb7185;
+}
+
+.run-event-list {
+    padding: 0 12px 12px;
+    display: grid;
+    gap: 7px;
+}
+
+.run-event-row {
+    display: flex;
+    gap: 9px;
+    align-items: flex-start;
+    padding: 8px 9px;
+    border: 1px solid rgba(100,116,139,0.18);
+    border-radius: 6px;
+    background: rgba(15,23,42,0.46);
+}
+
+.run-event-icon {
+    width: 18px;
+    color: #fbbf24;
+    font: 900 12px/1.4 var(--font-mono);
+    flex-shrink: 0;
+}
+
+.run-event-row.success .run-event-icon {
+    color: #34d399;
+}
+
+.run-event-row.error .run-event-icon {
+    color: #fb7185;
+}
+
+.run-event-body {
+    min-width: 0;
+    flex: 1;
+}
+
+.run-event-title {
+    color: #d7e2f1;
+    font-size: 12px;
+    font-weight: 800;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.run-event-meta {
+    margin-top: 2px;
+    color: #7f93ad;
+    font-size: 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.run-event-error {
+    margin-top: 4px;
+    color: #fb7185;
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.knowledge-run-event {
+    padding: 7px 0;
+    border-top: 1px solid var(--border);
+}
+
+.knowledge-run-title {
+    color: var(--fg);
+    font-size: 12px;
+    font-weight: 700;
+    word-break: break-word;
+}
+
+.knowledge-run-meta {
+    margin-top: 2px;
+    color: var(--muted-fg);
+    font-size: 11px;
+}
+
+.knowledge-run-event.success .knowledge-run-title {
+    color: var(--success);
+}
+
+.knowledge-run-event.error .knowledge-run-title {
+    color: var(--danger);
+}
+
 .agent-work-card {
     border: 1px solid rgba(100,116,139,0.24);
     border-radius: 6px;

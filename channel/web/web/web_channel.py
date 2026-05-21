@@ -1102,7 +1102,15 @@ class TextbookPageHandler:
             html = f.read()
         html = self._expand_includes(html, base_dir)
         cache_bust = str(int(time.time()))
-        html = html.replace('assets/js/textbook.js', f'assets/js/textbook.js?v={cache_bust}')
+        for script_name in (
+            'textbook.js',
+            'textbook-chat.js',
+            'textbook-skills.js',
+            'textbook-settings.js',
+            'textbook-knowledge.js',
+            'textbook-detail.js',
+        ):
+            html = html.replace(f'assets/js/{script_name}', f'assets/js/{script_name}?v={cache_bust}')
         html = html.replace('assets/css/textbook.css', f'assets/css/textbook.css?v={cache_bust}')
         return html
 
