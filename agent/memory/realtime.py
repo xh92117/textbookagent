@@ -342,9 +342,10 @@ class RealtimeMemoryRecorder:
                 event_lines.append(f"- {event.get('type', '')}: {summary}")
         prompt = (
             "Extract durable user memory from this completed process. "
-            "Return only a JSON object with keys: preferences, goals, projects, facts. "
+            "Return only a strict JSON object with keys: preferences, goals, projects, facts. "
             "Each value must be an array of short strings. Keep only stable information "
-            "that helps future conversations; omit transient task details.\n\n"
+            "that helps future conversations. Omit transient task details, tool logs, errors without reusable lessons, "
+            "guesses, secrets, API keys, tokens, and passwords.\n\n"
             f"User request:\n{payload.get('user_message', '')}\n\n"
             f"Process events:\n{chr(10).join(event_lines)}\n\n"
             f"Assistant final response:\n{payload.get('final_response', '')[:1200]}"
@@ -354,7 +355,7 @@ class RealtimeMemoryRecorder:
             temperature=0,
             max_tokens=500,
             stream=False,
-            system="You update a compact user profile. Respond with strict JSON only.",
+            system="You update a compact user profile. Respond with strict JSON only. Do not invent facts.",
         )
         response = llm_model.call(request)
         text = self._extract_response_text(response)

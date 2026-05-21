@@ -110,6 +110,33 @@ def test_organize_knowledge_force_reprocesses_indexed_sources():
         assert calls["parse"] - normal_calls == 1
 
 
+def test_get_status_reports_actual_wiki_chunk_counts():
+    with tempfile.TemporaryDirectory() as tmp:
+        service = KnowledgeService(tmp)
+        wiki_dir = os.path.join(tmp, "knowledge", "tb", "_llm_wiki")
+        os.makedirs(wiki_dir, exist_ok=True)
+        with open(os.path.join(wiki_dir, "index.json"), "w", encoding="utf-8") as f:
+            import json
+            json.dump({
+                "sources": [{"id": "src"}],
+                "chunks": [{"id": "c1"}, {"id": "c2"}],
+                "pages": [{"id": "p1"}],
+                "entities": [{"id": "e1"}],
+                "relations": [{"id": "r1"}],
+            }, f)
+        source_dir = os.path.join(tmp, "knowledge", "tb", "sources")
+        os.makedirs(source_dir, exist_ok=True)
+        with open(os.path.join(source_dir, "paper.md"), "w", encoding="utf-8") as f:
+            f.write("# Demo\n")
+
+        selected = service.get_status("tb")
+        all_books = service.get_status("")
+
+        assert selected["wiki"]["chunks"] == 2
+        assert selected["wiki"]["pages"] == 1
+        assert all_books["wiki"]["chunks"] == 2
+
+
 def test_large_wiki_uses_fast_local_metadata(monkeypatch):
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
@@ -207,6 +234,66 @@ def test_wiki_index_records_normalized_terms_for_recall():
         evidence = retriever.retrieve("smart-construction", limit=1)
         assert evidence
         assert evidence[0]["chunk_id"] == index["chunks"][0]["id"]
+
+
+def test_retriever_reports_graph_reason_and_diagnostics():
+    import json
+
+    with tempfile.TemporaryDirectory() as tmp:
+        wiki_dir = os.path.join(tmp, "knowledge", "tb", "_llm_wiki")
+        chunk_dir = os.path.join(wiki_dir, "chunks")
+        os.makedirs(chunk_dir, exist_ok=True)
+        for name, body in {
+            "c1.md": "# Planning\n\nAgent planning creates a task tree.",
+            "c2.md": "# Memory\n\nMemory retrieval supports long-running agents.",
+            "c3.md": "# Tools\n\nTool use connects agents with external systems.",
+        }.items():
+            with open(os.path.join(chunk_dir, name), "w", encoding="utf-8") as f:
+                f.write(body)
+        index = {
+            "sources": [{"id": "s1", "title": "Agent paper"}],
+            "entities": [{"id": "agent", "name": "Agent"}],
+            "relations": [{"type": "supports", "source_chunk_ids": ["c1", "c2"]}],
+            "chunks": [
+                {
+                    "id": "c1",
+                    "title": "Planning",
+                    "summary": "Agent planning",
+                    "keywords": ["planning"],
+                    "related_entities": ["Agent"],
+                    "path": "chunks/c1.md",
+                },
+                {
+                    "id": "c2",
+                    "title": "Memory",
+                    "summary": "Memory",
+                    "keywords": ["memory"],
+                    "related_entities": ["Agent"],
+                    "path": "chunks/c2.md",
+                },
+                {
+                    "id": "c3",
+                    "title": "Tools",
+                    "summary": "Tools",
+                    "keywords": ["tools"],
+                    "related_entities": [],
+                    "path": "chunks/c3.md",
+                },
+            ],
+        }
+        with open(os.path.join(wiki_dir, "index.json"), "w", encoding="utf-8") as f:
+            json.dump(index, f, ensure_ascii=False)
+
+        retriever = KnowledgeRetriever(tmp, "tb")
+        evidence = retriever.retrieve("planning", limit=2, use_cache=False)
+        diagnostics = retriever.diagnose("planning", limit=2)
+        pack = retriever.format_evidence_pack("planning", limit=2)
+
+        assert any(item.get("graph_reason") for item in evidence)
+        assert diagnostics["chunk_count"] == 3
+        assert diagnostics["graph_expanded_count"] >= 1
+        assert diagnostics["top_chunks"]
+        assert "Graph reason:" in pack
 
 
 def test_extracted_asset_filter_skips_small_and_logo_like_images():

@@ -141,28 +141,43 @@ class KnowledgeRetriever:
                 scores[chunk_id] += 0.25
         return scores
 
-    def _graph_expansion_scores(self, seed_ids: List[str]) -> Dict[str, float]:
+    def _graph_expansion_details(self, seed_ids: List[str]) -> Dict[str, dict]:
         seed_set = set(seed_ids)
-        scores = defaultdict(float)
+        details = defaultdict(lambda: {"score": 0.0, "reasons": []})
         if not seed_set:
-            return scores
+            return details
         entity_to_chunks = defaultdict(set)
+        chunk_titles = {}
         for chunk in self.index.get("chunks", []):
+            chunk_id = chunk.get("id", "")
+            if chunk_id:
+                chunk_titles[chunk_id] = chunk.get("title", chunk_id)
             for ent in chunk.get("related_entities") or []:
-                entity_to_chunks[ent].add(chunk.get("id", ""))
+                if chunk_id:
+                    entity_to_chunks[ent].add(chunk_id)
         for chunk in self.index.get("chunks", []):
             if chunk.get("id") in seed_set:
                 for ent in chunk.get("related_entities") or []:
                     for neighbor in entity_to_chunks.get(ent, set()):
                         if neighbor not in seed_set:
-                            scores[neighbor] += 0.75
+                            details[neighbor]["score"] += 0.75
+                            reason = f"shares entity '{ent}' with {chunk_titles.get(chunk.get('id'), chunk.get('id'))}"
+                            if reason not in details[neighbor]["reasons"]:
+                                details[neighbor]["reasons"].append(reason)
         for rel in self.index.get("relations", []):
             rel_chunks = [str(cid) for cid in (rel.get("source_chunk_ids") or [])]
             if seed_set & set(rel_chunks):
                 for cid in rel_chunks:
                     if cid not in seed_set:
-                        scores[cid] += 0.5
-        return scores
+                        details[cid]["score"] += 0.5
+                        rel_name = rel.get("type") or rel.get("label") or "relation"
+                        reason = f"linked by graph relation '{rel_name}'"
+                        if reason not in details[cid]["reasons"]:
+                            details[cid]["reasons"].append(reason)
+        return details
+
+    def _graph_expansion_scores(self, seed_ids: List[str]) -> Dict[str, float]:
+        return {chunk_id: detail["score"] for chunk_id, detail in self._graph_expansion_details(seed_ids).items()}
 
     def retrieve(self, query: str, limit: int = 6, excerpt_chars: int = 900, use_cache: bool = True) -> List[dict]:
         cache_key = self._cache_key(query, limit, excerpt_chars)
@@ -179,9 +194,14 @@ class KnowledgeRetriever:
         for chunk_id in chunks:
             combined[chunk_id] += bm25.get(chunk_id, 0.0)
             combined[chunk_id] += meta.get(chunk_id, 0.0)
-        seeds = [cid for cid, _ in sorted(combined.items(), key=lambda item: item[1], reverse=True)[: max(limit, 4)]]
-        for chunk_id, score in self._graph_expansion_scores(seeds).items():
-            combined[chunk_id] += score
+        seeds = [
+            cid
+            for cid, score in sorted(combined.items(), key=lambda item: item[1], reverse=True)
+            if score > 0
+        ][: max(limit, 4)]
+        graph_details = self._graph_expansion_details(seeds)
+        for chunk_id, detail in graph_details.items():
+            combined[chunk_id] += detail.get("score", 0.0)
         ranked = sorted(combined.items(), key=lambda item: item[1], reverse=True)
         if not any(score > 0 for _, score in ranked):
             ranked = [(cid, 0.0) for cid in list(chunks.keys())[:limit]]
@@ -202,12 +222,61 @@ class KnowledgeRetriever:
                 "entities": chunk.get("related_entities") or [],
                 "path": chunk.get("path", ""),
                 "assets": chunk.get("assets") or [],
+                "graph_reason": "; ".join(graph_details.get(chunk_id, {}).get("reasons", [])[:3]),
                 "embedding": chunk.get("embedding") or {"status": "pending"},
                 "excerpt": self._read_chunk_excerpt(chunk.get("path", ""), max_chars=excerpt_chars) if excerpt_chars and excerpt_chars > 0 else "",
             })
         if use_cache:
             self._write_cache(cache_key, evidence)
         return evidence
+
+    def diagnose(self, query: str, limit: int = 8) -> dict:
+        """Return compact retrieval diagnostics for logs/UI, not for LLM context."""
+        chunks = {chunk.get("id", ""): chunk for chunk in self.index.get("chunks", []) if chunk.get("id")}
+        if not chunks:
+            return {
+                "query_chars": len(query or ""),
+                "chunk_count": 0,
+                "source_count": len(self.index.get("sources", []) or []),
+                "relation_count": len(self.index.get("relations", []) or []),
+                "top_chunks": [],
+            }
+        bm25 = self._bm25_scores(query)
+        meta = self._metadata_scores(query)
+        combined = defaultdict(float)
+        for chunk_id in chunks:
+            combined[chunk_id] += bm25.get(chunk_id, 0.0)
+            combined[chunk_id] += meta.get(chunk_id, 0.0)
+        seeds = [
+            cid
+            for cid, score in sorted(combined.items(), key=lambda item: item[1], reverse=True)
+            if score > 0
+        ][: max(limit, 4)]
+        graph_details = self._graph_expansion_details(seeds)
+        for chunk_id, detail in graph_details.items():
+            combined[chunk_id] += detail.get("score", 0.0)
+        ranked = sorted(combined.items(), key=lambda item: item[1], reverse=True)[:limit]
+        return {
+            "query_chars": len(query or ""),
+            "query_terms": self._tokens(query)[:12],
+            "chunk_count": len(chunks),
+            "source_count": len(self.index.get("sources", []) or []),
+            "entity_count": len(self.index.get("entities", []) or []),
+            "relation_count": len(self.index.get("relations", []) or []),
+            "seed_count": len([cid for cid in seeds if combined.get(cid, 0.0) > 0]),
+            "graph_expanded_count": len(graph_details),
+            "top_chunks": [
+                {
+                    "chunk_id": chunk_id,
+                    "title": chunks.get(chunk_id, {}).get("title", chunk_id),
+                    "score": round(float(score), 4),
+                    "graph_expanded": chunk_id in graph_details,
+                    "graph_reason": "; ".join(graph_details.get(chunk_id, {}).get("reasons", [])[:2]),
+                    "path": chunks.get(chunk_id, {}).get("path", ""),
+                }
+                for chunk_id, score in ranked
+            ],
+        }
 
     def format_compact_evidence_pack(self, query: str, metadata_limit: int = 8, excerpt_limit: int = 3, excerpt_chars: int = 500) -> str:
         evidence = self.retrieve(query, limit=metadata_limit, excerpt_chars=0)
@@ -224,6 +293,8 @@ class KnowledgeRetriever:
                 lines.append(f"Use when: {item['use_when']}")
             if item.get("keywords"):
                 lines.append("Keywords: " + ", ".join(str(k) for k in item["keywords"][:8]))
+            if item.get("graph_reason"):
+                lines.append(f"Graph reason: {item['graph_reason']}")
             lines.append(f"Citation: knowledge/_llm_wiki/{item.get('path', '')}")
             if item.get("assets"):
                 lines.append("Assets: " + ", ".join(str(a.get("path", "")) for a in item["assets"][:3] if a.get("path")))
@@ -251,6 +322,8 @@ class KnowledgeRetriever:
                 lines.append("Keywords: " + ", ".join(str(k) for k in item["keywords"][:10]))
             if item.get("entities"):
                 lines.append("Entities: " + ", ".join(str(e) for e in item["entities"][:10]))
+            if item.get("graph_reason"):
+                lines.append(f"Graph reason: {item['graph_reason']}")
             lines.append(f"Citation: knowledge/_llm_wiki/{item.get('path', '')}")
             if item.get("assets"):
                 lines.append("Assets: " + ", ".join(str(a.get("path", "")) for a in item["assets"][:3] if a.get("path")))
@@ -266,7 +339,7 @@ class KnowledgeRetriever:
             "limit": limit,
             "excerpt_chars": excerpt_chars,
             "index_mtime": round(index_mtime, 6),
-            "version": "retriever-v2",
+            "version": "retriever-v3",
         }, ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 

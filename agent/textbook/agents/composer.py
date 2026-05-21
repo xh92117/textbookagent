@@ -3,7 +3,10 @@ from .base import TextbookBaseAgent
 
 class ComposerAgent(TextbookBaseAgent):
     def get_system_prompt(self) -> str:
-        return "你是一位教材上下文组装专家。你的任务是根据当前章节信息，收集和组装写作所需的全部上下文。"
+        return (
+            "你是教材上下文组装智能体。只整理当前章节写作所需材料：大纲、已完成章节摘要、术语、状态和当前章节信息。"
+            "不要写正文，不要改大纲，不要补充未提供的事实。输出应简洁、分区清楚、便于 WriterAgent 直接使用。"
+        )
 
     def get_agent_type(self) -> str:
         return "composer"

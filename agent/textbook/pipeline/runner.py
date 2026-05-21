@@ -113,12 +113,14 @@ class PipelineRunner:
         return "\n\n".join(evidence_parts).strip()
 
     def _load_wiki_context(self, book_id: str, chapter_hint: str, limit: int = 6) -> str:
+        self._last_wiki_diagnostics = {}
         if not self.memory_manager:
             return ""
         try:
             from agent.knowledge.retriever import KnowledgeRetriever
             workspace_root = getattr(self.memory_manager, "workspace_root", self.memory_manager.workspace_dir)
             retriever = KnowledgeRetriever(workspace_root, book_id)
+            self._last_wiki_diagnostics = retriever.diagnose(chapter_hint, limit=max(limit, 8))
             return retriever.format_compact_evidence_pack(chapter_hint, metadata_limit=max(limit, 8), excerpt_limit=3, excerpt_chars=500)
         except Exception:
             return ""
@@ -376,12 +378,20 @@ class PipelineRunner:
             update_book_status(i, "read_outline", "running", {"pipeline_id": self.pipeline_id})
             PipelineCheckpointStore.mark(actions, "retrieve_knowledge", "running")
             wiki_context = self._load_wiki_context(book_id, chapter_hint)
+            wiki_diagnostics = getattr(self, "_last_wiki_diagnostics", {}) or {}
             PipelineCheckpointStore.mark(actions, "retrieve_knowledge", "completed", f"{len(wiki_context)} chars")
             if checkpoint_store:
-                checkpoint_store.save(i, actions, {"stage": "retrieve_knowledge"})
+                checkpoint_store.save(i, actions, {"stage": "retrieve_knowledge", "knowledge_diagnostics": wiki_diagnostics})
             update_book_status(i, "retrieve_knowledge", "running", {
                 "pipeline_id": self.pipeline_id,
                 "wiki_context_chars": len(wiki_context),
+                "knowledge_diagnostics": wiki_diagnostics,
+            })
+            self._emit('knowledge_retrieved', {
+                "chapter_number": i,
+                "query_chars": wiki_diagnostics.get("query_chars", len(chapter_hint)),
+                "chunk_count": wiki_diagnostics.get("chunk_count", 0),
+                "top_chunks": wiki_diagnostics.get("top_chunks", [])[:5],
             })
             self._emit('phase_progress', {
                 'phase': 'compose',

@@ -41,8 +41,17 @@
                         <div id="knowledgeOrganizeMeta" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:12px;color:var(--muted-fg);"></div>
                         <div id="knowledgeOrganizeEvents" style="margin-top:10px;max-height:120px;overflow:auto;font-size:12px;color:var(--muted-fg);"></div>
                     </div>
-                    <div id="knowledgeSourceList" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:20px;">
-                        <div style="text-align:center;padding:40px 0;color:var(--muted-fg);font-size:13px;grid-column:1/-1;">知识库文档将显示在此处</div>
+                    <div id="knowledgeSourceList" class="knowledge-file-browser">
+                        <div class="knowledge-browser-sidebar">
+                            <div class="knowledge-browser-title">文件查阅</div>
+                            <div id="knowledgeFileTree" class="knowledge-file-tree">
+                                <div class="knowledge-empty">知识库文件将显示在此处</div>
+                            </div>
+                        </div>
+                        <div id="knowledgeBrowserResize" class="knowledge-browser-resize" title="拖动调整宽度" aria-hidden="true"></div>
+                        <div class="knowledge-browser-preview">
+                            <div id="knowledgeFilePreview" class="knowledge-file-preview-empty">选择左侧文件查看内容</div>
+                        </div>
                     </div>
                     <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px;">
                         <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px;">

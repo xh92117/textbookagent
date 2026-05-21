@@ -42,10 +42,9 @@ _SIGNIFICANT_TOOLS = {
     "knowledge_capture",
     "start_pipeline",
     "pipeline",
-    "web_fetch",
 }
 
-_NOISY_ERROR_PATTERNS = (
+_TRANSIENT_ERROR_PATTERNS = (
     r"\b404\b",
     r"\b429\b",
     r"\brate limit\b",
@@ -57,6 +56,16 @@ _NOISY_ERROR_PATTERNS = (
     r"\bnot found\b",
     r"\bfile not found\b",
     r"\bno such file\b",
+)
+
+_LOW_VALUE_ERROR_PATTERNS = (
+    r"\bskipped\b",
+    r"\balready exists\b",
+    r"\bempty result\b",
+    r"\bno results?\b",
+)
+
+_PERMISSION_ERROR_PATTERNS = (
     r"\bpermission denied\b",
 )
 
@@ -164,11 +173,7 @@ def should_record_tool_error(tool_name: str, detail: Any, metadata: Dict[str, An
     tool = (tool_name or "").lower()
     text = _stringify(detail, 1200).lower()
 
-    if error_type in _SIGNIFICANT_ERROR_TYPES:
-        return True
     if metadata.get("critical") or metadata.get("repeat_count", 0):
-        return True
-    if tool in _SIGNIFICANT_TOOLS:
         return True
 
     durable_patterns = (
@@ -184,8 +189,16 @@ def should_record_tool_error(tool_name: str, detail: Any, metadata: Dict[str, An
     )
     if any(re.search(pattern, text) for pattern in durable_patterns):
         return True
-    if any(re.search(pattern, text) for pattern in _NOISY_ERROR_PATTERNS):
+    if tool in ("write", "edit", "bash") and any(re.search(pattern, text) for pattern in _PERMISSION_ERROR_PATTERNS):
+        return True
+    if any(re.search(pattern, text) for pattern in _TRANSIENT_ERROR_PATTERNS):
         return False
+    if any(re.search(pattern, text) for pattern in _LOW_VALUE_ERROR_PATTERNS):
+        return False
+    if error_type in _SIGNIFICANT_ERROR_TYPES:
+        return True
+    if tool in _SIGNIFICANT_TOOLS:
+        return True
     return False
 
 
@@ -198,7 +211,9 @@ def should_record_agent_error(detail: Any, metadata: Dict[str, Any] | None = Non
         return True
     if any(token in text for token in ("api key", "authentication", "authorization", "invalid json")):
         return True
-    if any(re.search(pattern, text) for pattern in _NOISY_ERROR_PATTERNS):
+    if any(re.search(pattern, text) for pattern in _TRANSIENT_ERROR_PATTERNS):
+        return False
+    if any(re.search(pattern, text) for pattern in _LOW_VALUE_ERROR_PATTERNS):
         return False
     return bool(text and len(text) > 80)
 

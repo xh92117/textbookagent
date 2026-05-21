@@ -1996,6 +1996,7 @@ function loadKnowledgePage() {
     loadKnowledgeSources();
     loadKnowledgeStatus();
     loadKnowledgeGraph('', 'knowledgeGraphArea');
+    initKnowledgeBrowserResize();
 }
 
 function loadKnowledgeBookSelector() {
@@ -2268,13 +2269,13 @@ function renderKnowledgeGraph(container, nodes, edges) {
 }
 
 function loadKnowledgeSources(bookId) {
-    let url = '/api/knowledge/sources';
+    let url = '/api/knowledge/list';
     if (bookId) url += '?book_id=' + encodeURIComponent(bookId);
     fetch(url)
         .then(r => r.json())
         .then(data => {
             if (data.status === 'success') {
-                renderKnowledgeSources(data.sources || []);
+                renderKnowledgeSources(data.root_files || [], data.tree || [], bookId || '');
             }
         })
         .catch(err => console.error('Load knowledge sources error:', err));
@@ -2291,6 +2292,8 @@ function loadKnowledgeStatus(bookId) {
                 if (el) el.textContent = `共 ${data.total_documents || 0} 个文档，${data.categories ? data.categories.length : 0} 个分类`;
                 var docsEl = document.getElementById('knowledgeTotalDocs');
                 if (docsEl) docsEl.textContent = data.total_documents || 0;
+                var chunksEl = document.getElementById('knowledgeTotalChunks');
+                if (chunksEl) chunksEl.textContent = (data.wiki && data.wiki.chunks) ? data.wiki.chunks : 0;
                 var sizeEl = document.getElementById('knowledgeTotalSize');
                 if (sizeEl) sizeEl.textContent = formatFileSize(data.total_size || 0);
             }
@@ -2298,32 +2301,113 @@ function loadKnowledgeStatus(bookId) {
         .catch(err => console.error('Load knowledge status error:', err));
 }
 
-function renderKnowledgeSources(sources) {
-    const container = document.getElementById('knowledgeSourceList');
-    if (!container) return;
-    if (!sources.length) {
-        container.innerHTML = '<div class="knowledge-empty">暂无知识库文档</div>';
+function renderKnowledgeSources(rootFiles, tree, bookId) {
+    const treeEl = document.getElementById('knowledgeFileTree');
+    const previewEl = document.getElementById('knowledgeFilePreview');
+    if (!treeEl) return;
+    rootFiles = rootFiles || [];
+    tree = tree || [];
+    if (!rootFiles.length && !tree.length) {
+        treeEl.innerHTML = '<div class="knowledge-empty">暂无知识库文件</div>';
+        if (previewEl) previewEl.innerHTML = '<div class="knowledge-file-preview-empty">上传或整理知识库后，可在这里查阅文件内容</div>';
         return;
     }
-    let html = '';
-    sources.forEach(function(s) {
-        var name = s.name || s.file_name || '未命名文档';
-        var category = s.category || 'root';
-        var statusReady = s.status === 'ready';
-        html += '<div class="kb-card">' +
-            '<div class="kb-header">' +
-                '<div class="kb-icon"><i class="fas fa-file-lines"></i></div>' +
-                '<div class="kb-title" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</div>' +
-                '<span class="kb-status ' + (statusReady ? 'ready' : 'processing') + '">' + (statusReady ? '已就绪' : '处理中') + '</span>' +
-            '</div>' +
-            '<div class="kb-meta">' +
-                '<span title="' + escapeHtml(category) + '"><i class="fas fa-folder"></i> ' + escapeHtml(category) + '</span>' +
-                '<span><i class="fas fa-chart-simple"></i> ' + escapeHtml(formatFileSize(s.size || 0)) + '</span>' +
-                '<span title="' + escapeHtml(s.updated_at || '') + '"><i class="fas fa-calendar-days"></i> ' + escapeHtml(s.updated_at || '') + '</span>' +
-            '</div>' +
-        '</div>';
+    var html = '';
+    if (rootFiles.length) {
+        html += '<div class="knowledge-tree-section">root</div>';
+        html += rootFiles.map(function(file) { return renderKnowledgeFileNode(file, bookId, 0); }).join('');
+    }
+    html += tree.map(function(group) { return renderKnowledgeDirNode(group, bookId, 0); }).join('');
+    treeEl.innerHTML = html;
+    if (previewEl) previewEl.innerHTML = '<div class="knowledge-file-preview-empty">选择左侧文件查看内容</div>';
+}
+
+function renderKnowledgeDirNode(group, bookId, depth) {
+    var files = group.files || [];
+    var children = group.children || [];
+    var html = '<details class="knowledge-dir" open>' +
+        '<summary style="padding-left:' + (depth * 12) + 'px;"><i class="fas fa-folder"></i><span title="' + escapeHtml(group.path || group.dir || '') + '">' + escapeHtml(group.dir || 'folder') + '</span></summary>' +
+        '<div class="knowledge-dir-body">';
+    html += files.map(function(file) { return renderKnowledgeFileNode(file, bookId, depth + 1); }).join('');
+    html += children.map(function(child) { return renderKnowledgeDirNode(child, bookId, depth + 1); }).join('');
+    html += '</div></details>';
+    return html;
+}
+
+function renderKnowledgeFileNode(file, bookId, depth) {
+    var path = file.path || file.name || '';
+    var label = file.title || file.name || path;
+    var meta = formatFileSize(file.size || 0);
+    return '<button type="button" class="knowledge-file-node" style="padding-left:' + (10 + depth * 12) + 'px;" data-path="' + escapeHtml(path) + '" data-book-id="' + escapeHtml(bookId || '') + '" onclick="readKnowledgeFile(this.dataset.path, this.dataset.bookId, this)">' +
+        '<i class="fas fa-file-lines"></i>' +
+        '<span class="knowledge-file-node-title" title="' + escapeHtml(path) + '">' + escapeHtml(label) + '</span>' +
+        '<span class="knowledge-file-node-meta">' + escapeHtml(meta) + '</span>' +
+    '</button>';
+}
+
+function readKnowledgeFile(path, bookId, node) {
+    if (!path) return;
+    document.querySelectorAll('.knowledge-file-node.active').forEach(function(el) { el.classList.remove('active'); });
+    if (node) node.classList.add('active');
+    var previewEl = document.getElementById('knowledgeFilePreview');
+    if (previewEl) previewEl.innerHTML = '<div class="knowledge-file-preview-empty">正在读取...</div>';
+    var params = new URLSearchParams();
+    params.set('path', path);
+    if (bookId) params.set('book_id', bookId);
+    fetch('/api/knowledge/read?' + params.toString())
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!previewEl) return;
+            if (data.status !== 'success') {
+                previewEl.innerHTML = '<div class="knowledge-file-preview-empty">读取失败：' + escapeHtml(data.message || '') + '</div>';
+                return;
+            }
+            var content = data.content || '';
+            var isMarkdown = /\.md$/i.test(path);
+            var body = isMarkdown ? '<div class="markdown-preview">' + renderMarkdown(content) + '</div>' : '<pre class="knowledge-text-preview">' + escapeHtml(content) + '</pre>';
+            previewEl.innerHTML = body;
+        })
+        .catch(function(err) {
+            if (previewEl) previewEl.innerHTML = '<div class="knowledge-file-preview-empty">读取失败：' + escapeHtml(String(err)) + '</div>';
+        });
+}
+
+function initKnowledgeBrowserResize() {
+    var browser = document.getElementById('knowledgeSourceList');
+    var handle = document.getElementById('knowledgeBrowserResize');
+    if (!browser || !handle || handle.dataset.bound === '1') return;
+    handle.dataset.bound = '1';
+    var savedWidth = localStorage.getItem('knowledgeBrowserSidebarWidth');
+    if (savedWidth) browser.style.setProperty('--knowledge-sidebar-width', savedWidth + 'px');
+
+    var dragging = false;
+    function setWidth(clientX) {
+        var rect = browser.getBoundingClientRect();
+        var min = 240;
+        var max = Math.max(min, rect.width - 360);
+        var width = Math.min(max, Math.max(min, clientX - rect.left));
+        browser.style.setProperty('--knowledge-sidebar-width', width + 'px');
+        localStorage.setItem('knowledgeBrowserSidebarWidth', String(Math.round(width)));
+    }
+    handle.addEventListener('pointerdown', function(ev) {
+        if (window.matchMedia && window.matchMedia('(max-width: 980px)').matches) return;
+        dragging = true;
+        browser.classList.add('resizing');
+        handle.setPointerCapture(ev.pointerId);
+        ev.preventDefault();
     });
-    container.innerHTML = html;
+    handle.addEventListener('pointermove', function(ev) {
+        if (!dragging) return;
+        setWidth(ev.clientX);
+    });
+    function stopResize(ev) {
+        if (!dragging) return;
+        dragging = false;
+        browser.classList.remove('resizing');
+        try { handle.releasePointerCapture(ev.pointerId); } catch (e) {}
+    }
+    handle.addEventListener('pointerup', stopResize);
+    handle.addEventListener('pointercancel', stopResize);
 }
 
 function uploadKnowledgeDoc(bookId, category) {

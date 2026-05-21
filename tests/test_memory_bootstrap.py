@@ -4,6 +4,7 @@ from agent.memory.error_capture import (
     build_error_memory_context,
     is_user_correction,
     record_tool_error,
+    should_record_tool_error,
 )
 from agent.protocol.agent_stream import AgentStreamExecutor
 from agent.tools.base_tool import BaseTool, ToolResult
@@ -98,3 +99,10 @@ def test_noisy_tool_error_is_not_captured(tmp_path, monkeypatch):
 
     error_dir = tmp_path / "system" / "memory" / "errors"
     assert not error_dir.exists() or not list(error_dir.glob("*.json"))
+
+
+def test_web_fetch_transient_error_is_filtered_but_durable_errors_remain():
+    assert not should_record_tool_error("web_fetch", "HTTP 404 for URL", {"error_type": "exception"})
+    assert not should_record_tool_error("web_fetch", "connection reset by peer", {"error_type": "exception"})
+    assert should_record_tool_error("write", "permission denied: chapters/01.md", {})
+    assert should_record_tool_error("knowledge_capture", "invalid JSON schema for metadata", {})

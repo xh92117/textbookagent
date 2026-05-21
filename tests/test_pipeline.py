@@ -210,6 +210,30 @@ def test_context_builder_extracts_chapter_plan():
     assert plan.key_concepts == ["工具调用", "状态机", "错误恢复"]
 
 
+def test_context_builder_extracts_deep_chapter_heading_levels():
+    outline = "\n".join([
+        "# 教材大纲",
+        "### 第一篇：智能体基础（第1-3章）",
+        "#### 第1章 智能体概述与土木工程智能化",
+        "- 教学目标: 建立智能体概念框架",
+        "- 核心概念: AI Agent、规划、工具、记忆",
+        "##### 1.1 什么是智能体",
+        "#### 第2章 大语言模型基础",
+        "- 教学目标: 理解语言模型能力边界",
+    ])
+
+    builder = ContextPackageBuilder()
+    current = builder._current_chapter_outline(outline, 1)
+    plan = builder.extract_chapter_plan(outline, 1)
+
+    assert "第1章 智能体概述与土木工程智能化" in current
+    assert "1.1 什么是智能体" in current
+    assert "第2章" not in current
+    assert plan.title == "智能体概述与土木工程智能化"
+    assert plan.objective == "建立智能体概念框架"
+    assert plan.key_concepts == ["AI Agent", "规划", "工具", "记忆"]
+
+
 def test_runner_quality_gate_can_skip_polish():
     runner = PipelineRunner(llm_model=object())
 

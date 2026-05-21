@@ -91,22 +91,48 @@ class ContextPackageBuilder:
     def _current_chapter_outline(self, outline_text: str, chapter_number: int) -> str:
         if not outline_text:
             return ""
+        cn_number = self._chapter_number_to_chinese(chapter_number)
         patterns = [
-            rf"(?m)^##\s*第\s*{chapter_number}\s*章[^\n]*",
-            rf"(?m)^##\s*第{chapter_number}章[^\n]*",
-            rf"(?m)^##\s*Chapter\s+{chapter_number}\b[^\n]*",
+            rf"(?m)^#{{1,6}}\s*第\s*0*{chapter_number}\s*章[^\n]*",
+            rf"(?m)^#{{1,6}}\s*第\s*{re.escape(cn_number)}\s*章[^\n]*",
+            rf"(?m)^#{{1,6}}\s*Chapter\s+0*{chapter_number}\b[^\n]*",
         ]
-        starts = []
+        matches = []
         for pattern in patterns:
             match = re.search(pattern, outline_text, re.I)
             if match:
-                starts.append(match.start())
-        if not starts:
+                matches.append(match)
+        if not matches:
             return ""
-        start = min(starts)
-        next_match = re.search(r"(?m)^##\s*(?:第\s*\d+\s*章|第[一二三四五六七八九十百]+章|Chapter\s+\d+\b)", outline_text[start + 1:], re.I)
-        end = start + 1 + next_match.start() if next_match else len(outline_text)
+        current_match = min(matches, key=lambda item: item.start())
+        start = current_match.start()
+        search_from = current_match.end()
+        next_match = re.search(
+            r"(?m)^#{1,6}\s*(?:第\s*(?:\d+|[零〇一二三四五六七八九十百两]+)\s*章|Chapter\s+\d+\b)",
+            outline_text[search_from:],
+            re.I,
+        )
+        end = search_from + next_match.start() if next_match else len(outline_text)
         return outline_text[start:end].strip()
+
+    def _chapter_number_to_chinese(self, number: int) -> str:
+        digits = "零一二三四五六七八九"
+        try:
+            number = int(number)
+        except Exception:
+            return str(number)
+        if number <= 0:
+            return str(number)
+        if number < 10:
+            return digits[number]
+        if number == 10:
+            return "十"
+        if number < 20:
+            return "十" + digits[number % 10]
+        if number < 100:
+            tens, ones = divmod(number, 10)
+            return digits[tens] + "十" + (digits[ones] if ones else "")
+        return str(number)
 
     def extract_chapter_plan(self, outline_text: str, chapter_number: int) -> ChapterPlan:
         raw = self._current_chapter_outline(outline_text, chapter_number)
@@ -119,8 +145,10 @@ class ContextPackageBuilder:
         heading = next((line.strip() for line in lines if line.lstrip().startswith("##")), "")
         if heading:
             title = re.sub(r"^#+\s*", "", heading).strip()
-            title = re.sub(rf"^第\s*{chapter_number}\s*章\s*[:：、.-]?\s*", "", title).strip() or title
-            title = re.sub(rf"^Chapter\s+{chapter_number}\b\s*[:：、.-]?\s*", "", title, flags=re.I).strip() or title
+            cn_number = self._chapter_number_to_chinese(chapter_number)
+            title = re.sub(rf"^第\s*0*{chapter_number}\s*章\s*[:：、.-]?\s*", "", title).strip() or title
+            title = re.sub(rf"^第\s*{re.escape(cn_number)}\s*章\s*[:：、.-]?\s*", "", title).strip() or title
+            title = re.sub(rf"^Chapter\s+0*{chapter_number}\b\s*[:：、.-]?\s*", "", title, flags=re.I).strip() or title
             plan.title = title
         else:
             plan.title = f"第{chapter_number}章"

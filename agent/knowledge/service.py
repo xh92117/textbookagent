@@ -47,7 +47,7 @@ class KnowledgeService:
         if not os.path.isdir(base):
             return {"tree": [], "stats": {"pages": 0, "size": 0}, "enabled": conf().get("knowledge", True)}
         stats = {"pages": 0, "size": 0}
-        root_files, tree = self._scan_dir(base, stats, is_root=True)
+        root_files, tree = self._scan_dir(base, stats, base_dir=base, is_root=True)
         return {
             "root_files": root_files,
             "tree": tree,
@@ -55,7 +55,7 @@ class KnowledgeService:
             "enabled": conf().get("knowledge", True),
         }
 
-    def _scan_dir(self, dir_path: str, stats: dict, is_root: bool = False) -> tuple:
+    def _scan_dir(self, dir_path: str, stats: dict, base_dir: str, is_root: bool = False) -> tuple:
         files = []
         children = []
         for name in sorted(os.listdir(dir_path)):
@@ -63,9 +63,14 @@ class KnowledgeService:
                 continue
             full = os.path.join(dir_path, name)
             if os.path.isdir(full):
-                sub_files, sub_children = self._scan_dir(full, stats)
-                children.append({"dir": name, "files": sub_files, "children": sub_children})
-            elif name.endswith(".md"):
+                sub_files, sub_children = self._scan_dir(full, stats, base_dir)
+                children.append({
+                    "dir": name,
+                    "path": os.path.relpath(full, base_dir).replace("\\", "/"),
+                    "files": sub_files,
+                    "children": sub_children,
+                })
+            elif os.path.splitext(name)[1].lower() in {".md", ".txt", ".json", ".csv"}:
                 size = os.path.getsize(full)
                 if not is_root:
                     stats["pages"] += 1
@@ -78,7 +83,13 @@ class KnowledgeService:
                         title = first_line[2:].strip()
                 except Exception:
                     pass
-                files.append({"name": name, "title": title, "size": size})
+                files.append({
+                    "name": name,
+                    "title": title,
+                    "path": os.path.relpath(full, base_dir).replace("\\", "/"),
+                    "size": size,
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(os.path.getmtime(full))),
+                })
         return files, children
 
     def read_file(self, rel_path: str, book_id: str = "") -> dict:
@@ -364,8 +375,7 @@ class KnowledgeService:
         if not os.path.isdir(base):
             return {"total_documents": 0, "total_size": 0, "categories": [], "enabled": conf().get("knowledge", True)}
         self.sync_compat_index(book_id)
-        wiki_index = self._load_wiki_index(book_id)
-        wiki_counts = self._index_counts(wiki_index)
+        wiki_counts = self._aggregate_wiki_counts(book_id)
         total_docs = 0
         total_size = 0
         categories = set()
@@ -392,6 +402,35 @@ class KnowledgeService:
             "enabled": conf().get("knowledge", True),
             "wiki": wiki_counts,
         }
+
+    def _aggregate_wiki_counts(self, book_id: str = "") -> dict:
+        if book_id:
+            return self._index_counts(self._load_wiki_index(book_id))
+
+        totals = {"sources": 0, "chunks": 0, "pages": 0, "entities": 0, "relations": 0}
+        seen_indexes = set()
+        root_index = os.path.join(self._wiki_base_dir(""), "index.json")
+        candidate_indexes = []
+        if os.path.isfile(root_index):
+            candidate_indexes.append(root_index)
+        if os.path.isdir(self.knowledge_dir):
+            for child in sorted(os.listdir(self.knowledge_dir)):
+                child_index = os.path.join(self.knowledge_dir, child, "_llm_wiki", "index.json")
+                if os.path.isfile(child_index):
+                    candidate_indexes.append(child_index)
+        for index_path in candidate_indexes:
+            norm = os.path.normcase(os.path.abspath(index_path))
+            if norm in seen_indexes:
+                continue
+            seen_indexes.add(norm)
+            try:
+                with open(index_path, "r", encoding="utf-8") as f:
+                    counts = self._index_counts(json.load(f))
+                for key in totals:
+                    totals[key] += int(counts.get(key, 0) or 0)
+            except Exception:
+                continue
+        return totals
 
     def _extract_text(self, file_path: str) -> str:
         ext = os.path.splitext(file_path)[1].lower()
@@ -1174,14 +1213,16 @@ class KnowledgeService:
                 sample = "\n\n".join(sample_parts)
                 messages = [
                     {"role": "system", "content": (
-                        "You build retrieval-ready LLM-WIKI knowledge bases for textbook writing. "
-                        "Return JSON only. Keys: "
+                        "You build retrieval-ready LLM-WIKI metadata for textbook writing. "
+                        "Return strict JSON only; no Markdown, no commentary. Keys: "
                         "chunk_metadata (chunk_index, summary, use_when, keywords, content_type, source_quote), "
                         "pages (title, summary, aliases, keywords, source_chunk_ids), "
                         "entities (name, type, description, source_chunk_ids), "
                         "relations (source, target, relation, source_chunk_ids, evidence, confidence). "
                         "Extract concrete domain entities, methods, formulas, parameters, standards, components, and results. "
-                        "Keep source_chunk_ids as the numeric chunk_index values supplied above."
+                        "Keep source_chunk_ids as the numeric chunk_index values supplied above. "
+                        "Do not invent facts, standards, entities, relations, page titles, or evidence not supported by the content. "
+                        "If a field has no evidence, return an empty array or empty string."
                     )},
                     {"role": "user", "content": f"Source: {source_name}\n\nContent:\n{sample}"},
                 ]

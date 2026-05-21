@@ -48,8 +48,8 @@ def generate_session_title(user_message: str, assistant_reply: str = "") -> str:
         session = Session("__title_gen__", system_prompt="")
         session.messages = [
             {"role": "user", "content": (
-                "Generate a very short title (max 15 characters for Chinese, max 6 words for English) "
-                "summarizing this conversation. Return ONLY the title text, nothing else.\n\n"
+                "Generate a concise conversation title. Chinese: max 15 characters; English: max 6 words. "
+                "Return only the title text. Do not add quotes, punctuation-only titles, explanations, or emojis.\n\n"
                 + "\n".join(prompt_parts)
             )}
         ]
