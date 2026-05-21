@@ -43,8 +43,8 @@ def _reset_workspace_dependent_singletons():
 
 
 def _generate_session_title(user_message: str, assistant_reply: str = "") -> str:
-    text = (user_message or "").strip().splitlines()[0][:40].strip()
-    return text or "新对话"
+    from agent.chat.session_service import generate_session_title
+    return generate_session_title(user_message, assistant_reply)
 
 
 class ToolsHandler:
