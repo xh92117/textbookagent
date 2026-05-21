@@ -3,9 +3,7 @@ import hmac
 import time
 import json
 import logging
-import mimetypes
 import os
-import re
 import threading
 import time
 import uuid
@@ -26,6 +24,11 @@ from common.singleton import singleton
 from config import conf
 from channel.web.web.routes import get_urls
 from channel.web.web.utils import json_error, json_response, json_success, read_json_body
+from channel.web.web.handlers_core import (
+    RootHandler, AuthCheckHandler, AuthLoginHandler, AuthLogoutHandler, MessageHandler,
+    UploadHandler, UploadsHandler, FileServeHandler, PollHandler, StreamHandler,
+    ChatHandler, TextbookPageHandler, AssetsHandler, TextbookAssetsHandler,
+)
 from channel.web.web.handlers_admin import (
     ToolsHandler, SkillsHandler, WorkspaceHandler, MemoryHandler, MemoryContentHandler,
     MemoryQueryHandler, SchedulerHandler, SessionsHandler, SessionDetailHandler,
@@ -136,6 +139,17 @@ def _get_upload_dir() -> str:
     tmp_dir = app_tmp_dir()
     os.makedirs(tmp_dir, exist_ok=True)
     return tmp_dir
+
+
+def _get_workspace_root():
+    """Resolve the agent workspace directory."""
+    from common.app_paths import ensure_active_workspace
+    return ensure_active_workspace()
+
+
+def _get_textbook_bridge():
+    from bridge.textbook_bridge import get_bridge
+    return get_bridge()
 
 
 def _sanitize_upload_relative_path(relative_path: str) -> str:
@@ -887,195 +901,6 @@ class WebChannel(ChatChannel):
             except Exception as e:
                 logger.warning(f"[WebChannel] Error stopping HTTP server: {e}")
             self._http_server = None
-
-
-class RootHandler:
-    def GET(self):
-        raise web.seeother('/textbook')
-
-
-class AuthCheckHandler:
-    def GET(self):
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        if not _is_password_enabled():
-            return json.dumps({"status": "success", "auth_required": False})
-        if _check_auth():
-            return json.dumps({"status": "success", "auth_required": True, "authenticated": True})
-        return json.dumps({"status": "success", "auth_required": True, "authenticated": False})
-
-
-class AuthLoginHandler:
-    def POST(self):
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        if not _is_password_enabled():
-            return json.dumps({"status": "success"})
-        try:
-            data = json.loads(web.data())
-        except Exception:
-            return json.dumps({"status": "error", "message": "Invalid request"})
-        password = data.get("password", "")
-        expected = conf().get("web_password", "")
-        if not hmac.compare_digest(password, expected):
-            logger.warning("[WebChannel] Invalid login attempt")
-            return json.dumps({"status": "error", "message": "Wrong password"})
-        token = _create_auth_token()
-        web.setcookie("cow_auth_token", token, expires=_session_expire_seconds(),
-                       path="/", httponly=True, samesite="Lax")
-        return json.dumps({"status": "success"})
-
-
-class AuthLogoutHandler:
-    def POST(self):
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        web.setcookie("cow_auth_token", "", expires=-1, path="/")
-        return json.dumps({"status": "success"})
-
-
-class MessageHandler:
-    def POST(self):
-        _require_auth()
-        return WebChannel().post_message()
-
-
-class UploadHandler:
-    def POST(self):
-        _require_auth()
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        return WebChannel().upload_file()
-
-
-class UploadsHandler:
-    def GET(self, file_name):
-        _require_auth()
-        try:
-            upload_dir = _get_upload_dir()
-            full_path = os.path.normpath(os.path.join(upload_dir, file_name))
-            if not os.path.abspath(full_path).startswith(os.path.abspath(upload_dir)):
-                raise web.notfound()
-            if not os.path.isfile(full_path):
-                raise web.notfound()
-            content_type = mimetypes.guess_type(full_path)[0] or "application/octet-stream"
-            web.header('Content-Type', content_type)
-            web.header('Cache-Control', 'public, max-age=86400')
-            with open(full_path, 'rb') as f:
-                return f.read()
-        except web.HTTPError:
-            raise
-        except Exception as e:
-            logger.error(f"[WebChannel] Error serving upload: {e}")
-            raise web.notfound()
-
-
-class FileServeHandler:
-    def GET(self):
-        _require_auth()
-        try:
-            params = web.input(path="")
-            file_path = params.path
-            if not file_path or not os.path.isabs(file_path):
-                raise web.notfound()
-            file_path = os.path.realpath(os.path.normpath(file_path))
-            workspace_root = os.path.realpath(_get_workspace_root())
-            if os.path.commonpath([workspace_root, file_path]) != workspace_root:
-                raise web.notfound()
-            if not os.path.isfile(file_path):
-                raise web.notfound()
-            content_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
-            file_name = os.path.basename(file_path)
-            from urllib.parse import quote
-            web.header('Content-Type', content_type)
-            web.header('Content-Disposition', f"inline; filename*=UTF-8''{quote(file_name)}")
-            web.header('Cache-Control', 'public, max-age=3600')
-            with open(file_path, 'rb') as f:
-                return f.read()
-        except web.HTTPError:
-            raise
-        except Exception as e:
-            logger.error(f"[WebChannel] Error serving file: {e}")
-            raise web.notfound()
-
-
-class PollHandler:
-    def POST(self):
-        _require_auth()
-        return WebChannel().poll_response()
-
-
-class StreamHandler:
-    def GET(self):
-        _require_auth()
-        params = web.input(request_id='')
-        request_id = params.request_id
-        if not request_id:
-            raise web.badrequest()
-
-        web.header('Content-Type', 'text/event-stream; charset=utf-8')
-        web.header('Cache-Control', 'no-cache')
-        web.header('X-Accel-Buffering', 'no')
-        web.header('Access-Control-Allow-Origin', '*')
-
-        return WebChannel().stream_response(request_id)
-
-
-class ChatHandler:
-    def GET(self):
-        web.header('Content-Type', 'text/html; charset=utf-8')
-        web.header('Cache-Control', 'no-cache, no-store, must-revalidate')
-        web.header('Pragma', 'no-cache')
-        file_path = os.path.join(os.path.dirname(__file__), 'chat.html')
-        with open(file_path, 'r', encoding='utf-8') as f:
-            html = f.read()
-        cache_bust = str(int(time.time()))
-        html = html.replace('assets/js/console.js', f'assets/js/console.js?v={cache_bust}')
-        html = html.replace('assets/css/console.css', f'assets/css/console.css?v={cache_bust}')
-        return html
-
-
-class TextbookPageHandler:
-    @staticmethod
-    def _expand_includes(html: str, base_dir: str) -> str:
-        """Expand simple same-directory HTML partial includes for textbook page."""
-        include_pattern = re.compile(r"<!--#include\s+([A-Za-z0-9_./-]+)\s+-->")
-
-        def _replace(match):
-            rel_path = match.group(1)
-            full_path = os.path.realpath(os.path.join(base_dir, rel_path))
-            root = os.path.realpath(base_dir)
-            if os.path.commonpath([root, full_path]) != root:
-                return ""
-            if not os.path.isfile(full_path):
-                logger.warning(f"[WebChannel] Missing textbook partial: {rel_path}")
-                return ""
-            try:
-                with open(full_path, 'r', encoding='utf-8') as f:
-                    return f.read()
-            except Exception as e:
-                logger.warning(f"[WebChannel] Failed to read textbook partial {rel_path}: {e}")
-                return ""
-
-        return include_pattern.sub(_replace, html)
-
-    def GET(self):
-        web.header('Content-Type', 'text/html; charset=utf-8')
-        web.header('Cache-Control', 'no-cache, no-store, must-revalidate')
-        web.header('Pragma', 'no-cache')
-        base_dir = os.path.dirname(__file__)
-        file_path = os.path.join(base_dir, 'textbook.html')
-        with open(file_path, 'r', encoding='utf-8') as f:
-            html = f.read()
-        html = self._expand_includes(html, base_dir)
-        cache_bust = str(int(time.time()))
-        for script_name in (
-            'textbook.js',
-            'textbook-chat.js',
-            'textbook-skills.js',
-            'textbook-settings.js',
-            'textbook-knowledge.js',
-            'textbook-detail.js',
-        ):
-            html = html.replace(f'assets/js/{script_name}', f'assets/js/{script_name}?v={cache_bust}')
-        html = html.replace('assets/css/textbook.css', f'assets/css/textbook.css?v={cache_bust}')
-        return html
 
 
 class ConfigHandler:
@@ -2216,88 +2041,3 @@ class FeishuRegisterHandler:
         except Exception as e:
             logger.error(f"[WebChannel] FeishuRegister POST error: {e}")
             return json.dumps({"status": "error", "message": str(e)})
-
-
-def _get_workspace_root():
-    """Resolve the agent workspace directory."""
-    from common.app_paths import ensure_active_workspace
-    return ensure_active_workspace()
-
-
-def _get_textbook_bridge():
-    from bridge.textbook_bridge import get_bridge
-    return get_bridge()
-
-
-class AssetsHandler:
-    def GET(self, file_path):  # 修改默认参数
-        try:
-            # 如果请求是/static/，需要处理
-            if file_path == '':
-                # 返回目录列表...
-                pass
-
-            # 获取当前文件的绝对路径
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            static_dir = os.path.join(current_dir, 'static')
-
-            full_path = os.path.normpath(os.path.join(static_dir, file_path))
-
-            # 安全检查：确保请求的文件在static目录内
-            if not os.path.abspath(full_path).startswith(os.path.abspath(static_dir)):
-                logger.error(f"Security check failed for path: {full_path}")
-                raise web.notfound()
-
-            if not os.path.exists(full_path) or not os.path.isfile(full_path):
-                logger.error(f"File not found: {full_path}")
-                raise web.notfound()
-
-            # 设置正确的Content-Type
-            content_type = mimetypes.guess_type(full_path)[0]
-            if content_type:
-                web.header('Content-Type', content_type)
-            else:
-                # 默认为二进制流
-                web.header('Content-Type', 'application/octet-stream')
-
-            # 读取并返回文件内容
-            with open(full_path, 'rb') as f:
-                return f.read()
-
-        except Exception as e:
-            logger.error(f"Error serving static file: {e}", exc_info=True)  # 添加更详细的错误信息
-            raise web.notfound()
-
-
-class TextbookAssetsHandler:
-    def GET(self, book_id, file_path):
-        _require_auth()
-        try:
-            bridge = _get_textbook_bridge()
-            book_dir = bridge.get_book_dir(book_id)
-            if not book_dir or not os.path.exists(book_dir):
-                raise web.notfound()
-
-            full_path = os.path.normpath(os.path.join(book_dir, file_path))
-            if not os.path.abspath(full_path).startswith(os.path.abspath(book_dir)):
-                raise web.notfound()
-
-            if not os.path.exists(full_path) or not os.path.isfile(full_path):
-                raise web.notfound()
-
-            content_type = mimetypes.guess_type(full_path)[0]
-            if content_type:
-                web.header('Content-Type', content_type)
-            else:
-                web.header('Content-Type', 'application/octet-stream')
-
-            web.header('Cache-Control', 'public, max-age=86400')
-            with open(full_path, 'rb') as f:
-                return f.read()
-        except web.HTTPError:
-            raise
-        except Exception as e:
-            logger.error(f"Error serving textbook asset: {e}")
-            raise web.notfound()
-
-
