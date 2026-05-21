@@ -2986,11 +2986,14 @@ class KnowledgeOrganizeHandler:
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
-            body = json.loads(web.data())
+            body = json.loads(web.data() or b"{}")
             book_id = body.get("book_id", "")
+            force_value = body.get("force", body.get("force_rebuild", True))
+            force = str(force_value).strip().lower() not in ("0", "false", "no", "off")
             status_key = book_id or "__global__"
             if _organize_status.get(status_key, {}).get("running"):
                 return json.dumps({"status": "already_running", "message": "整理正在进行中，请稍候"}, ensure_ascii=False)
+            logger.info(f"[WebChannel] Knowledge organize requested: book_id={status_key}, force={force}")
             started_at = time.time()
             _organize_status[status_key] = {
                 "running": True,
@@ -2999,6 +3002,7 @@ class KnowledgeOrganizeHandler:
                 "message": "准备整理知识库",
                 "result": None,
                 "error": None,
+                "force": force,
                 "started_at": started_at,
                 "updated_at": started_at,
                 "events": [],
@@ -3024,8 +3028,8 @@ class KnowledgeOrganizeHandler:
                 try:
                     from agent.knowledge.service import KnowledgeService
                     svc = KnowledgeService(_get_workspace_root(), on_progress=_on_progress)
-                    _on_progress({"stage": "processing", "message": "知识库整理中"})
-                    result = svc.organize_knowledge(book_id=book_id)
+                    _on_progress({"stage": "processing", "message": "知识库整理中", "force": force})
+                    result = svc.organize_knowledge(book_id=book_id, force=force)
                     _organize_status[status_key]["result"] = result
                     _organize_status[status_key]["progress"] = "done"
                     _organize_status[status_key]["stage"] = "done"
@@ -3094,6 +3098,7 @@ class KnowledgeOrganizeHandler:
                 "current_file_index": info.get("current_file_index"),
                 "total_files": info.get("total_files"),
                 "skipped_files": info.get("skipped_files", 0),
+                "force": info.get("force", False),
                 "current_chunks": info.get("current_chunks"),
                 "total_chunks": info.get("total_chunks"),
                 "current_batch": info.get("current_batch"),

@@ -1676,11 +1676,11 @@ class KnowledgeService:
                 logger.warning(f"[KnowledgeService] failed to save entry '{title}': {e}")
         return saved
 
-    def organize_knowledge(self, book_id: str = "") -> dict:
+    def organize_knowledge(self, book_id: str = "", force: bool = False) -> dict:
         base = self._resolve_book_dir(book_id)
         if not os.path.isdir(base):
             return {"status": "success", "message": "knowledge dir not found", "organized_count": 0}
-        self._emit_progress("scanning", "Scanning knowledge sources")
+        self._emit_progress("scanning", "Scanning knowledge sources", force=force)
         organized_categories = {"concepts", "methods", "entities", "principles", "standards", "facts", "procedures"}
         all_files = []
         for root, dirs, files in os.walk(base):
@@ -1703,15 +1703,21 @@ class KnowledgeService:
             ext = os.path.splitext(fp)[1].lower()
             if ext not in (".md", ".txt", ".csv", ".json", ".pdf", ".doc", ".docx"):
                 continue
-            if self._is_source_already_indexed(fp, book_id):
+            if not force and self._is_source_already_indexed(fp, book_id):
                 skipped_count += 1
                 continue
             pending_files.append(fp)
+        scan_message = (
+            f"Found {len(pending_files)} files to reorganize, skipped {skipped_count} indexed files"
+            if force
+            else f"Found {len(pending_files)} new or changed files, skipped {skipped_count} indexed files"
+        )
         self._emit_progress(
             "scanned",
-            f"Found {len(pending_files)} new or changed files, skipped {skipped_count} indexed files",
+            scan_message,
             total_files=len(pending_files),
             skipped_files=skipped_count,
+            force=force,
         )
         organized_count = 0
         processed_count = 0
@@ -1764,7 +1770,7 @@ class KnowledgeService:
         self._emit_progress("cross_references", "Writing cross references")
         graph_result = self.build_knowledge_graph(book_id)
         cross_ref_count = self._write_cross_references(graph_result, book_id)
-        self._emit_progress("done", "Knowledge organization complete", total_files=len(pending_files), skipped_files=skipped_count)
+        self._emit_progress("done", "Knowledge organization complete", total_files=len(pending_files), skipped_files=skipped_count, force=force)
         return {
             "status": "success",
             "message": f"organized {organized_count} entries, skipped {skipped_count} indexed files, {cross_ref_count} cross-references",
@@ -1772,6 +1778,7 @@ class KnowledgeService:
             "processed_files": len(pending_files),
             "skipped_files": skipped_count,
             "cross_references": cross_ref_count,
+            "force": force,
         }
 
     def _write_cross_references(self, graph_data: dict, book_id: str = "") -> int:

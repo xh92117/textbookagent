@@ -77,6 +77,39 @@ def test_organize_knowledge_skips_unchanged_indexed_sources():
         assert os.path.isfile(status_path)
 
 
+def test_organize_knowledge_force_reprocesses_indexed_sources():
+    with tempfile.TemporaryDirectory() as tmp:
+        service = KnowledgeService(tmp)
+        source_dir = os.path.join(tmp, "knowledge", "tb", "sources")
+        os.makedirs(source_dir, exist_ok=True)
+        path = os.path.join(source_dir, "paper.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("# Demo\n\nAlready indexed source.")
+
+        calls = {"parse": 0}
+        service._is_source_already_indexed = lambda fp, book_id="": True
+        service.parse_document = lambda fp, book_id="": calls.__setitem__("parse", calls["parse"] + 1) or {
+            "organized_count": 1,
+            "chunks": 1,
+            "entities": 0,
+            "relations": 0,
+        }
+        service.build_knowledge_graph = lambda book_id="": {"edges": []}
+        service._write_cross_references = lambda graph, book_id="": 0
+
+        normal = service.organize_knowledge("tb", force=False)
+        normal_calls = calls["parse"]
+        forced = service.organize_knowledge("tb", force=True)
+
+        assert normal["processed_files"] == 0
+        assert normal["skipped_files"] == 1
+        assert normal_calls == 0
+        assert forced["processed_files"] == 1
+        assert forced["skipped_files"] == 0
+        assert forced["force"] is True
+        assert calls["parse"] - normal_calls == 1
+
+
 def test_large_wiki_uses_fast_local_metadata(monkeypatch):
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:

@@ -2035,7 +2035,7 @@ function organizeKnowledge() {
     fetch(API_BASE + '/api/knowledge/organize', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({book_id: bookId})
+        body: JSON.stringify({book_id: bookId, force: true})
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
