@@ -7,39 +7,9 @@ import web
 from common.log import logger
 from config import conf
 from channel.web.web.utils import (
-    get_workspace_root, json_error, json_response, json_success, read_json_body, require_auth,
+    get_config_path, get_workspace_root, json_error, json_response, json_success,
+    read_json_body, require_auth, reset_workspace_dependent_singletons,
 )
-
-
-def _require_auth():
-    return require_auth()
-
-
-def _get_workspace_root():
-    return get_workspace_root()
-
-
-def _get_config_path():
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    return os.path.join(project_root, "config.json")
-
-
-def _reset_workspace_dependent_singletons():
-    try:
-        import bridge.textbook_bridge as tb
-        tb._bridge_instance = None
-    except Exception:
-        pass
-    try:
-        import agent.memory.conversation_store as conversation_store
-        conversation_store._store_instance = None
-    except Exception:
-        pass
-    try:
-        import agent.memory.config as memory_config
-        memory_config._global_memory_config = None
-    except Exception:
-        pass
 
 
 def _generate_session_title(user_message: str, assistant_reply: str = "") -> str:
@@ -49,7 +19,7 @@ def _generate_session_title(user_message: str, assistant_reply: str = "") -> str
 
 class ToolsHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.tools.tool_manager import ToolManager
@@ -74,12 +44,12 @@ class ToolsHandler:
 
 class SkillsHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.skills.service import SkillService
             from agent.skills.manager import SkillManager
-            workspace_root = _get_workspace_root()
+            workspace_root = get_workspace_root()
             manager = SkillManager(custom_dir=os.path.join(workspace_root, "skills"))
             service = SkillService(manager)
             skills = service.query()
@@ -91,11 +61,11 @@ class SkillsHandler:
             return json.dumps({"status": "error", "message": str(e)})
 
     def POST(self):
-        _require_auth()
+        require_auth()
         try:
             from agent.skills.service import SkillService
             from agent.skills.manager import SkillManager
-            workspace_root = _get_workspace_root()
+            workspace_root = get_workspace_root()
             content_type = web.ctx.env.get('CONTENT_TYPE', '')
 
             if 'multipart/form-data' in content_type:
@@ -212,7 +182,7 @@ class SkillsHandler:
 
 class WorkspaceHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from common.app_paths import active_workspace, ensure_active_workspace, ensure_system_dir, system_dir, system_root
@@ -230,7 +200,7 @@ class WorkspaceHandler:
             return json.dumps({"status": "error", "message": str(e)})
 
     def POST(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             body = json.loads(web.data() or b"{}")
@@ -249,7 +219,7 @@ class WorkspaceHandler:
             if split_enabled is not None:
                 local_config["workspace_split_enabled"] = bool(split_enabled)
 
-            config_path = _get_config_path()
+            config_path = get_config_path()
             if os.path.exists(config_path):
                 with open(config_path, "r", encoding="utf-8") as f:
                     file_cfg = json.load(f)
@@ -264,7 +234,7 @@ class WorkspaceHandler:
             from common.app_paths import ensure_active_workspace, ensure_system_dir, system_dir
             ensure_active_workspace()
             ensure_system_dir()
-            _reset_workspace_dependent_singletons()
+            reset_workspace_dependent_singletons()
             return json.dumps({
                 "status": "success",
                 "active_workspace": active,
@@ -277,7 +247,7 @@ class WorkspaceHandler:
 
 class MemoryHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.memory.service import MemoryService
@@ -297,7 +267,7 @@ class MemoryHandler:
 
 class MemoryContentHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.memory.service import MemoryService
@@ -320,7 +290,7 @@ class MemoryContentHandler:
 
 class MemoryQueryHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.memory import MemoryQueryService
@@ -348,7 +318,7 @@ class MemoryQueryHandler:
 
 class SchedulerHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.tools.scheduler.task_store import TaskStore
@@ -364,7 +334,7 @@ class SchedulerHandler:
 
 class SessionsHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             params = web.input(page='1', page_size='50')
@@ -383,7 +353,7 @@ class SessionsHandler:
 
 class SessionDetailHandler:
     def DELETE(self, session_id: str):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         logger.info(f"[WebChannel] DELETE session request: {session_id}")
         try:
@@ -415,7 +385,7 @@ class SessionDetailHandler:
             return json.dumps({"status": "error", "message": str(e)})
 
     def PUT(self, session_id: str):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             if not session_id:
@@ -438,7 +408,7 @@ class SessionDetailHandler:
 
 class SessionTitleHandler:
     def POST(self, session_id: str):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             if not session_id:
@@ -465,7 +435,7 @@ class SessionTitleHandler:
 
 class SessionClearContextHandler:
     def POST(self, session_id: str):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             if not session_id:
@@ -494,7 +464,7 @@ class SessionClearContextHandler:
 
 class HistoryHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         web.header('Access-Control-Allow-Origin', '*')
         try:
@@ -518,7 +488,7 @@ class HistoryHandler:
 
 class LogsHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'text/event-stream; charset=utf-8')
         web.header('Cache-Control', 'no-cache')
         web.header('X-Accel-Buffering', 'no')

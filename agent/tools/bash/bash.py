@@ -69,6 +69,14 @@ SAFETY:
         if not command:
             return ToolResult.fail("Error: command parameter is required")
 
+        if self._IS_WIN and self._looks_like_powershell_file_write(command):
+            return ToolResult.fail(
+                "Encoding safety guard: do not write or append text files through PowerShell "
+                "Add-Content/Set-Content/Out-File from the bash tool. On Windows this can corrupt "
+                "UTF-8 Chinese text. Use the write tool for full-file writes or the edit tool with "
+                "oldText=\"\" for UTF-8 append instead. Keep each content chunk small."
+            )
+
         # Security check: Prevent accessing sensitive config files
         if "~/.cow/.env" in command or "~/.cow" in command:
             return ToolResult.fail(
@@ -275,6 +283,16 @@ SAFETY:
             return "This command will shut down or restart the system"
 
         return ""
+
+    @staticmethod
+    def _looks_like_powershell_file_write(command: str) -> bool:
+        lowered = command.lower()
+        if "powershell" not in lowered and "pwsh" not in lowered:
+            return False
+        risky_cmdlets = ("add-content", "set-content", "out-file")
+        if any(cmdlet in lowered for cmdlet in risky_cmdlets):
+            return True
+        return bool(re.search(r">\s*['\"]?[a-z]:\\", lowered))
 
     @staticmethod
     def _convert_env_vars_for_windows(command: str, dotenv_vars: dict) -> str:

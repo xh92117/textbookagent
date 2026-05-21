@@ -10,6 +10,7 @@ import config as config_module
 from bridge.agent_bridge import AgentLLMModel
 from bridge.textbook_bridge import _LightweightLLM
 from agent.protocol.agent_stream import AgentStreamExecutor
+from agent.tools.bash.bash import Bash
 
 
 def test_stream_guard_returns_after_idle_when_provider_never_finishes(monkeypatch):
@@ -67,6 +68,28 @@ def test_agent_executor_stream_idle_guard_returns_partial_chunks():
             chunks.append(chunk)
     assert chunks == [{"choices": [{"delta": {"content": "ok"}}]}]
     assert time.time() - started < 3
+
+
+def test_agent_executor_max_steps_summary_uses_local_excerpt():
+    executor = object.__new__(AgentStreamExecutor)
+    executor.messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "已经写入第二章 2.1-2.3 节。"}],
+        }
+    ]
+
+    assert "2.1-2.3" in executor._latest_assistant_text_excerpt()
+
+
+def test_bash_rejects_powershell_add_content_for_utf8_safety():
+    tool = Bash()
+    result = tool.execute({
+        "command": "powershell -Command \"Get-Content a.md | Add-Content -Path b.md -Encoding UTF8\""
+    })
+
+    assert result.status == "error"
+    assert "Encoding safety guard" in str(result.result)
 
 
 def test_knowledge_stream_guard_returns_partial_sse_when_done_is_missing(monkeypatch):

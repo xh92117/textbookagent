@@ -13,25 +13,13 @@ from channel.web.web.utils import (
 )
 
 
-def _require_auth():
-    return require_auth()
-
-
-def _get_workspace_root():
-    return get_workspace_root()
-
-
-def _get_upload_dir():
-    return get_upload_dir()
-
-
 class KnowledgeListHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         try:
             from agent.knowledge.service import KnowledgeService
             params = web.input(book_id='')
-            svc = KnowledgeService(_get_workspace_root())
+            svc = KnowledgeService(get_workspace_root())
             result = svc.list_tree(book_id=params.book_id)
             return json_success(**result)
         except Exception as e:
@@ -41,11 +29,11 @@ class KnowledgeListHandler:
 
 class KnowledgeReadHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         try:
             from agent.knowledge.service import KnowledgeService
             params = web.input(path='', book_id='')
-            svc = KnowledgeService(_get_workspace_root())
+            svc = KnowledgeService(get_workspace_root())
             result = svc.read_file(params.path, book_id=params.book_id)
             return json_success(**result)
         except (ValueError, FileNotFoundError) as e:
@@ -57,12 +45,12 @@ class KnowledgeReadHandler:
 
 class KnowledgeGraphHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.knowledge.service import KnowledgeService
             params = web.input(book_id='', limit='140', focus_id='', depth='1', query='', min_confidence='0')
-            svc = KnowledgeService(_get_workspace_root())
+            svc = KnowledgeService(get_workspace_root())
             return json.dumps(svc.build_graph(
                 book_id=params.book_id,
                 limit=int(params.limit or 140),
@@ -78,7 +66,7 @@ class KnowledgeGraphHandler:
 
 class KnowledgeUploadHandler:
     def POST(self):
-        _require_auth()
+        require_auth()
         try:
             from agent.knowledge.service import KnowledgeService
             x = web.input(file={}, book_id='', category='sources')
@@ -89,13 +77,13 @@ class KnowledgeUploadHandler:
                 return json_error("No file uploaded")
             content_bytes = file_obj.file.read()
             original_name = file_obj.filename
-            upload_dir = _get_upload_dir()
+            upload_dir = get_upload_dir()
             os.makedirs(upload_dir, exist_ok=True)
             tmp_path = os.path.join(upload_dir, f"knowledge_{uuid.uuid4().hex[:8]}_{original_name}")
             with open(tmp_path, "wb") as f:
                 f.write(content_bytes)
             try:
-                svc = KnowledgeService(_get_workspace_root())
+                svc = KnowledgeService(get_workspace_root())
                 result = svc.upload_document(tmp_path, category=category, book_id=book_id)
                 return json_success(source=result)
             finally:
@@ -110,11 +98,11 @@ class KnowledgeUploadHandler:
 
 class KnowledgeSourcesHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         try:
             from agent.knowledge.service import KnowledgeService
             params = web.input(book_id='')
-            svc = KnowledgeService(_get_workspace_root())
+            svc = KnowledgeService(get_workspace_root())
             result = svc.list_sources(book_id=params.book_id)
             return json_success(**result)
         except Exception as e:
@@ -124,11 +112,11 @@ class KnowledgeSourcesHandler:
 
 class KnowledgeStatusHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         try:
             from agent.knowledge.service import KnowledgeService
             params = web.input(book_id='')
-            svc = KnowledgeService(_get_workspace_root())
+            svc = KnowledgeService(get_workspace_root())
             result = svc.get_status(book_id=params.book_id)
             return json_success(**result)
         except Exception as e:
@@ -138,7 +126,7 @@ class KnowledgeStatusHandler:
 
 class KnowledgeSkillLinkHandler:
     def POST(self):
-        _require_auth()
+        require_auth()
         try:
             from agent.knowledge.service import KnowledgeService
             body = read_json_body()
@@ -148,7 +136,7 @@ class KnowledgeSkillLinkHandler:
                 return json_error("skill_name is required")
             if not source_paths:
                 return json_error("source_paths is required")
-            svc = KnowledgeService(_get_workspace_root())
+            svc = KnowledgeService(get_workspace_root())
             result = svc.link_to_skill(skill_name, source_paths)
             return json_success(**result)
         except Exception as e:
@@ -161,7 +149,7 @@ _organize_status = {}
 
 class KnowledgeOrganizeHandler:
     def POST(self):
-        _require_auth()
+        require_auth()
         try:
             body = read_json_body()
             book_id = body.get("book_id", "")
@@ -174,7 +162,7 @@ class KnowledgeOrganizeHandler:
             started_at = time.time()
             run_id = f"knowledge_{status_key}_{int(started_at)}"
             run_recorder = RunStateRecorder(
-                os.path.join(_get_workspace_root(), ".runs", "knowledge", status_key, run_id),
+                os.path.join(get_workspace_root(), ".runs", "knowledge", status_key, run_id),
                 run_id=run_id,
                 source="knowledge_organize",
             )
@@ -220,7 +208,7 @@ class KnowledgeOrganizeHandler:
             def _do_organize():
                 try:
                     from agent.knowledge.service import KnowledgeService
-                    svc = KnowledgeService(_get_workspace_root(), on_progress=_on_progress)
+                    svc = KnowledgeService(get_workspace_root(), on_progress=_on_progress)
                     _on_progress({"stage": "processing", "message": "知识库整理中", "force": force})
                     result = svc.organize_knowledge(book_id=book_id, force=force)
                     done_event = run_recorder.record({
@@ -268,7 +256,7 @@ class KnowledgeOrganizeHandler:
             return json_error(e)
 
     def GET(self):
-        _require_auth()
+        require_auth()
         try:
             params = web.input(book_id='')
             status_key = params.book_id or "__global__"
@@ -276,7 +264,7 @@ class KnowledgeOrganizeHandler:
             if not info:
                 try:
                     from agent.knowledge.service import KnowledgeService
-                    svc = KnowledgeService(_get_workspace_root())
+                    svc = KnowledgeService(get_workspace_root())
                     task_status = svc.get_organize_task_status(book_id=params.book_id)
                     sources = task_status.get("sources") or {}
                     processing = [s for s in sources.values() if s.get("status") == "processing"]
@@ -327,11 +315,11 @@ class KnowledgeOrganizeHandler:
 
 class KnowledgeKnowledgeGraphHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         try:
             from agent.knowledge.service import KnowledgeService
             params = web.input(book_id='', limit='140', focus_id='', depth='1', query='', min_confidence='0')
-            svc = KnowledgeService(_get_workspace_root())
+            svc = KnowledgeService(get_workspace_root())
             result = svc.get_knowledge_graph(
                 book_id=params.book_id,
                 limit=int(params.limit or 140),

@@ -215,6 +215,25 @@ class AgentStreamExecutor:
         # Sort keys for consistent hashing
         args_str = json.dumps(args, sort_keys=True, ensure_ascii=False)
         return hashlib.md5(args_str.encode()).hexdigest()[:8]
+
+    def _latest_assistant_text_excerpt(self, limit: int = 800) -> str:
+        for msg in reversed(self.messages):
+            if msg.get("role") != "assistant":
+                continue
+            parts = msg.get("content", [])
+            if isinstance(parts, str):
+                text = parts.strip()
+            elif isinstance(parts, list):
+                text = "\n".join(
+                    part.get("text", "").strip()
+                    for part in parts
+                    if isinstance(part, dict) and part.get("type") == "text" and part.get("text")
+                ).strip()
+            else:
+                text = ""
+            if text:
+                return text[:limit] + ("..." if len(text) > limit else "")
+        return ""
     
     def _check_consecutive_failures(self, tool_name: str, args: dict) -> Tuple[bool, str, bool]:
         """
@@ -597,49 +616,24 @@ class AgentStreamExecutor:
                         logger.debug(f"Mid-run context check skipped: {e}")
 
             if turn >= self.max_turns:
-                logger.warning(f"⚠️  已达到最大决策步数限制: {self.max_turns}")
-                
-                # Force model to summarize without tool calls
-                logger.info(f"[Agent] Requesting summary from LLM after reaching max steps...")
-                
-                # Remember position before injecting the prompt so we can remove it later
-                prompt_insert_idx = len(self.messages)
-                
-                # Add a temporary prompt to force summary
-                self.messages.append({
-                    "role": "user",
-                    "content": [{
-                        "type": "text",
-                        "text": f"你已经执行了{turn}个决策步骤，达到了单次运行的最大步数限制。请总结一下你目前的执行过程和结果，告诉用户当前的进展情况。不要再调用工具，直接用文字回复。"
-                    }]
+                logger.warning(f"[Agent] Reached max decision steps: {self.max_turns}")
+                self._emit_event("max_steps_reached", {
+                    "turn": turn,
+                    "max_turns": self.max_turns,
                 })
-                
-                # Call LLM one more time to get summary (without retry to avoid loops)
-                try:
-                    summary_response, summary_tools = self._call_llm_stream(retry_on_empty=False)
-                    if summary_response:
-                        final_response = summary_response
-                        logger.info(f"💭 Summary: {summary_response[:150]}{'...' if len(summary_response) > 150 else ''}")
-                    else:
-                        # Fallback if model still doesn't respond
-                        final_response = (
-                            f"我已经执行了{turn}个决策步骤，达到了单次运行的步数上限。"
-                            "任务可能还未完全完成，建议你将任务拆分成更小的步骤，或者换一种方式描述需求。"
-                        )
-                except Exception as e:
-                    logger.warning(f"Failed to get summary from LLM: {e}")
-                    final_response = (
-                        f"我已经执行了{turn}个决策步骤，达到了单次运行的步数上限。"
-                        "任务可能还未完全完成，建议你将任务拆分成更小的步骤，或者换一种方式描述需求。"
-                    )
-                finally:
-                    # Remove the injected user prompt from history to avoid polluting
-                    # persisted conversation records. The assistant summary (if any)
-                    # was already appended by _call_llm_stream and is kept.
-                    if (prompt_insert_idx < len(self.messages)
-                            and self.messages[prompt_insert_idx].get("role") == "user"):
-                        self.messages.pop(prompt_insert_idx)
-                        logger.debug("[Agent] Removed injected max-steps prompt from message history")
+
+                # Do not call the LLM again here. In practice the final "summary"
+                # request can itself hang on providers that already returned a partial
+                # tool call, leaving the frontend waiting after the step cap. Finish
+                # deterministically so the run always closes and the user can resume.
+                recent_text = self._latest_assistant_text_excerpt()
+                final_response = (
+                    f"已执行 {turn} 轮，达到本次运行的最大步骤上限 {self.max_turns}。\n\n"
+                    "本次运行已自动停止，避免继续循环或长时间占用后台。"
+                    "如果任务尚未完成，请基于已生成文件继续下达更小范围的指令。"
+                )
+                if recent_text:
+                    final_response += f"\n\n最近进展摘录：\n{recent_text}"
 
         except TimeoutError as e:
             logger.warning(f"[Agent] LLM stream idle timeout: {e}")

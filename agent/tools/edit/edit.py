@@ -23,7 +23,7 @@ class Edit(BaseTool):
     """Tool for precise file editing"""
     
     name: str = "edit"
-    description: str = "Edit a file by replacing exact text, or append to end if oldText is empty. For append: use empty oldText. For replace: oldText must match exactly (including whitespace)."
+    description: str = "Edit a UTF-8 text file by replacing exact text, or append to end if oldText is empty. For append: use empty oldText and keep each newText chunk under about 10KB/6000 Chinese chars. For replace: oldText must match exactly (including whitespace). Prefer this over bash/PowerShell for appending Chinese textbook content."
     
     params: dict = {
         "type": "object",

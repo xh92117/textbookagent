@@ -15,7 +15,7 @@ class Write(BaseTool):
     """Tool for writing file content"""
     
     name: str = "write"
-    description: str = "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories. IMPORTANT: Single write should not exceed 10KB. For large files, create a skeleton first, then use edit to add content in chunks."
+    description: str = "Write UTF-8 content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories. IMPORTANT: Single write should not exceed 10KB/6000 Chinese chars. For large files, create a skeleton first, then use edit with oldText=\"\" to append small UTF-8 chunks. Do not use bash/PowerShell to write Chinese text files."
     
     params: dict = {
         "type": "object",

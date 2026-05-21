@@ -10,10 +10,6 @@ from common.log import logger
 from channel.web.web.utils import json_error, json_response, json_success, read_json_body, require_auth
 
 
-def _require_auth():
-    return require_auth()
-
-
 def _get_textbook_bridge():
     from bridge.textbook_bridge import get_bridge
     return get_bridge()
@@ -27,7 +23,7 @@ class VersionHandler:
 
 class TextbookHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         try:
             bridge = _get_textbook_bridge()
             textbooks = bridge.list_textbooks()
@@ -37,7 +33,7 @@ class TextbookHandler:
             return json_error(e)
 
     def POST(self):
-        _require_auth()
+        require_auth()
         try:
             body = read_json_body()
             from agent.textbook.models.textbook import TextbookConfig
@@ -52,7 +48,7 @@ class TextbookHandler:
 
 class TextbookDetailHandler:
     def GET(self, book_id):
-        _require_auth()
+        require_auth()
         try:
             bridge = _get_textbook_bridge()
             config = bridge.get_textbook(book_id)
@@ -64,7 +60,7 @@ class TextbookDetailHandler:
             return json_error(e)
 
     def PUT(self, book_id):
-        _require_auth()
+        require_auth()
         try:
             body = read_json_body()
             bridge = _get_textbook_bridge()
@@ -77,7 +73,7 @@ class TextbookDetailHandler:
             return json_error(e)
 
     def DELETE(self, book_id):
-        _require_auth()
+        require_auth()
         try:
             bridge = _get_textbook_bridge()
             result = bridge.delete_textbook(book_id)
@@ -91,7 +87,7 @@ class TextbookDetailHandler:
 
 class TextbookOutlineHandler:
     def GET(self, book_id):
-        _require_auth()
+        require_auth()
         try:
             bridge = _get_textbook_bridge()
             outline = bridge.get_outline(book_id)
@@ -101,7 +97,7 @@ class TextbookOutlineHandler:
             return json_error(e)
 
     def PUT(self, book_id):
-        _require_auth()
+        require_auth()
         try:
             body = read_json_body()
             outline_content = body.get("outline_content", "")
@@ -115,7 +111,7 @@ class TextbookOutlineHandler:
 
 class TextbookChaptersHandler:
     def GET(self, book_id):
-        _require_auth()
+        require_auth()
         try:
             bridge = _get_textbook_bridge()
             chapter_files = bridge.list_chapters(book_id)
@@ -146,7 +142,7 @@ class TextbookChaptersHandler:
 
 class TextbookChapterDetailHandler:
     def GET(self, book_id, num):
-        _require_auth()
+        require_auth()
         try:
             bridge = _get_textbook_bridge()
             content = bridge.get_chapter(book_id, int(num))
@@ -156,7 +152,7 @@ class TextbookChapterDetailHandler:
             return json_error(e)
 
     def PUT(self, book_id, num):
-        _require_auth()
+        require_auth()
         try:
             body = read_json_body()
             content = body.get("content", "")
@@ -170,7 +166,7 @@ class TextbookChapterDetailHandler:
 
 class TextbookPipelineHandler:
     def GET(self, book_id):
-        _require_auth()
+        require_auth()
         try:
             bridge = _get_textbook_bridge()
             status = bridge.get_pipeline_status(book_id)
@@ -180,7 +176,7 @@ class TextbookPipelineHandler:
             return json_error(e)
 
     def POST(self, book_id):
-        _require_auth()
+        require_auth()
         try:
             body = read_json_body()
             action = body.get("action")
@@ -218,7 +214,7 @@ class TextbookPipelineHandler:
 
 class TextbookPipelineStreamHandler:
     def GET(self, book_id):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'text/event-stream; charset=utf-8')
         web.header('Cache-Control', 'no-cache')
         web.header('X-Accel-Buffering', 'no')
@@ -256,7 +252,7 @@ class TextbookPipelineStreamHandler:
 
 class TextbookExportHandler:
     def GET(self, book_id):
-        _require_auth()
+        require_auth()
         try:
             params = web.input(template="academic", chapters="", format="word", range="all", chapter="")
             export_format = (params.format or "word").lower()
@@ -285,7 +281,7 @@ class TextbookExportHandler:
 
 class SandboxExecuteHandler:
     def POST(self):
-        _require_auth()
+        require_auth()
         try:
             body = read_json_body()
             code = body.get("code", "")
@@ -300,7 +296,7 @@ class SandboxExecuteHandler:
 
 class SandboxChartHandler:
     def POST(self):
-        _require_auth()
+        require_auth()
         try:
             body = read_json_body()
             chart_type = body.get("chart_type", "")
@@ -316,7 +312,7 @@ class SandboxChartHandler:
 
 class TextbookOutlineVersionHandler:
     def GET(self, book_id):
-        _require_auth()
+        require_auth()
         try:
             bridge = _get_textbook_bridge()
             versions = bridge.list_outline_versions(book_id)
@@ -326,7 +322,7 @@ class TextbookOutlineVersionHandler:
             return json_error(e)
 
     def POST(self, book_id):
-        _require_auth()
+        require_auth()
         try:
             body = read_json_body()
             content = body.get("content", "")
@@ -341,7 +337,7 @@ class TextbookOutlineVersionHandler:
 
 class TextbookOutlineVersionDetailHandler:
     def GET(self, book_id, version_id):
-        _require_auth()
+        require_auth()
         try:
             bridge = _get_textbook_bridge()
             content = bridge.get_outline_version(book_id, version_id)
@@ -353,7 +349,7 @@ class TextbookOutlineVersionDetailHandler:
 
 class TextbookOutlineVersionRestoreHandler:
     def POST(self, book_id, version_id):
-        _require_auth()
+        require_auth()
         try:
             bridge = _get_textbook_bridge()
             result = bridge.restore_outline_version(book_id, version_id)
@@ -365,7 +361,7 @@ class TextbookOutlineVersionRestoreHandler:
 
 class TextbookReviewHandler:
     def POST(self, book_id):
-        _require_auth()
+        require_auth()
         try:
             body = read_json_body()
             level = body.get("level", "outline")
@@ -380,7 +376,7 @@ class TextbookReviewHandler:
 
 class TextbookPreferencesHandler:
     def GET(self, book_id):
-        _require_auth()
+        require_auth()
         try:
             bridge = _get_textbook_bridge()
             preferences = bridge.get_preferences(book_id)
@@ -390,7 +386,7 @@ class TextbookPreferencesHandler:
             return json_error(e)
 
     def PUT(self, book_id):
-        _require_auth()
+        require_auth()
         try:
             body = read_json_body()
             bridge = _get_textbook_bridge()
@@ -403,7 +399,7 @@ class TextbookPreferencesHandler:
 
 class ChatHistorySaveHandler:
     def POST(self):
-        _require_auth()
+        require_auth()
         try:
             body = read_json_body()
             session_id = body.get("session_id", "")
@@ -420,7 +416,7 @@ class ChatHistorySaveHandler:
 
 class ChatHistoryLoadHandler:
     def GET(self, session_id):
-        _require_auth()
+        require_auth()
         try:
             bridge = _get_textbook_bridge()
             messages = bridge.load_chat_history(session_id)
@@ -432,7 +428,7 @@ class ChatHistoryLoadHandler:
 
 class ChatSessionsHandler:
     def GET(self):
-        _require_auth()
+        require_auth()
         try:
             bridge = _get_textbook_bridge()
             sessions = bridge.list_chat_sessions()
@@ -444,7 +440,7 @@ class ChatSessionsHandler:
 
 class ChatHistoryClearHandler:
     def DELETE(self, session_id):
-        _require_auth()
+        require_auth()
         try:
             bridge = _get_textbook_bridge()
             result = bridge.clear_chat_history(session_id)
@@ -456,7 +452,7 @@ class ChatHistoryClearHandler:
 
 class ChatCancelHandler:
     def POST(self):
-        _require_auth()
+        require_auth()
         try:
             body = read_json_body()
             session_id = body.get("session_id", "")

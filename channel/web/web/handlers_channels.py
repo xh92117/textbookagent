@@ -10,17 +10,7 @@ import web
 
 from common.log import logger
 from config import conf
-from channel.web.web.utils import require_auth
-
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-
-def _get_config_path():
-    return os.path.join(PROJECT_ROOT, "config.json")
-
-
-def _require_auth():
-    require_auth()
+from channel.web.web.utils import get_config_path, require_auth
 
 
 class ChannelsHandler:
@@ -129,7 +119,7 @@ class ChannelsHandler:
         return set(cls._parse_channel_list(conf().get("channel_type", "")))
 
     def GET(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             local_config = conf()
@@ -167,7 +157,7 @@ class ChannelsHandler:
             return json.dumps({"status": "error", "message": str(e)})
 
     def POST(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             raw = web.data()
@@ -218,7 +208,7 @@ class ChannelsHandler:
         if not applied:
             return json.dumps({"status": "error", "message": "no valid fields to update"})
 
-        config_path = _get_config_path()
+        config_path = get_config_path()
         if os.path.exists(config_path):
             with open(config_path, "r", encoding="utf-8") as f:
                 file_cfg = json.load(f)
@@ -288,7 +278,7 @@ class ChannelsHandler:
         new_channel_type = ",".join(existing)
         local_config["channel_type"] = new_channel_type
 
-        config_path = _get_config_path()
+        config_path = get_config_path()
         if os.path.exists(config_path):
             with open(config_path, "r", encoding="utf-8") as f:
                 file_cfg = json.load(f)
@@ -343,7 +333,7 @@ class ChannelsHandler:
         local_config = conf()
         local_config["channel_type"] = new_channel_type
 
-        config_path = _get_config_path()
+        config_path = get_config_path()
         if os.path.exists(config_path):
             with open(config_path, "r", encoding="utf-8") as f:
                 file_cfg = json.load(f)
@@ -419,7 +409,7 @@ class WeixinQrHandler:
         return None
 
     def GET(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             running_ch = self._get_running_channel()
@@ -452,7 +442,7 @@ class WeixinQrHandler:
             return json.dumps({"status": "error", "message": str(e)})
 
     def POST(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             body = json.loads(web.data())
@@ -630,7 +620,7 @@ class FeishuRegisterHandler:
 
     def GET(self):
         """启动一次新的注册会话。如果已有 pending/done 会话则覆盖。"""
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             self._start_register_thread()
@@ -664,7 +654,7 @@ class FeishuRegisterHandler:
 
     def POST(self):
         """轮询注册结果。"""
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             body = json.loads(web.data() or b"{}")

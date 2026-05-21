@@ -91,3 +91,29 @@ def get_upload_dir() -> str:
     tmp_dir = app_tmp_dir()
     os.makedirs(tmp_dir, exist_ok=True)
     return tmp_dir
+
+
+def get_project_root() -> str:
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+
+def get_config_path() -> str:
+    return os.path.join(get_project_root(), "config.json")
+
+
+def reset_workspace_dependent_singletons() -> None:
+    try:
+        import bridge.textbook_bridge as tb
+        tb._bridge_instance = None
+    except Exception:
+        pass
+    try:
+        import agent.memory.conversation_store as conversation_store
+        conversation_store._store_instance = None
+    except Exception:
+        pass
+    try:
+        import agent.memory.config as memory_config
+        memory_config._global_memory_config = None
+    except Exception:
+        pass

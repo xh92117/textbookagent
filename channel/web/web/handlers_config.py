@@ -1,7 +1,6 @@
 """Configuration API handlers for the web channel."""
 
 import json
-import os
 import uuid
 from collections import OrderedDict
 
@@ -10,35 +9,7 @@ import web
 from common import const
 from common.log import logger
 from config import conf
-from channel.web.web.utils import require_auth
-
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-
-def _get_config_path():
-    return os.path.join(PROJECT_ROOT, "config.json")
-
-
-def _reset_workspace_dependent_singletons():
-    try:
-        import bridge.textbook_bridge as tb
-        tb._bridge_instance = None
-    except Exception:
-        pass
-    try:
-        import agent.memory.conversation_store as conversation_store
-        conversation_store._store_instance = None
-    except Exception:
-        pass
-    try:
-        import agent.memory.config as memory_config
-        memory_config._global_memory_config = None
-    except Exception:
-        pass
-
-
-def _require_auth():
-    require_auth()
+from channel.web.web.utils import get_config_path, require_auth, reset_workspace_dependent_singletons
 
 
 class ConfigHandler:
@@ -270,7 +241,7 @@ class ConfigHandler:
         return models[0] if models else {}
 
     def GET(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             local_config = conf()
@@ -354,7 +325,7 @@ class ConfigHandler:
         }
 
     def POST(self):
-        _require_auth()
+        require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             data = json.loads(web.data())
@@ -467,7 +438,7 @@ class ConfigHandler:
             if not applied:
                 return json.dumps({"status": "error", "message": "no valid keys to update"})
 
-            config_path = _get_config_path()
+            config_path = get_config_path()
             if os.path.exists(config_path):
                 with open(config_path, "r", encoding="utf-8") as f:
                     file_cfg = json.load(f)
@@ -496,7 +467,7 @@ class ConfigHandler:
                 from common.app_paths import ensure_active_workspace, ensure_system_dir
                 ensure_active_workspace()
                 ensure_system_dir()
-                _reset_workspace_dependent_singletons()
+                reset_workspace_dependent_singletons()
 
             return json.dumps({"status": "success", "applied": applied}, ensure_ascii=False)
         except Exception as e:
