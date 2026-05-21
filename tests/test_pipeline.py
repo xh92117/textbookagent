@@ -11,6 +11,7 @@ from agent.textbook.pipeline.chapter_persistence import ChapterPersistence
 from agent.textbook.pipeline.runner import PipelineRunner
 from agent.textbook.pipeline.context_builder import ContextPackageBuilder
 from agent.textbook.pipeline.orchestrator import ChapterOrchestrator, PipelineCheckpointStore
+from agent.textbook.pipeline.quality_gate import ChapterQualityGate
 from agent.textbook.models.textbook import TextbookConfig
 from agent.textbook.state.manager import TextbookMemoryManager
 
@@ -119,6 +120,35 @@ def test_runner_phases():
     assert PipelineRunner.PHASE_LABELS['review_chapter'] == '教材审查'
     assert PipelineRunner.PHASE_LABELS['revise'] == '修订润色'
     assert PipelineRunner.PHASE_LABELS['persist'] == '持久化'
+
+
+def test_chapter_quality_gate_flags_unresolved_visuals_and_missing_evidence():
+    gate = ChapterQualityGate()
+    report = gate.evaluate(
+        "# 第一章 智能体基础\n\n学习目标：理解智能体。\n\n如图所示，系统由规划、工具和记忆组成。\n\n练习：解释智能体闭环。",
+        review_score=90,
+        evidence_chars=0,
+        visual_asset_count=0,
+    )
+
+    assert report.score < 90
+    assert not report.checks["has_evidence"]
+    assert not report.checks["visuals_resolved"]
+    assert any(issue["code"] == "unresolved_visual" for issue in report.issues)
+    assert report.inferred_visuals
+
+
+def test_chapter_quality_gate_passes_with_evidence_and_asset():
+    gate = ChapterQualityGate()
+    report = gate.evaluate(
+        "# 第一章 智能体基础\n\n学习目标：理解智能体。\n\n![智能体结构](assets/images/a.png)\n\n练习：解释智能体闭环。",
+        review_score=88,
+        evidence_chars=500,
+        visual_asset_count=1,
+    )
+
+    assert report.passed
+    assert report.checks["visuals_resolved"]
 
 
 def test_runner_loads_llm_wiki_chunk_metadata():

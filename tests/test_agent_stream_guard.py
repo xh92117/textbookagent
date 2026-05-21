@@ -9,6 +9,7 @@ import bridge.textbook_bridge as textbook_bridge
 import config as config_module
 from bridge.agent_bridge import AgentLLMModel
 from bridge.textbook_bridge import _LightweightLLM
+from agent.protocol.agent_stream import AgentStreamExecutor
 
 
 def test_stream_guard_returns_after_idle_when_provider_never_finishes(monkeypatch):
@@ -51,6 +52,21 @@ def test_stream_guard_times_out_before_first_chunk(monkeypatch):
 
     with pytest.raises(TimeoutError):
         list(model._iter_stream_with_idle_guard(silent_stream()))
+
+
+def test_agent_executor_stream_idle_guard_returns_partial_chunks():
+    def stuck_stream():
+        yield {"choices": [{"delta": {"content": "ok"}}]}
+        time.sleep(5)
+
+    executor = object.__new__(AgentStreamExecutor)
+    started = time.time()
+    chunks = []
+    with pytest.raises(TimeoutError):
+        for chunk in executor._iter_stream_with_idle_timeout(stuck_stream(), 1):
+            chunks.append(chunk)
+    assert chunks == [{"choices": [{"delta": {"content": "ok"}}]}]
+    assert time.time() - started < 3
 
 
 def test_knowledge_stream_guard_returns_partial_sse_when_done_is_missing(monkeypatch):

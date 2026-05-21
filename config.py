@@ -228,6 +228,7 @@ available_setting = {
     "deepseek_api_key": "",
     "deepseek_api_base": "https://api.deepseek.com/v1",
     "web_port": 9899,
+    "web_host": "127.0.0.1",  # Bind host; use 0.0.0.0 only when remote access is intentional and protected
     "web_password": "",  # Web console password; empty means no authentication required
     "web_session_expire_days": 30,  # Auth session expiry in days
     "agent": True,  # 鏄惁寮€鍚疉gent妯″紡
@@ -237,6 +238,7 @@ available_setting = {
     "agent_model_context_window": 0,  # 显式覆盖当前模型上下文窗口；0表示自动识别
     "agent_context_reserve_tokens": 0,  # 显式覆盖输出/工具增长预留tokens；0表示自动计算
     "agent_max_steps": 20,  # Agent妯″紡涓嬪崟娆¤繍琛屾渶澶у喅绛栨鏁?
+    "agent_stream_idle_timeout_seconds": 180,  # Close a stalled model stream after this many seconds without chunks; 0 disables
     "enable_thinking": False,  # Enable deep-thinking mode for thinking-capable models
     "reasoning_effort": "high",  # Reasoning depth under thinking mode: "high" or "max"
     "knowledge": True,  # 鏄惁寮€鍚煡璇嗗簱鍔熻兘

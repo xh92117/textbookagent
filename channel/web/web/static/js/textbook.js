@@ -173,6 +173,7 @@ function switchView(viewId) {
         loadKnowledgePage();
     } else if (viewId === 'chat') {
         if (chatModalSessionId) chatSessionId = chatModalSessionId;
+        if (window.refreshActiveChatStream) window.refreshActiveChatStream();
         if (!currentEventSource && !chatHistoryLoaded) {
             loadChatHistory();
         }
@@ -784,4 +785,3 @@ function downloadFile(url) {
     a.click();
     document.body.removeChild(a);
 }
-

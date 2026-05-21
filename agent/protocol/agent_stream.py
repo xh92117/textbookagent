@@ -5,6 +5,8 @@ Provides streaming output, event system, and complete tool-call loop
 """
 import json
 import time
+import queue
+import threading
 from typing import List, Dict, Any, Optional, Callable, Tuple
 
 from agent.protocol.models import LLMRequest, LLMModel
@@ -25,6 +27,7 @@ from common.log import logger
 # Keep aligned with the frontend REASONING_RENDER_CAP and the SSE
 # MAX_REASONING_STREAM_CHARS so that storage / stream / display all match.
 MAX_STORED_REASONING_CHARS = 4 * 1024  # 4 KB
+DEFAULT_LLM_STREAM_IDLE_TIMEOUT_SECONDS = 180
 
 # Marker inserted between head and tail when reasoning is truncated.
 _REASONING_TRUNCATE_MARKER = "\n\n... [reasoning truncated, {omitted} chars omitted] ...\n\n"
@@ -159,6 +162,52 @@ class AgentStreamExecutor:
             # Also strip unclosed <think> tag at the end (streaming partial)
             text = re.sub(r'<think>[\s\S]*$', '', text)
         return text
+
+    def _stream_idle_timeout_seconds(self) -> int:
+        """Maximum seconds to wait for the next model stream chunk.
+
+        Some providers keep the HTTP stream open after content has already been
+        emitted. Without an idle guard, the agent appears stuck until the
+        process receives Ctrl+C. The guard is conservative and configurable.
+        """
+        try:
+            from config import conf
+            value = int(conf().get("agent_stream_idle_timeout_seconds", DEFAULT_LLM_STREAM_IDLE_TIMEOUT_SECONDS) or 0)
+            return max(30, value) if value > 0 else 0
+        except Exception:
+            return DEFAULT_LLM_STREAM_IDLE_TIMEOUT_SECONDS
+
+    def _iter_stream_with_idle_timeout(self, stream, timeout_seconds: int):
+        if not timeout_seconds:
+            yield from stream
+            return
+
+        q: "queue.Queue" = queue.Queue(maxsize=128)
+        sentinel = object()
+
+        def producer():
+            try:
+                for item in stream:
+                    q.put(("chunk", item))
+                q.put(("done", sentinel))
+            except Exception as exc:
+                q.put(("error", exc))
+
+        thread = threading.Thread(target=producer, name="llm-stream-reader", daemon=True)
+        thread.start()
+        while True:
+            try:
+                kind, payload = q.get(timeout=timeout_seconds)
+            except queue.Empty:
+                raise TimeoutError(
+                    f"LLM stream idle for {timeout_seconds}s; closing partial stream to prevent executor hang"
+                )
+            if kind == "chunk":
+                yield payload
+            elif kind == "error":
+                raise payload
+            else:
+                return
 
     def _hash_args(self, args: dict) -> str:
         """Generate a simple hash for tool arguments"""
@@ -592,6 +641,13 @@ class AgentStreamExecutor:
                         self.messages.pop(prompt_insert_idx)
                         logger.debug("[Agent] Removed injected max-steps prompt from message history")
 
+        except TimeoutError as e:
+            logger.warning(f"[Agent] LLM stream idle timeout: {e}")
+            if full_content or tool_calls_buffer:
+                stop_reason = stop_reason or "idle_timeout"
+            else:
+                raise
+
         except Exception as e:
             logger.error(f"❌ Agent执行错误: {e}")
             self._emit_event("error", {"error": str(e)})
@@ -693,6 +749,7 @@ class AgentStreamExecutor:
 
         try:
             stream = self.model.call_stream(request)
+            stream = self._iter_stream_with_idle_timeout(stream, self._stream_idle_timeout_seconds())
 
             for chunk in stream:
                 if self.cancel_event and self.cancel_event.is_set():
@@ -1009,7 +1066,8 @@ class AgentStreamExecutor:
 
         self._emit_event("message_end", {
             "content": full_content,
-            "tool_calls": tool_calls
+            "tool_calls": tool_calls,
+            "stop_reason": stop_reason
         })
 
         return full_content, tool_calls

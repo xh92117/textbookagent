@@ -24,6 +24,7 @@ from ..sandbox.image_prompt import ImagePromptEngineer, ImageGenerationRequest
 from .chapter_persistence import ChapterPersistence
 from .context_builder import ContextPackageBuilder
 from .orchestrator import ChapterOrchestrator, PipelineCheckpointStore
+from .quality_gate import ChapterQualityGate
 from .visual_asset_router import VisualAssetRouter
 
 
@@ -317,6 +318,7 @@ class PipelineRunner:
         workspace_root = getattr(self.memory_manager, "workspace_root", self.memory_manager.workspace_dir) if self.memory_manager else os.path.dirname(os.path.dirname(book_dir))
         persistence = ChapterPersistence(book_dir) if book_dir else None
         context_builder = ContextPackageBuilder(self.memory_manager)
+        quality_gate = ChapterQualityGate()
         if book_config.chapter_word_count:
             scale = 0.85 if book_config.chapter_word_count <= 3000 else 1.15 if book_config.chapter_word_count >= 8000 else 1.0
             context_builder.budgets = {
@@ -452,6 +454,11 @@ class PipelineRunner:
 
             chart_reqs = write_result.get('chart_requirements', [])
             image_reqs = write_result.get('image_requirements', [])
+            inferred_visuals = quality_gate.infer_visual_requirements(write_result.get('content', ''))
+            for req in inferred_visuals:
+                desc = req.get("description", "")
+                if desc and not any(item.get("description") == desc for item in image_reqs):
+                    image_reqs.append(req)
             chart_files = {}
             visual_decisions = []
             PipelineCheckpointStore.mark(actions, "route_visual_assets", "running")
@@ -528,6 +535,16 @@ class PipelineRunner:
                 'outline_context': outline_text,
             })
             chapter_review = self._ensure_agent_result(chapter_review, "ReviewerAgent", "review_chapter")
+            deterministic_quality = quality_gate.evaluate(
+                write_result.get('content', ''),
+                review_score=chapter_review.get('score', 0),
+                evidence_chars=len(wiki_context) + len(research_evidence),
+                visual_asset_count=len(chart_files),
+            )
+            chapter_review["deterministic_quality"] = deterministic_quality.__dict__
+            chapter_review["score"] = min(chapter_review.get("score", 0) or 0, deterministic_quality.score)
+            if deterministic_quality.issues:
+                chapter_review["issues"] = (chapter_review.get("issues") or []) + deterministic_quality.issues
             PipelineCheckpointStore.mark(actions, "review_chapter", "completed", f"score={chapter_review.get('score', 0)}")
             if checkpoint_store:
                 checkpoint_store.save(i, actions, {"stage": "review_chapter", "score": chapter_review.get('score', 0)})
@@ -606,6 +623,9 @@ class PipelineRunner:
                     persistence.save_chapter(i, final_content, metadata={
                         'word_count': len(final_content),
                         'review_score': chapter_review.get('score', 0),
+                        'quality': chapter_review.get('deterministic_quality', {}),
+                        'visual_decisions': visual_decisions,
+                        'knowledge_diagnostics': wiki_diagnostics,
                         'outline_hash': TruthFileManager.content_hash(outline_text),
                     })
                 mgr.append_chapter_summary(i, f'第{i}章', final_content[:200])
