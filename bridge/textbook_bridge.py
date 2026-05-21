@@ -424,6 +424,24 @@ class TextbookBridge:
         mgr = self._memory_manager.get_truth_manager(book_id)
         return mgr.list_chapters()
 
+    @staticmethod
+    def _chapter_number_from_filename(filename):
+        match = re.match(r"^chapter_0*(\d+)\.md$", str(filename), re.IGNORECASE)
+        return int(match.group(1)) if match else None
+
+    @staticmethod
+    def _safe_export_filename(name):
+        cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", str(name or "textbook")).strip()
+        return cleaned.strip(" .") or "textbook"
+
+    def _existing_chapter_numbers(self, mgr):
+        chapter_numbers = []
+        for filename in mgr.list_chapters():
+            num = self._chapter_number_from_filename(filename)
+            if num is not None:
+                chapter_numbers.append(num)
+        return sorted(set(chapter_numbers))
+
     def start_pipeline(self, book_id, sse_queue=None, requirement: str = ""):
         logger.info(f"[TextbookBridge] start_pipeline called for book_id={book_id}")
         config = self.get_textbook(book_id)
@@ -693,8 +711,26 @@ class TextbookBridge:
         mgr = self._memory_manager.get_truth_manager(book_id)
         template = get_template(template_name)
         converter = MarkdownToWordConverter(template=template)
+        requested_specific_chapters = chapter_numbers is not None
+        existing_chapters = self._existing_chapter_numbers(mgr)
 
-        if chapter_numbers is None:
+        if requested_specific_chapters:
+            normalized = []
+            for raw in chapter_numbers or []:
+                try:
+                    num = int(raw)
+                except (TypeError, ValueError):
+                    continue
+                if num > 0 and num not in normalized:
+                    normalized.append(num)
+            missing = [num for num in normalized if num not in existing_chapters]
+            if missing:
+                raise ValueError(f"Requested chapter not found: {', '.join(str(n) for n in missing)}")
+            chapter_numbers = normalized
+        else:
+            chapter_numbers = existing_chapters
+
+        if not requested_specific_chapters:
             converter.add_title(config.title)
             outline_text = mgr.read("outline")
             if outline_text:
@@ -702,26 +738,18 @@ class TextbookBridge:
                 converter.convert_markdown(outline_text)
         else:
             if len(chapter_numbers) == 1:
-                pass
+                converter.add_title(f"{config.title} - 第{chapter_numbers[0]}章")
             else:
                 converter.add_title(config.title)
 
-        if chapter_numbers is None:
-            chapter_files = mgr.list_chapters()
-            chapter_numbers = []
-            for fname in chapter_files:
-                try:
-                    num = int(fname.replace("chapter_", "").replace(".md", ""))
-                    chapter_numbers.append(num)
-                except ValueError:
-                    pass
-            chapter_numbers.sort()
+        chapter_snapshots = {num: mgr.read_chapter(num) for num in chapter_numbers}
 
         img_output_dir = os.path.join(self._book_dir(book_id), "output", "images")
         os.makedirs(img_output_dir, exist_ok=True)
 
+        converted_count = 0
         for ch_num in chapter_numbers:
-            content = mgr.read_chapter(ch_num)
+            content = chapter_snapshots.get(ch_num) or ""
             if content:
                 for match in re.finditer(r'!\[([^\]]*)\]\(([^)]+)\)', content):
                     img_path = match.group(2)
@@ -733,15 +761,27 @@ class TextbookBridge:
                         ImageHandler.resize_image(resolved_img_path, resized_path)
                         content = content.replace(img_path, resized_path)
                 converter.convert_markdown(content)
+                converted_count += 1
+
+        if not converted_count and requested_specific_chapters:
+            raise ValueError("Selected chapter has no content to export.")
+        if not converted_count and not mgr.read("outline"):
+            raise ValueError("No outline or chapter content to export.")
 
         output_dir = os.path.join(self._book_dir(book_id), "output")
         os.makedirs(output_dir, exist_ok=True)
-        if chapter_numbers is not None and len(chapter_numbers) == 1:
-            filename = f"{config.title}_第{chapter_numbers[0]}章"
+        safe_title = self._safe_export_filename(config.title)
+        if requested_specific_chapters and len(chapter_numbers) == 1:
+            filename = f"{safe_title}_第{chapter_numbers[0]}章"
         else:
-            filename = config.title
+            filename = safe_title
         output_path = os.path.join(output_dir, f"{filename}.docx")
         converter.save(output_path)
+        for ch_num, before_content in chapter_snapshots.items():
+            if mgr.read_chapter(ch_num) != before_content:
+                raise RuntimeError(f"Export unexpectedly modified chapter_{ch_num:03d}.md")
+        if not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0:
+            raise RuntimeError("Word export produced an empty file.")
         return output_path
 
     def execute_sandbox(self, code, timeout=30):

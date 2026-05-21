@@ -6,6 +6,8 @@ import tempfile
 from unittest.mock import patch, MagicMock
 from queue import Queue
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from bridge.textbook_bridge import TextbookBridge
@@ -435,6 +437,38 @@ def test_export_word_specific_chapters():
         output_path = bridge.export_word(created.id, chapter_numbers=[1, 3])
         assert os.path.exists(output_path)
         assert os.path.getsize(output_path) > 0
+
+
+def test_export_word_specific_chapter_does_not_mutate_source():
+    from docx import Document
+
+    with tempfile.TemporaryDirectory() as tmp:
+        bridge = _make_bridge(tmp)
+        created = bridge.create_textbook(_make_config(title="Export Safety"))
+        original = "# Chapter 2\n\nThis chapter must remain unchanged after export."
+        bridge.update_outline(created.id, "# Textbook Outline\n\n# Chapter 1 Overview")
+        bridge.update_chapter(created.id, 2, original)
+
+        output_path = bridge.export_word(created.id, chapter_numbers=[2])
+
+        assert os.path.exists(output_path)
+        assert bridge.get_chapter(created.id, 2) == original
+        paragraphs = [p.text for p in Document(output_path).paragraphs if p.text.strip()]
+        assert any("Chapter 2" in text for text in paragraphs)
+        assert not any("Textbook Outline" in text for text in paragraphs)
+
+
+def test_export_word_rejects_missing_selected_chapter():
+    with tempfile.TemporaryDirectory() as tmp:
+        bridge = _make_bridge(tmp)
+        created = bridge.create_textbook(_make_config(title="Export Missing Chapter"))
+        bridge.update_outline(created.id, "# Textbook Outline")
+        bridge.update_chapter(created.id, 2, "# Chapter 2\n\nExisting content.")
+
+        with pytest.raises(ValueError, match="Requested chapter not found"):
+            bridge.export_word(created.id, chapter_numbers=[1])
+
+        assert bridge.get_chapter(created.id, 2) == "# Chapter 2\n\nExisting content."
 
 
 def test_sandbox_execute():

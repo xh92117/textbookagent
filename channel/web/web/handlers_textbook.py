@@ -265,6 +265,8 @@ class TextbookExportHandler:
             chapter_numbers = None
             if chapters_param:
                 chapter_numbers = [int(c.strip()) for c in chapters_param.split(",") if c.strip()]
+                if not chapter_numbers:
+                    return json_error("No chapter selected for export.")
             bridge = _get_textbook_bridge()
             output_path = bridge.export_word(book_id, template_name=template, chapter_numbers=chapter_numbers)
             if not output_path:

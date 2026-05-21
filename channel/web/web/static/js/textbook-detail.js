@@ -304,28 +304,23 @@ function populateExportChapterDropdown() {
     var dropdown = document.getElementById('exportChapterNum');
     if (!dropdown || !currentBookId) return;
     dropdown.innerHTML = '<option value="">加载中...</option>';
-    fetch('/api/textbook/' + currentBookId + '/outline')
+    fetch('/api/textbook/' + currentBookId + '/chapters')
         .then(function(r) { return r.json(); })
         .then(function(data) {
             dropdown.innerHTML = '';
-            if (data.status === 'success' && data.outline) {
-                var lines = data.outline.split('\n');
-                var chapterNum = 0;
-                for (var i = 0; i < lines.length; i++) {
-                    var match = lines[i].match(/^(#{1,6})\s+(.+)/);
-                    if (match) {
-                        var level = match[1].length;
-                        var title = match[2];
-                        var isChapterTitle = /第[一二三四五六七八九十\d]+章/.test(title);
-                        if (isChapterTitle || level === 1) {
-                            chapterNum++;
-                            var opt = document.createElement('option');
-                            opt.value = chapterNum;
-                            opt.textContent = '第' + chapterNum + '章 ' + title;
-                            dropdown.appendChild(opt);
-                        }
-                    }
-                }
+            if (data.status === 'success' && Array.isArray(data.chapters)) {
+                data.chapters
+                    .filter(function(ch) {
+                        return Number.isFinite(Number(ch.chapter_num)) && ch.status === 'completed';
+                    })
+                    .sort(function(a, b) { return Number(a.chapter_num) - Number(b.chapter_num); })
+                    .forEach(function(ch) {
+                        var num = Number(ch.chapter_num);
+                        var opt = document.createElement('option');
+                        opt.value = String(num);
+                        opt.textContent = '第' + num + '章 ' + (ch.title || ch.file || '');
+                        dropdown.appendChild(opt);
+                    });
             }
             if (!dropdown.innerHTML) {
                 dropdown.innerHTML = '<option value="">暂无章节</option>';
@@ -973,4 +968,3 @@ function refreshAssistantMessage(btn) {
         setChatSending(false);
     });
 }
-
