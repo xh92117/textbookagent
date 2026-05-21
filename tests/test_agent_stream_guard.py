@@ -130,6 +130,54 @@ def test_agent_executor_closes_stalled_parseable_tool_call(monkeypatch):
     assert time.time() - started < 4
 
 
+def test_agent_executor_closes_stalled_partial_tool_call(monkeypatch):
+    monkeypatch.setattr(
+        config_module,
+        "conf",
+        lambda: {
+            "agent_stream_idle_timeout_seconds": 10,
+            "agent_stream_tool_call_stall_timeout_seconds": 10,
+            "agent_stream_partial_tool_call_timeout_seconds": 1,
+        },
+    )
+
+    class FakeModel(LLMModel):
+        def call_stream(self, request):
+            yield {
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call_partial",
+                            "function": {
+                                "name": "textbook_chapter",
+                                "arguments": '{"action":"write_chapter","book_id":"tb_1","chapter_num":4,"content":"',
+                            },
+                        }]
+                    }
+                }]
+            }
+            while True:
+                time.sleep(0.2)
+                yield {"choices": [{"delta": {}}]}
+
+    executor = AgentStreamExecutor(
+        agent=None,
+        model=FakeModel(),
+        system_prompt="",
+        tools=[],
+        messages=[],
+    )
+
+    started = time.time()
+    content, tool_calls = executor._call_llm_stream(retry_on_empty=False)
+
+    assert content == ""
+    assert tool_calls[0]["name"] == "textbook_chapter"
+    assert "_parse_error" in tool_calls[0]
+    assert time.time() - started < 4
+
+
 def test_bash_rejects_powershell_add_content_for_utf8_safety():
     tool = Bash()
     result = tool.execute({

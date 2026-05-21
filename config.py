@@ -238,10 +238,12 @@ available_setting = {
     "log_backup_count": 5,
     "agent": True,  # 鏄惁寮€鍚疉gent妯″紡
     "agent_workspace": "~/textbook_workspace",  # agent宸ヤ綔绌洪棿璺緞锛岀敤浜庡瓨鍌╯kills銆乵emory绛?
-    "agent_max_context_tokens": 50000,  # Agent模式下最大上下文tokens
-    "agent_max_context_turns": 20,  # Agent模式下最大上下文记忆轮次
+    "agent_max_context_tokens": 0,  # Agent模式下最大上下文tokens；0表示按模型窗口自动计算
+    "agent_max_context_turns": 30,  # Agent模式下最大上下文记忆轮次
     "agent_model_context_window": 0,  # 显式覆盖当前模型上下文窗口；0表示自动识别
     "agent_context_reserve_tokens": 0,  # 显式覆盖输出/工具增长预留tokens；0表示自动计算
+    "agent_context_compress_ratio": 0.92,  # 达到可用上下文比例后才压缩历史工具结果
+    "agent_context_midrun_trim_ratio": 0.97,  # 运行中达到该比例才触发压缩，避免频繁compact
     "agent_max_steps": 20,  # Agent妯″紡涓嬪崟娆¤繍琛屾渶澶у喅绛栨鏁?
     "agent_stream_idle_timeout_seconds": 180,  # Close a stalled model stream after this many seconds without chunks; 0 disables
     "enable_thinking": False,  # Enable deep-thinking mode for thinking-capable models

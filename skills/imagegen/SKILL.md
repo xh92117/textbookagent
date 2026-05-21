@@ -8,6 +8,7 @@ triggers:
   - AI插图
   - 插图生成
 allowed-tools:
+  - textbook_image
   - bash
   - read
   - write
@@ -42,6 +43,12 @@ Convert textbook illustration requirements into AI image generation prompts and 
   3. 返回图片路径
 
 ## Tool Usage Specification
+
+- `textbook_image`: Preferred tool. Generate the image asset directly under
+  `textbooks/<book_id>/assets/images`, save a `.prompt.txt` beside it, and
+  create a local fallback image if the remote API returns an error or pending
+  placeholder. Do not hand-build complex Windows shell commands for image
+  generation when this tool is available.
 
 - `bash`: Execute image generation script
   - Syntax: `python <base_dir>/scripts/generate_image.py '<json_args>'`

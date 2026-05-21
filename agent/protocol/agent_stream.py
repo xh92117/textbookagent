@@ -192,6 +192,21 @@ class AgentStreamExecutor:
         except Exception:
             return 60
 
+    def _partial_tool_call_timeout_seconds(self) -> int:
+        """Maximum seconds to wait for a non-parseable tool-call tail.
+
+        A provider can stream part of a very large tool call and then keep the
+        HTTP stream alive with empty chunks. Waiting forever is worse than
+        returning a parse error to the model, because the next turn can recover
+        with a smaller tool call.
+        """
+        try:
+            from config import conf
+            value = int(conf().get("agent_stream_partial_tool_call_timeout_seconds", 90) or 0)
+            return max(1, value) if value > 0 else 0
+        except Exception:
+            return 90
+
     @staticmethod
     def _tool_calls_parseable(tool_calls_buffer: Dict[int, Dict[str, str]]) -> bool:
         if not tool_calls_buffer:
@@ -630,14 +645,17 @@ class AgentStreamExecutor:
                     "tool_count": len(tool_calls)
                 })
 
-                # Trim context after each tool execution round to prevent unbounded growth
+                # Emergency-only mid-run trim. Normal compression happens once
+                # before a run starts; compacting after every tool round can
+                # blur the active task and revive old goals.
                 if turn >= 3 and self.agent:
                     try:
                         max_allowed, reserve = self._effective_context_budget()
                         system_tokens = self.agent._estimate_message_tokens({"role": "system", "content": self.system_prompt}) if self.system_prompt else 0
                         msg_tokens = sum(self.agent._estimate_message_tokens(m) for m in self.messages)
                         total_estimated = system_tokens + msg_tokens
-                        if total_estimated > max_allowed * 0.85:
+                        trim_threshold = max_allowed * self._midrun_trim_ratio()
+                        if total_estimated > trim_threshold:
                             logger.info(f"📦 Mid-run context trim: ~{total_estimated} tokens approaching {max_allowed} limit")
                             self._trim_messages()
                             self._validate_and_fix_messages()
@@ -668,10 +686,15 @@ class AgentStreamExecutor:
 
         except TimeoutError as e:
             logger.warning(f"[Agent] LLM stream idle timeout: {e}")
-            if full_content or tool_calls_buffer:
-                stop_reason = stop_reason or "idle_timeout"
-            else:
-                raise
+            final_response = (
+                "模型流式响应空闲超时，已自动结束本轮，避免后台一直等待尾包。"
+                "如果任务尚未完成，请继续发送更小范围的指令。"
+            )
+            self._emit_event("error", {
+                "error": str(e),
+                "recoverable": True,
+                "reason": "llm_stream_idle_timeout",
+            })
 
         except Exception as e:
             logger.error(f"❌ Agent执行错误: {e}")
@@ -766,6 +789,7 @@ class AgentStreamExecutor:
         _stream_start_time = time.time()
         _content_len_at_last_log = 0
         _tool_call_stall_timeout = self._tool_call_stall_timeout_seconds()
+        _partial_tool_call_timeout = self._partial_tool_call_timeout_seconds()
         _last_meaningful_delta_time = time.time()
         _last_tool_signature = ""
 
@@ -785,19 +809,31 @@ class AgentStreamExecutor:
                     break
 
                 now = time.time()
-                if (
-                    _tool_call_stall_timeout
-                    and tool_calls_buffer
-                    and now - _last_meaningful_delta_time >= _tool_call_stall_timeout
-                    and self._tool_calls_parseable(tool_calls_buffer)
-                ):
-                    logger.warning(
-                        "[Agent] LLM tool-call stream stalled after "
-                        f"{int(now - _last_meaningful_delta_time)}s; "
-                        "closing partial stream with complete parseable tool call"
-                    )
-                    stop_reason = stop_reason or "tool_call_stall_timeout"
-                    break
+                if tool_calls_buffer:
+                    stable_for = now - _last_meaningful_delta_time
+                    if (
+                        _tool_call_stall_timeout
+                        and stable_for >= _tool_call_stall_timeout
+                        and self._tool_calls_parseable(tool_calls_buffer)
+                    ):
+                        logger.warning(
+                            "[Agent] LLM tool-call stream stalled after "
+                            f"{int(stable_for)}s; "
+                            "closing stream with complete parseable tool call"
+                        )
+                        stop_reason = stop_reason or "tool_call_stall_timeout"
+                        break
+                    if (
+                        _partial_tool_call_timeout
+                        and stable_for >= _partial_tool_call_timeout
+                        and not self._tool_calls_parseable(tool_calls_buffer)
+                    ):
+                        logger.warning(
+                            "[Agent] LLM partial tool-call stream stalled after "
+                            f"{int(stable_for)}s; closing stream so the next turn can recover"
+                        )
+                        stop_reason = stop_reason or "partial_tool_call_stall_timeout"
+                        break
 
                 if not _first_chunk_received and now - _last_heartbeat_time >= _LLM_THINKING_HEARTBEAT_INTERVAL:
                     _last_heartbeat_time = now
@@ -1403,6 +1439,22 @@ class AgentStreamExecutor:
 
         return max(1024, max_allowed), reserve
 
+    def _context_compress_ratio(self) -> float:
+        try:
+            from config import conf
+            value = float(conf().get("agent_context_compress_ratio", 0.92) or 0.92)
+            return min(0.98, max(0.70, value))
+        except Exception:
+            return 0.92
+
+    def _midrun_trim_ratio(self) -> float:
+        try:
+            from config import conf
+            value = float(conf().get("agent_context_midrun_trim_ratio", 0.97) or 0.97)
+            return min(0.995, max(0.85, value))
+        except Exception:
+            return 0.97
+
     def _identify_complete_turns(self) -> List[Dict]:
         """
         识别完整的对话轮次
@@ -1710,8 +1762,9 @@ class AgentStreamExecutor:
         if not self.messages or not self.agent:
             return
 
-        # Step 0: Apply progressive compression to historical tool results
-        self._progressive_compress_tool_results()
+        # Step 0: Do not compress historical tool results eagerly. Compression
+        # is triggered only after the context approaches the configured ratio
+        # of the usable model window.
 
         # Step 1: 识别完整轮次
         turns = self._identify_complete_turns()
@@ -1751,6 +1804,12 @@ class AgentStreamExecutor:
         available_tokens = max_tokens - system_tokens
 
         current_tokens = sum(self._estimate_turn_tokens(turn) for turn in turns)
+
+        compress_threshold = max_tokens * self._context_compress_ratio()
+        if current_tokens + system_tokens > compress_threshold:
+            self._progressive_compress_tool_results()
+            turns = self._identify_complete_turns()
+            current_tokens = sum(self._estimate_turn_tokens(turn) for turn in turns)
         
         if current_tokens + system_tokens <= max_tokens:
             new_messages = []

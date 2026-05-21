@@ -38,9 +38,25 @@ class KnowledgeRetriever:
         return {"sources": [], "chunks": [], "pages": [], "entities": [], "relations": []}
 
     @staticmethod
+    def _normalize_search_text(text: str) -> str:
+        text = text or ""
+        return re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", text)
+
+    @staticmethod
     def _tokens(text: str) -> List[str]:
-        tokens = re.findall(r"[\u4e00-\u9fffA-Za-z0-9_-]{2,}", text or "")
-        return [t.lower() for t in tokens if t.strip()]
+        text = KnowledgeRetriever._normalize_search_text(text)
+        raw_tokens = re.findall(r"[\u4e00-\u9fff]+|[A-Za-z0-9_-]{2,}", text or "")
+        tokens = []
+        for token in raw_tokens:
+            token = token.lower().strip()
+            if not token:
+                continue
+            tokens.append(token)
+            if re.fullmatch(r"[\u4e00-\u9fff]{3,}", token):
+                max_gram = 4 if len(token) >= 8 else 3
+                for size in range(2, max_gram + 1):
+                    tokens.extend(token[i:i + size] for i in range(0, len(token) - size + 1))
+        return tokens
 
     @staticmethod
     def _normalized_terms(text: str) -> List[str]:
@@ -210,6 +226,77 @@ class KnowledgeRetriever:
     def _graph_expansion_scores(self, seed_ids: List[str]) -> Dict[str, float]:
         return {chunk_id: detail["score"] for chunk_id, detail in self._graph_expansion_details(seed_ids).items()}
 
+    def _body_fallback_scores(self, query: str, chunks: Dict[str, dict], max_candidates: int = 24) -> Dict[str, dict]:
+        """Server-side full-text fallback for sparse metadata.
+
+        Chunk bodies are read only inside the retriever to improve recall. The
+        caller receives metadata and short snippets, never whole documents.
+        """
+        query_terms = self._tokens(query)
+        if not query_terms or not chunks:
+            return {}
+
+        docs = []
+        df = Counter()
+        for chunk_id, chunk in chunks.items():
+            body = self._read_chunk_excerpt(chunk.get("path", ""), max_chars=12000)
+            if not body:
+                continue
+            terms = self._tokens(body)
+            counts = Counter(terms)
+            docs.append((chunk_id, body, terms, counts))
+            for term in set(terms):
+                df[term] += 1
+        if not docs:
+            return {}
+
+        avg_len = sum(len(terms) for _, _, terms, _ in docs) / max(len(docs), 1)
+        total_docs = len(docs)
+        details = {}
+        for chunk_id, body, terms, counts in docs:
+            score = 0.0
+            doc_len = max(len(terms), 1)
+            for term in query_terms:
+                if not counts.get(term):
+                    continue
+                idf = math.log(1 + (total_docs - df[term] + 0.5) / (df[term] + 0.5))
+                tf = counts[term]
+                k1 = 1.4
+                b = 0.72
+                denom = tf + k1 * (1 - b + b * doc_len / max(avg_len, 1))
+                score += idf * (tf * (k1 + 1) / denom)
+            if score > 0:
+                details[chunk_id] = {
+                    "score": score,
+                    "snippet": self._body_hit_snippet(body, query_terms),
+                }
+
+        ranked_ids = [
+            cid for cid, _ in sorted(
+                ((cid, info["score"]) for cid, info in details.items()),
+                key=lambda item: item[1],
+                reverse=True,
+            )[:max_candidates]
+        ]
+        return {cid: details[cid] for cid in ranked_ids}
+
+    @classmethod
+    def _body_hit_snippet(cls, body: str, query_terms: List[str], max_chars: int = 360) -> str:
+        lines = [line.strip() for line in (body or "").splitlines() if line.strip()]
+        best = ""
+        best_score = -1
+        lowered_terms = [term.lower() for term in query_terms if term]
+        for line in lines:
+            line_l = line.lower()
+            score = sum(1 for term in lowered_terms if term in line_l)
+            if score > best_score:
+                best = line
+                best_score = score
+        if not best:
+            best = (body or "").replace("\n", " ")
+        best = re.sub(r"\s+", " ", best).strip()
+        return best[:max_chars].rstrip()
+
     def retrieve(self, query: str, limit: int = 6, excerpt_chars: int = 900, use_cache: bool = True) -> List[dict]:
         cache_key = self._cache_key(query, limit, excerpt_chars)
         if use_cache:
@@ -227,6 +314,25 @@ class KnowledgeRetriever:
             combined[chunk_id] += bm25.get(chunk_id, 0.0)
             combined[chunk_id] += meta.get(chunk_id, 0.0)
             combined[chunk_id] += rerank.get(chunk_id, 0.0)
+
+        seeds = [
+            cid
+            for cid, score in sorted(combined.items(), key=lambda item: item[1], reverse=True)
+            if score > 0
+        ][: max(limit, 4)]
+        body_details = {}
+        weak_metadata = (
+            len(seeds) < max(3, min(limit, 6))
+            or (combined.get(seeds[0], 0.0) if seeds else 0.0) < 2.0
+        )
+        should_scan_body = weak_metadata or len(chunks) <= 2500
+        if should_scan_body:
+            body_details = self._body_fallback_scores(query, chunks, max_candidates=max(limit * 3, 12))
+            if body_details:
+                max_body = max((info.get("score", 0.0) for info in body_details.values()), default=1.0) or 1.0
+                for chunk_id, info in body_details.items():
+                    combined[chunk_id] += 2.8 * (float(info.get("score", 0.0)) / max_body)
+
         seeds = [
             cid
             for cid, score in sorted(combined.items(), key=lambda item: item[1], reverse=True)
@@ -257,6 +363,8 @@ class KnowledgeRetriever:
                 "path": chunk.get("path", ""),
                 "assets": chunk.get("assets") or [],
                 "graph_reason": "; ".join(graph_details.get(chunk_id, {}).get("reasons", [])[:3]),
+                "body_fallback": chunk_id in body_details,
+                "body_snippet": body_details.get(chunk_id, {}).get("snippet", ""),
                 "embedding": chunk.get("embedding") or {"status": "pending"},
                 "excerpt": self._read_chunk_excerpt(chunk.get("path", ""), max_chars=excerpt_chars) if excerpt_chars and excerpt_chars > 0 else "",
             })
@@ -334,6 +442,8 @@ class KnowledgeRetriever:
                 lines.append(f"Rerank score: {item['rerank_score']}")
             if item.get("graph_reason"):
                 lines.append(f"Graph reason: {item['graph_reason']}")
+            if item.get("body_snippet"):
+                lines.append(f"Body hit snippet: {item['body_snippet']}")
             lines.append(f"Citation: knowledge/_llm_wiki/{item.get('path', '')}")
             if item.get("assets"):
                 lines.append("Assets: " + ", ".join(str(a.get("path", "")) for a in item["assets"][:3] if a.get("path")))
@@ -365,6 +475,8 @@ class KnowledgeRetriever:
                 lines.append(f"Rerank score: {item['rerank_score']}")
             if item.get("graph_reason"):
                 lines.append(f"Graph reason: {item['graph_reason']}")
+            if item.get("body_snippet"):
+                lines.append(f"Body hit snippet: {item['body_snippet']}")
             lines.append(f"Citation: knowledge/_llm_wiki/{item.get('path', '')}")
             if item.get("assets"):
                 lines.append("Assets: " + ", ".join(str(a.get("path", "")) for a in item["assets"][:3] if a.get("path")))
@@ -380,7 +492,7 @@ class KnowledgeRetriever:
             "limit": limit,
             "excerpt_chars": excerpt_chars,
             "index_mtime": round(index_mtime, 6),
-            "version": "retriever-v4",
+            "version": "retriever-v5-body-fallback",
         }, ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 

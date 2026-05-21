@@ -215,8 +215,14 @@ class Agent:
                 else:
                     return 4000
 
-            # DeepSeek
+            # DeepSeek models. V4 API models support 1M context; legacy
+            # deepseek-chat/deepseek-reasoner names are kept conservative
+            # because the public pricing table still lists 64K for them.
             elif 'deepseek' in model_name:
+                if 'v4' in model_name or 'deepseek-v4' in model_name:
+                    return 1000000
+                if 'v3.1' in model_name or 'v3.2' in model_name:
+                    return 128000
                 return 64000
             
             # Qwen models

@@ -11,7 +11,9 @@ from agent.tools.ls.ls import Ls
 from agent.tools.send.send import Send
 from agent.tools.pipeline.pipeline_tool import StartPipeline
 from agent.tools.knowledge_capture.knowledge_capture import KnowledgeCapture
+from agent.tools.knowledge_query.knowledge_query import KnowledgeQueryTool
 from agent.tools.textbook_chapter.textbook_chapter import TextbookChapterTool
+from agent.tools.textbook_image.textbook_image import TextbookImageTool
 
 # Import memory tools
 from agent.tools.memory.memory_search import MemorySearchTool
@@ -138,7 +140,9 @@ __all__ = [
     'Send',
     'StartPipeline',
     'KnowledgeCapture',
+    'KnowledgeQueryTool',
     'TextbookChapterTool',
+    'TextbookImageTool',
     'MemorySearchTool',
     'MemoryGetTool',
     'EnvConfig',

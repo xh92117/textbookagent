@@ -343,7 +343,7 @@ def compress_turn_to_text_only(turn: Dict) -> Dict:
     return {"messages": compressed_messages}
 
 
-def build_context_state_board(turns: List[Dict], max_events: int = 36) -> str:
+def build_context_state_board(turns: List[Dict], max_events: int = 24) -> str:
     """
     Build a compact state board for long-running agent tasks.
 
@@ -354,6 +354,12 @@ def build_context_state_board(turns: List[Dict], max_events: int = 36) -> str:
     if not turns:
         return ""
 
+    # Keep the board local to the active work segment. Old session history is
+    # still available through normal messages/memory tools, but putting too much
+    # old progress into this "authority" board makes the agent revive previous
+    # chapter tasks when the user has switched goals.
+    turns = turns[-8:]
+
     latest_user = ""
     assistant_notes = []
     events = []
@@ -361,6 +367,16 @@ def build_context_state_board(turns: List[Dict], max_events: int = 36) -> str:
     saved = []
     read_paths = []
     write_paths = []
+    checkpoint = {
+        "active_goal": "",
+        "active_book_id": "",
+        "active_chapter": "",
+        "current_phase": "understand_request",
+        "completed": [],
+        "failed": [],
+        "available_files": [],
+        "next_step_policy": "continue_next_unfinished_action",
+    }
 
     for turn in turns:
         tool_uses = {}
@@ -385,6 +401,7 @@ def build_context_state_board(turns: List[Dict], max_events: int = 36) -> str:
                         if not event:
                             continue
                         events.append(event)
+                        _update_checkpoint_from_event(checkpoint, info.get("name", ""), info.get("input", {}), event)
                         if event.startswith("FAILED"):
                             failed.append(event)
                         if event.startswith("SAVED"):
@@ -416,7 +433,13 @@ def build_context_state_board(turns: List[Dict], max_events: int = 36) -> str:
         "Do not restart completed planning/search/reading/review steps. Continue from the next unfinished action.",
     ]
     if latest_user:
+        checkpoint["active_goal"] = _compact_line(latest_user, 280)
         lines.append(f"Current user goal: {_compact_line(latest_user, 500)}")
+
+    lines.append("Structured task checkpoint (higher priority than conversation summary):")
+    lines.append("```json")
+    lines.append(json.dumps(_normalize_task_checkpoint(checkpoint), ensure_ascii=False, indent=2))
+    lines.append("```")
 
     if assistant_notes:
         lines.append("Recent decisions/progress:")
@@ -456,7 +479,62 @@ def build_context_state_board(turns: List[Dict], max_events: int = 36) -> str:
     lines.append("Next-step rule: if enough chapter evidence has already been gathered, write/save the chapter instead of searching or rereading skills again.")
     lines.append("Textbook state-machine rule: never regenerate outline/review/search when the state board shows chapter writing has started; continue the current chapter's next unfinished section or validate/save it.")
     lines.append("Chapter writing rule: use textbook_chapter for chapter Markdown. Do not use bash/PowerShell to append Chinese textbook text.")
+    lines.append("Checkpoint rule: if the structured checkpoint marks an action as completed, do not redo it unless the user explicitly asks.")
     return "\n".join(lines)
+
+
+def _update_checkpoint_from_event(checkpoint: Dict, tool_name: str, tool_args: dict, event: str) -> None:
+    tool_args = tool_args or {}
+    if event.startswith("FAILED"):
+        checkpoint["failed"].append(_compact_line(event, 180))
+
+    if tool_name in ("textbook_chapter", "textbook_image"):
+        book_id = str(tool_args.get("book_id", "") or "")
+        chapter = str(tool_args.get("chapter_num", "") or "")
+        if book_id:
+            checkpoint["active_book_id"] = book_id
+        if chapter:
+            checkpoint["active_chapter"] = chapter
+        if tool_name == "textbook_chapter":
+            action = str(tool_args.get("action", "") or "")
+            if action:
+                checkpoint["current_phase"] = "chapter_writing" if action != "status" else "chapter_status_check"
+                checkpoint["completed"].append(f"textbook_chapter:{action}:ch{chapter}")
+        else:
+            figure = str(tool_args.get("figure_num", "") or "")
+            checkpoint["current_phase"] = "image_generation"
+            checkpoint["completed"].append(f"textbook_image:ch{chapter}:fig{figure}")
+
+    if tool_name in ("read", "file_read"):
+        path = str(tool_args.get("path", "") or "")
+        if path:
+            checkpoint["available_files"].append(path)
+            checkpoint["completed"].append(f"read:{path}")
+
+    if tool_name == "knowledge_capture":
+        title = str(tool_args.get("title", "") or tool_args.get("url", "") or "")
+        checkpoint["current_phase"] = "knowledge_capture"
+        if event.startswith("SAVED"):
+            checkpoint["completed"].append(f"knowledge_capture:{_compact_line(title, 80)}")
+
+    if tool_name == "web_fetch":
+        checkpoint["current_phase"] = "web_research"
+        url = str(tool_args.get("url", "") or "")
+        if url and not event.startswith("FAILED"):
+            checkpoint["completed"].append(f"web_fetch:{_compact_line(url, 100)}")
+
+
+def _normalize_task_checkpoint(checkpoint: Dict) -> Dict:
+    out = dict(checkpoint)
+    for key, limit in (("completed", 12), ("failed", 8), ("available_files", 10)):
+        items = _dedupe_keep_order([str(x) for x in out.get(key, []) if x])
+        out[key] = items[-limit:]
+
+    if out.get("active_chapter"):
+        out["current_target"] = f"book={out.get('active_book_id') or '?'} chapter={out['active_chapter']}"
+    else:
+        out["current_target"] = f"book={out.get('active_book_id') or '?'}"
+    return out
 
 
 def _summarize_tool_event(tool_name: str, tool_args: dict, block: Dict) -> str:
@@ -498,6 +576,15 @@ def _summarize_tool_event(tool_name: str, tool_args: dict, block: Dict) -> str:
         if is_failed:
             return f"FAILED textbook_chapter: {action} ch{chapter} {heading} | {_compact_line(first, 140)}"
         return f"WROTE textbook_chapter: {action} book={book_id} ch={chapter} {heading}"
+
+    if tool_name == "textbook_image":
+        book_id = tool_args.get("book_id", "")
+        chapter = tool_args.get("chapter_num", "")
+        figure = tool_args.get("figure_num", "")
+        title = tool_args.get("title", "")
+        if is_failed:
+            return f"FAILED textbook_image: book={book_id} ch={chapter} fig={figure} | {_compact_line(first, 140)}"
+        return f"WROTE textbook_image: book={book_id} ch={chapter} fig={figure} {title}"
 
     if tool_name in ("bash", "shell", "command"):
         command = tool_args.get("command", "")
