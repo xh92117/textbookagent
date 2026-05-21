@@ -16,6 +16,7 @@ from agent.textbook.state.truth_files import TruthFileManager
 from agent.textbook.pipeline.runner import PipelineRunner
 
 from common.log import logger
+from common.run_events import RunStateRecorder, normalize_event
 from common.stream_guard import iter_with_idle_guard
 
 _bridge_instance = None
@@ -440,6 +441,7 @@ class TextbookBridge:
 
         resume_from = self._determine_resume_point(book_id, config)
         logger.info(f"[TextbookBridge] Resume point for {book_id}: {resume_from}")
+        book_dir = self._book_dir(book_id)
 
         if requirement:
             try:
@@ -462,15 +464,30 @@ class TextbookBridge:
             "runner": None,
             "thread": None,
             "resume_from": resume_from,
+            "events": [],
         }
+        event_recorder = RunStateRecorder(
+            os.path.join(book_dir, "state", "runs", pipeline_info.get("started_at", "").replace(":", "-")),
+            run_id="",
+            source="textbook_pipeline",
+        )
 
         def on_event(event):
+            normalized = normalize_event(event, run_id=event.get("pipeline_id", ""), source="textbook_pipeline")
+            if not event_recorder.run_id and normalized.get("run_id"):
+                event_recorder.run_id = normalized["run_id"]
+            normalized = event_recorder.record(event)
+            pipeline_info.setdefault("events", []).append(normalized)
+            if len(pipeline_info["events"]) > 100:
+                del pipeline_info["events"][:-100]
             if sse_queue is not None:
                 sse_queue.put(event)
+                sse_queue.put({"type": "run_event", "data": normalized})
             with self._sse_lock:
                 for q in self._sse_broadcast_queues:
                     try:
                         q.put(event)
+                        q.put({"type": "run_event", "data": normalized})
                     except Exception:
                         pass
             event_type = event.get("type", "")

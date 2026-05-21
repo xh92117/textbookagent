@@ -580,12 +580,18 @@ function beginPipelineMonitor(bookId) {
 
 function handlePipelineEvent(d, bookId) {
     var data = d.data || {};
+    if (d.type === 'run_event') {
+        data = d.data || {};
+        if (data.payload && data.payload.book_id) bookId = data.payload.book_id;
+    }
     var status = data.status || d.type;
     var progress = data.progress;
     if (typeof progress === 'number') progress = Math.round(progress * 100);
     var phase = data.current_phase || data.phase || '';
     var message = '';
-    if (d.type === 'pipeline_status') {
+    if (d.type === 'run_event') {
+        message = 'Run: ' + (data.message || data.type || 'event') + (data.phase ? ' / ' + data.phase : '') + (data.status ? ' / ' + data.status : '');
+    } else if (d.type === 'pipeline_status') {
         message = 'Pipeline: ' + status + (phase ? ' / ' + phase : '') + (typeof progress === 'number' ? ' / ' + progress + '%' : '');
     } else if (d.type === 'phase_start') {
         message = 'Pipeline phase started: ' + ((data.phase_label || data.phase) || '');
@@ -1057,6 +1063,14 @@ function startChatSSE(requestId, externalAssistantEl, externalBubbleEl, userMess
             } else if (d.type === 'llm_thinking') {
                 var elapsed = d.elapsed_seconds || 0;
                 upsertThinking('llm-thinking', '等待模型生成', '已等待 ' + elapsed + ' 秒，后台仍在运行。', 'running');
+            } else if (d.type === 'run_event') {
+                var ev = d.data || {};
+                if (ev.message || ev.phase) {
+                    var evTitle = ev.message || ev.phase || ev.type || '运行事件';
+                    var evDetail = [ev.source, ev.phase, ev.status].filter(Boolean).join(' · ');
+                    var evState = ev.status === 'error' ? 'error' : (ev.status === 'completed' ? 'success' : 'running');
+                    upsertThinking('run-' + (ev.phase || ev.type || 'event'), evTitle, evDetail, evState);
+                }
             } else if (d.type === 'phase_progress') {
                 var pd = d.data || {};
                 var item = pd.item_label || pd.phase || '处理任务';

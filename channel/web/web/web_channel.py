@@ -21,6 +21,7 @@ from channel.chat_message import ChatMessage
 from collections import OrderedDict
 from common import const
 from common.log import logger
+from common.run_events import RunStateRecorder, normalize_event
 from common.singleton import singleton
 from config import conf
 
@@ -373,6 +374,8 @@ class WebChannel(ChatChannel):
         # Use a single-element list as a mutable counter accessible from closure.
         reasoning_chars_sent = [0]
         reasoning_capped_notified = [False]
+        run_events_dir = os.path.join(_get_workspace_root(), ".runs", "chat", request_id)
+        run_recorder = RunStateRecorder(run_events_dir, run_id=request_id, source="chat")
 
         def on_event(event: dict):
             if request_id not in self.sse_queues:
@@ -380,6 +383,8 @@ class WebChannel(ChatChannel):
             q = self.sse_queues[request_id]
             event_type = event.get("type")
             data = event.get("data", {})
+            normalized = run_recorder.record(event)
+            q.put({"type": "run_event", "data": normalized})
 
             if event_type == "reasoning_update":
                 delta = data.get("delta", "")
@@ -2995,7 +3000,14 @@ class KnowledgeOrganizeHandler:
                 return json.dumps({"status": "already_running", "message": "整理正在进行中，请稍候"}, ensure_ascii=False)
             logger.info(f"[WebChannel] Knowledge organize requested: book_id={status_key}, force={force}")
             started_at = time.time()
+            run_id = f"knowledge_{status_key}_{int(started_at)}"
+            run_recorder = RunStateRecorder(
+                os.path.join(_get_workspace_root(), ".runs", "knowledge", status_key, run_id),
+                run_id=run_id,
+                source="knowledge_organize",
+            )
             _organize_status[status_key] = {
+                "run_id": run_id,
                 "running": True,
                 "progress": "starting",
                 "stage": "starting",
@@ -3010,6 +3022,15 @@ class KnowledgeOrganizeHandler:
 
             def _on_progress(payload):
                 info = _organize_status.setdefault(status_key, {})
+                normalized_event = run_recorder.record({
+                    "type": "knowledge_organize_progress",
+                    "data": {
+                        **payload,
+                        "phase": payload.get("stage", "processing"),
+                        "status": "running",
+                    },
+                    "timestamp": time.time(),
+                })
                 info.update({
                     "progress": payload.get("stage", info.get("progress", "processing")),
                     "stage": payload.get("stage", info.get("stage", "")),
@@ -3020,7 +3041,7 @@ class KnowledgeOrganizeHandler:
                     if key not in ("stage", "message"):
                         info[key] = value
                 events = info.setdefault("events", [])
-                events.append({"time": time.time(), **payload})
+                events.append(normalized_event)
                 if len(events) > 30:
                     del events[:-30]
 
@@ -3030,16 +3051,38 @@ class KnowledgeOrganizeHandler:
                     svc = KnowledgeService(_get_workspace_root(), on_progress=_on_progress)
                     _on_progress({"stage": "processing", "message": "知识库整理中", "force": force})
                     result = svc.organize_knowledge(book_id=book_id, force=force)
+                    done_event = run_recorder.record({
+                        "type": "knowledge_organize_complete",
+                        "data": {
+                            **result,
+                            "phase": "done",
+                            "status": "completed",
+                            "message": result.get("message", "整理完成"),
+                        },
+                        "timestamp": time.time(),
+                    })
                     _organize_status[status_key]["result"] = result
                     _organize_status[status_key]["progress"] = "done"
                     _organize_status[status_key]["stage"] = "done"
                     _organize_status[status_key]["message"] = result.get("message", "整理完成")
+                    _organize_status[status_key].setdefault("events", []).append(done_event)
                 except Exception as ex:
                     logger.error(f"[WebChannel] Knowledge organize background error: {ex}", exc_info=True)
+                    error_event = run_recorder.record({
+                        "type": "knowledge_organize_error",
+                        "data": {
+                            "phase": "error",
+                            "status": "error",
+                            "error": str(ex),
+                            "message": str(ex),
+                        },
+                        "timestamp": time.time(),
+                    })
                     _organize_status[status_key]["error"] = str(ex)
                     _organize_status[status_key]["progress"] = "error"
                     _organize_status[status_key]["stage"] = "error"
                     _organize_status[status_key]["message"] = str(ex)
+                    _organize_status[status_key].setdefault("events", []).append(error_event)
                 finally:
                     _organize_status[status_key]["running"] = False
                     _organize_status[status_key]["finished_at"] = time.time()
