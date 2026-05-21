@@ -122,7 +122,9 @@ class FileServeHandler:
             file_name = os.path.basename(file_path)
             web.header('Content-Type', content_type)
             web.header('Content-Disposition', f"inline; filename*=UTF-8''{quote(file_name)}")
-            web.header('Cache-Control', 'public, max-age=3600')
+            web.header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+            web.header('Pragma', 'no-cache')
+            web.header('Expires', '0')
             with open(file_path, 'rb') as f:
                 return f.read()
         except web.HTTPError:

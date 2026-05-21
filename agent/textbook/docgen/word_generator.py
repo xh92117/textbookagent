@@ -9,6 +9,14 @@ from docx.oxml.ns import qn
 from .style_template import StyleTemplate, get_template
 
 class MarkdownToWordConverter:
+    BODY_EAST_ASIA_FONT = "仿宋"
+    BODY_SIZE = 12
+    HEADING_EAST_ASIA_FONT = "黑体"
+    HEADING_SIZE = 16
+    CAPTION_EAST_ASIA_FONT = "仿宋"
+    NOTE_EAST_ASIA_FONT = "宋体"
+    SMALL_SIZE = 10.5
+
     def __init__(self, template: StyleTemplate = None):
         self.template = template or get_template("academic")
         self.doc = Document()
@@ -26,9 +34,9 @@ class MarkdownToWordConverter:
 
     def _setup_styles(self):
         for level, (font, size, bold, align) in enumerate([
-            (self.template.heading1_font, self.template.heading1_size, self.template.heading1_bold, self.template.heading1_alignment),
-            (self.template.heading2_font, self.template.heading2_size, self.template.heading2_bold, "left"),
-            (self.template.heading3_font, self.template.heading3_size, self.template.heading3_bold, "left"),
+            (self.HEADING_EAST_ASIA_FONT, self.HEADING_SIZE, True, self.template.heading1_alignment),
+            (self.HEADING_EAST_ASIA_FONT, self.HEADING_SIZE, True, "left"),
+            (self.HEADING_EAST_ASIA_FONT, self.HEADING_SIZE, False, "left"),
         ], 1):
             style_name = f'Heading {level}'
             try:
@@ -54,9 +62,9 @@ class MarkdownToWordConverter:
             rFonts.set(qn('w:eastAsia'), font)
 
         normal = self.doc.styles['Normal']
-        normal.font.name = self.template.body_font
-        normal.font.size = Pt(self.template.body_size)
-        normal.paragraph_format.line_spacing = self.template.body_line_spacing
+        normal.font.name = self.BODY_EAST_ASIA_FONT
+        normal.font.size = Pt(self.BODY_SIZE)
+        normal.paragraph_format.line_spacing = 1.5
         rpr = normal.element.get_or_add_rPr()
         rFonts = rpr.find(qn('w:rFonts'))
         if rFonts is None:
@@ -64,7 +72,7 @@ class MarkdownToWordConverter:
             rpr.insert(0, rFonts)
         rFonts.set(qn('w:ascii'), 'Times New Roman')
         rFonts.set(qn('w:hAnsi'), 'Times New Roman')
-        rFonts.set(qn('w:eastAsia'), self.template.body_font)
+        rFonts.set(qn('w:eastAsia'), self.BODY_EAST_ASIA_FONT)
 
     @staticmethod
     def _set_run_font(run, east_asia: str, size: float, *, ascii_font: str = "Times New Roman", bold=None, italic=None):
@@ -97,7 +105,7 @@ class MarkdownToWordConverter:
         p = self.doc.add_heading(title, level=0)
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         for run in p.runs:
-            self._set_run_font(run, "黑体", 16, bold=True)
+            self._set_run_font(run, self.HEADING_EAST_ASIA_FONT, self.HEADING_SIZE, bold=True)
         self._set_paragraph_spacing(p, line_spacing=1.5, before=8, after=8)
 
     def add_heading(self, text: str, level: int):
@@ -105,10 +113,10 @@ class MarkdownToWordConverter:
             level = 3
         heading = self.doc.add_heading('', level=level)
         self._add_formatted_runs(heading, text)
-        east_asia = "黑体"
+        east_asia = self.HEADING_EAST_ASIA_FONT
         bold = level in (1, 2)
         for run in heading.runs:
-            self._set_run_font(run, east_asia, 16, bold=bold)
+            self._set_run_font(run, east_asia, self.HEADING_SIZE, bold=bold)
         self._set_paragraph_spacing(heading, line_spacing=1.5, before=8, after=8)
 
     def add_paragraph(self, text: str):
@@ -121,31 +129,31 @@ class MarkdownToWordConverter:
         self._set_paragraph_spacing(
             paragraph,
             line_spacing=1.5,
-            first_line_indent=Pt(self.template.body_size * self.template.body_first_line_indent),
+            first_line_indent=Pt(self.BODY_SIZE * self.template.body_first_line_indent),
         )
         for run in paragraph.runs:
-            self._set_run_font(run, self.template.body_font, self.template.body_size)
+            self._set_run_font(run, self.BODY_EAST_ASIA_FONT, self.BODY_SIZE)
 
     def _add_formatted_runs(self, paragraph, text: str):
         parts = re.split(r'(\*\*.*?\*\*|\*.*?\*|`[^`]+`)', text)
         for part in parts:
             if part.startswith('**') and part.endswith('**'):
                 run = paragraph.add_run(part[2:-2])
-                self._set_run_font(run, self.template.body_font, self.template.body_size, bold=True)
+                self._set_run_font(run, self.BODY_EAST_ASIA_FONT, self.BODY_SIZE, bold=True)
             elif part.startswith('*') and part.endswith('*') and not part.startswith('**'):
                 run = paragraph.add_run(part[1:-1])
-                self._set_run_font(run, self.template.body_font, self.template.body_size, italic=True)
+                self._set_run_font(run, self.BODY_EAST_ASIA_FONT, self.BODY_SIZE, italic=True)
             elif part.startswith('`') and part.endswith('`'):
                 run = paragraph.add_run(part[1:-1])
-                self._set_run_font(run, self.template.body_font, self.template.body_size)
+                self._set_run_font(run, self.BODY_EAST_ASIA_FONT, self.BODY_SIZE)
             else:
                 run = paragraph.add_run(part)
-                self._set_run_font(run, self.template.body_font, self.template.body_size)
+                self._set_run_font(run, self.BODY_EAST_ASIA_FONT, self.BODY_SIZE)
 
     def add_code_block(self, code: str, language: str = ""):
         p = self.doc.add_paragraph()
         run = p.add_run(code)
-        self._set_run_font(run, self.template.body_font, self.template.body_size)
+        self._set_run_font(run, self.BODY_EAST_ASIA_FONT, self.BODY_SIZE)
         p.paragraph_format.left_indent = Cm(1.0)
         p.paragraph_format.space_before = Pt(6)
         p.paragraph_format.space_after = Pt(6)
@@ -162,7 +170,7 @@ class MarkdownToWordConverter:
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 self._set_paragraph_spacing(p, line_spacing=1.5, after=5.25, alignment=WD_ALIGN_PARAGRAPH.CENTER)
                 for run in p.runs:
-                    self._set_run_font(run, "仿宋", 10.5)
+                    self._set_run_font(run, self.CAPTION_EAST_ASIA_FONT, self.SMALL_SIZE)
 
     def add_table(self, headers: List[str], rows: List[List[str]]):
         table = self.doc.add_table(rows=len(rows)+1, cols=len(headers))
@@ -186,7 +194,7 @@ class MarkdownToWordConverter:
                         alignment=WD_ALIGN_PARAGRAPH.CENTER,
                     )
                     for run in paragraph.runs:
-                        self._set_run_font(run, "仿宋", 10.5)
+                        self._set_run_font(run, self.CAPTION_EAST_ASIA_FONT, self.SMALL_SIZE)
                         if row_idx == 0:
                             run.bold = True
 
@@ -218,7 +226,7 @@ class MarkdownToWordConverter:
         after = 5.25 if kind == "figure" else 0
         self._set_paragraph_spacing(p, line_spacing=1.5, before=before, after=after, alignment=WD_ALIGN_PARAGRAPH.CENTER)
         for run in p.runs:
-            self._set_run_font(run, "仿宋", 10.5)
+            self._set_run_font(run, self.CAPTION_EAST_ASIA_FONT, self.SMALL_SIZE)
         return p
 
     def add_note(self, text: str):
@@ -226,7 +234,7 @@ class MarkdownToWordConverter:
         p.add_run(text)
         self._set_paragraph_spacing(p, line_spacing=1.5)
         for run in p.runs:
-            self._set_run_font(run, "宋体", 10.5)
+            self._set_run_font(run, self.NOTE_EAST_ASIA_FONT, self.SMALL_SIZE)
         return p
 
     def convert_markdown(self, markdown_text: str):

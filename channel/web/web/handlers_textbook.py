@@ -2,6 +2,7 @@ import json
 import mimetypes
 import os
 import re
+import time
 from queue import Queue, Empty
 
 import web
@@ -273,7 +274,8 @@ class TextbookExportHandler:
                 return json_error("Export failed")
             from urllib.parse import quote
             import os as _os
-            file_url = f"/api/file?path={quote(output_path)}"
+            cache_bust = int(_os.path.getmtime(output_path)) if _os.path.exists(output_path) else int(time.time())
+            file_url = f"/api/file?path={quote(output_path)}&v={cache_bust}"
             filename = _os.path.basename(output_path)
             return json_success(file_url=file_url, file_path=output_path, filename=filename)
         except Exception as e:
