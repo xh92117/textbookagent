@@ -27,8 +27,9 @@ class TextbookHandler:
         require_auth()
         try:
             bridge = _get_textbook_bridge()
-            textbooks = bridge.list_textbooks()
-            return json_success(textbooks=[t.to_dict() for t in textbooks])
+            textbooks = bridge.list_textbook_cards()
+            recent_activity = bridge.list_recent_activity(limit=5)
+            return json_success(textbooks=textbooks, recent_activity=recent_activity)
         except Exception as e:
             logger.error(f"[WebChannel] Textbook list error: {e}")
             return json_error(e)
@@ -147,7 +148,8 @@ class TextbookChapterDetailHandler:
         try:
             bridge = _get_textbook_bridge()
             content = bridge.get_chapter(book_id, int(num))
-            return json_success(chapter_num=int(num), content=content)
+            mgr = bridge._memory_manager.get_truth_manager(book_id)
+            return json_success(chapter_num=int(num), content=content, content_hash=mgr.content_hash(content))
         except Exception as e:
             logger.error(f"[WebChannel] Chapter get error: {e}")
             return json_error(e)
@@ -157,8 +159,9 @@ class TextbookChapterDetailHandler:
         try:
             body = read_json_body()
             content = body.get("content", "")
+            expected_hash = body.get("expected_hash", "")
             bridge = _get_textbook_bridge()
-            bridge.update_chapter(book_id, int(num), content)
+            bridge.update_chapter(book_id, int(num), content, expected_hash=expected_hash)
             return json_success()
         except Exception as e:
             logger.error(f"[WebChannel] Chapter update error: {e}")
@@ -257,8 +260,8 @@ class TextbookExportHandler:
         try:
             params = web.input(template="academic", chapters="", format="word", range="all", chapter="")
             export_format = (params.format or "word").lower()
-            if export_format != "word":
-                return json_error("PDF export is not supported yet; please export Word first.")
+            if export_format not in ("word", "docx", "pdf"):
+                return json_error("Unsupported export format.")
             template = params.template
             chapters_param = params.chapters
             if not chapters_param and params.range == "chapter" and params.chapter:
@@ -269,7 +272,10 @@ class TextbookExportHandler:
                 if not chapter_numbers:
                     return json_error("No chapter selected for export.")
             bridge = _get_textbook_bridge()
-            output_path = bridge.export_word(book_id, template_name=template, chapter_numbers=chapter_numbers)
+            if export_format == "pdf":
+                output_path = bridge.export_pdf(book_id, template_name=template, chapter_numbers=chapter_numbers)
+            else:
+                output_path = bridge.export_word(book_id, template_name=template, chapter_numbers=chapter_numbers)
             if not output_path:
                 return json_error("Export failed")
             from urllib.parse import quote
@@ -345,7 +351,8 @@ class TextbookOutlineVersionDetailHandler:
         try:
             bridge = _get_textbook_bridge()
             content = bridge.get_outline_version(book_id, version_id)
-            return json_success(version_id=version_id, content=content)
+            version = bridge.get_outline_version_info(book_id, version_id)
+            return json_success(version_id=version_id, content=content, version=version)
         except Exception as e:
             logger.error(f"[WebChannel] Outline version get error: {e}")
             return json_error(e)

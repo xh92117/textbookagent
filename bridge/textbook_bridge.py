@@ -401,6 +401,102 @@ class TextbookBridge:
                 self.textbooks[config.id] = config
         return textbooks
 
+    def list_textbook_cards(self):
+        cards = []
+        for config in self.list_textbooks():
+            data = config.to_dict()
+            try:
+                mgr = self._memory_manager.get_truth_manager(config.id)
+                completed_numbers = self._list_written_chapter_numbers(mgr, min_chars=50)
+                total = int(config.total_chapters or 0)
+                completed = len(completed_numbers)
+                progress = round((completed / total) * 100, 1) if total > 0 else 0
+                data["completed_chapters"] = completed
+                data["completed_chapter_numbers"] = completed_numbers
+                data["progress"] = progress
+                if total > 0 and completed >= total and data.get("status") not in ("completed", "published"):
+                    data["status"] = "reviewing"
+                data["latest_activity"] = self._latest_activity_for_book(config.id, config)
+            except Exception:
+                data.setdefault("completed_chapters", 0)
+                data.setdefault("progress", 0)
+            cards.append(data)
+        return cards
+
+    def _list_written_chapter_numbers(self, mgr, min_chars: int = 50) -> list:
+        chapter_numbers = []
+        for filename in mgr.list_chapters():
+            try:
+                match = re.match(r"^chapter_0*(\d+)\.md$", filename, re.IGNORECASE)
+                chapter_num = int(match.group(1)) if match else None
+            except (AttributeError, ValueError):
+                chapter_num = None
+            if chapter_num is None:
+                continue
+            content = mgr.read_chapter(chapter_num) or ""
+            if len(content.strip()) >= min_chars:
+                chapter_numbers.append(chapter_num)
+        return sorted(set(chapter_numbers))
+
+    def list_recent_activity(self, limit=5):
+        activities = []
+        for config in self.list_textbooks():
+            activities.extend(self._activities_for_book(config.id, config))
+        activities.sort(key=lambda x: x.get("time", ""), reverse=True)
+        return activities[:limit]
+
+    def _latest_activity_for_book(self, book_id, config):
+        activities = self._activities_for_book(book_id, config)
+        return activities[0] if activities else {}
+
+    def _activities_for_book(self, book_id, config):
+        try:
+            mgr = self._memory_manager.get_truth_manager(book_id)
+            activities = []
+
+            def add_activity(mtime, rel, message, kind, chapter_num=None):
+                activities.append({
+                    "book_id": book_id,
+                    "title": config.title,
+                    "message": message,
+                    "time": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(mtime)),
+                    "kind": kind,
+                    "file": rel,
+                    "chapter_num": chapter_num,
+                })
+
+            for rel in ("state/status.json", "state/progress.md", "outline/outline.md"):
+                path = os.path.join(mgr.book_dir, rel)
+                if os.path.exists(path):
+                    if rel.endswith("outline.md"):
+                        add_activity(os.path.getmtime(path), rel, f"更新《{config.title}》大纲", "outline")
+                    else:
+                        add_activity(os.path.getmtime(path), rel, f"推进《{config.title}》编写进度", "progress")
+            chapters_dir = os.path.join(mgr.book_dir, "chapters")
+            if os.path.isdir(chapters_dir):
+                for filename in os.listdir(chapters_dir):
+                    chapter_match = re.match(r"^chapter_0*(\d+)\.md$", filename, re.IGNORECASE)
+                    if chapter_match:
+                        chapter_num = int(chapter_match.group(1))
+                        path = os.path.join(chapters_dir, filename)
+                        rel = os.path.join("chapters", filename).replace("\\", "/")
+                        add_activity(os.path.getmtime(path), rel, f"更新《{config.title}》第{chapter_num}章", "chapter", chapter_num=chapter_num)
+            if not activities:
+                ts = getattr(config, "updated_at", "") or getattr(config, "created_at", "")
+                return [{
+                    "book_id": book_id,
+                    "title": config.title,
+                    "message": f"创建教材《{config.title}》",
+                    "time": ts,
+                    "kind": "created",
+                    "file": "",
+                    "chapter_num": None,
+                }]
+            activities.sort(key=lambda x: x.get("time", ""), reverse=True)
+            return activities
+        except Exception:
+            return []
+
     def get_outline(self, book_id):
         mgr = self._memory_manager.get_truth_manager(book_id)
         return mgr.read("outline")
@@ -415,9 +511,30 @@ class TextbookBridge:
         mgr = self._memory_manager.get_truth_manager(book_id)
         return mgr.read_chapter(chapter_num)
 
-    def update_chapter(self, book_id, chapter_num, content):
+    def update_chapter(self, book_id, chapter_num, content, expected_hash=None):
         mgr = self._memory_manager.get_truth_manager(book_id)
+        existing = mgr.read_chapter(chapter_num)
+        current_hash = mgr.content_hash(existing)
+        if expected_hash and expected_hash != current_hash:
+            raise ValueError("Chapter content changed on disk. Reload the chapter before saving to avoid overwriting newer content.")
+        if existing.strip() and existing != content:
+            backup_dir = os.path.join(mgr.book_dir, "state", "chapter_backups")
+            os.makedirs(backup_dir, exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            backup_path = os.path.join(backup_dir, f"chapter_{int(chapter_num):03d}_manual_{stamp}.md")
+            with open(backup_path, "w", encoding="utf-8") as f:
+                f.write(existing)
         mgr.write_chapter(chapter_num, content)
+        meta_path = mgr.chapter_metadata_path(chapter_num)
+        os.makedirs(os.path.dirname(meta_path), exist_ok=True)
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "status": "completed" if len((content or "").strip()) >= 50 else "draft",
+                "content_hash": mgr.content_hash(content),
+                "chars": len(content or ""),
+                "tool": "frontend_editor",
+                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }, f, ensure_ascii=False, indent=2)
         return True
 
     def list_chapters(self, book_id):
@@ -784,6 +901,170 @@ class TextbookBridge:
             raise RuntimeError("Word export produced an empty file.")
         return output_path
 
+    def export_pdf(self, book_id, template_name="academic", chapter_numbers=None):
+        docx_path = self.export_word(book_id, template_name=template_name, chapter_numbers=chapter_numbers)
+        if not docx_path:
+            return ""
+        pdf_path = os.path.splitext(docx_path)[0] + ".pdf"
+        try:
+            self._convert_docx_to_pdf_with_word(docx_path, pdf_path)
+        except Exception as first_error:
+            logger.warning(f"[TextbookBridge] Word COM PDF export failed, trying PyMuPDF fallback: {first_error}")
+            try:
+                self._export_pdf_with_pymupdf(book_id, pdf_path, chapter_numbers=chapter_numbers)
+            except Exception as second_error:
+                logger.warning(f"[TextbookBridge] PyMuPDF PDF export failed, trying HTML PDF fallback: {second_error}")
+                self._export_pdf_with_weasyprint(book_id, pdf_path, chapter_numbers=chapter_numbers)
+        if not os.path.isfile(pdf_path) or os.path.getsize(pdf_path) <= 0:
+            raise RuntimeError("PDF export produced an empty file.")
+        return pdf_path
+
+    @staticmethod
+    def _convert_docx_to_pdf_with_word(docx_path, pdf_path):
+        import pythoncom
+        import win32com.client
+
+        pythoncom.CoInitialize()
+        word = None
+        doc = None
+        try:
+            word = win32com.client.DispatchEx("Word.Application")
+            word.Visible = False
+            doc = word.Documents.Open(os.path.abspath(docx_path), ReadOnly=True)
+            doc.ExportAsFixedFormat(os.path.abspath(pdf_path), 17)
+        finally:
+            if doc is not None:
+                doc.Close(False)
+            if word is not None:
+                word.Quit()
+            pythoncom.CoUninitialize()
+
+    def _export_pdf_with_weasyprint(self, book_id, pdf_path, chapter_numbers=None):
+        from html import escape
+        from weasyprint import HTML
+
+        config = self.get_textbook(book_id)
+        mgr = self._memory_manager.get_truth_manager(book_id)
+        numbers = chapter_numbers if chapter_numbers is not None else self._existing_chapter_numbers(mgr)
+        body = [f"<h1>{escape(config.title if config else 'Textbook')}</h1>"]
+        for num in numbers:
+            text = mgr.read_chapter(int(num))
+            if not text.strip():
+                continue
+            body.append(self._markdown_to_simple_html(text))
+        html = (
+            "<!doctype html><html><head><meta charset='utf-8'>"
+            "<style>body{font-family:'Microsoft YaHei','SimSun',sans-serif;line-height:1.7;font-size:12pt;}"
+            "h1,h2,h3{page-break-after:avoid;} pre{white-space:pre-wrap;background:#f3f4f6;padding:10px;}"
+            "table{border-collapse:collapse;width:100%;}td,th{border:1px solid #999;padding:4px;}</style>"
+            "</head><body>" + "\n".join(body) + "</body></html>"
+        )
+        HTML(string=html, base_url=self._book_dir(book_id)).write_pdf(pdf_path)
+
+    def _export_pdf_with_pymupdf(self, book_id, pdf_path, chapter_numbers=None):
+        import fitz
+
+        config = self.get_textbook(book_id)
+        mgr = self._memory_manager.get_truth_manager(book_id)
+        numbers = chapter_numbers if chapter_numbers is not None else self._existing_chapter_numbers(mgr)
+        fontfile = self._pick_cjk_font()
+        doc = fitz.open()
+        page = doc.new_page(width=595, height=842)
+        fontname = "TextBookCJK"
+        page.insert_font(fontname=fontname, fontfile=fontfile)
+        y = 54
+
+        def new_page():
+            nonlocal page, y
+            page = doc.new_page(width=595, height=842)
+            page.insert_font(fontname=fontname, fontfile=fontfile)
+            y = 54
+
+        def write_line(text, size=11, leading=17, bold=False):
+            nonlocal y
+            text = str(text or "").replace("\t", "    ")
+            if y > 790:
+                new_page()
+            max_chars = max(18, int(500 / max(size, 1) * 1.75))
+            chunks = []
+            while len(text) > max_chars:
+                chunks.append(text[:max_chars])
+                text = text[max_chars:]
+            chunks.append(text)
+            for chunk in chunks:
+                if y > 790:
+                    new_page()
+                page.insert_text((54, y), chunk, fontsize=size, fontname=fontname, fill=(0, 0, 0))
+                y += leading
+            if bold:
+                y += 2
+
+        write_line(config.title if config else "Textbook", size=18, leading=26, bold=True)
+        y += 10
+        for num in numbers:
+            content = mgr.read_chapter(int(num))
+            if not content.strip():
+                continue
+            for raw in content.splitlines():
+                stripped = raw.strip()
+                if not stripped:
+                    y += 8
+                    continue
+                heading = re.match(r"^(#{1,6})\s+(.+)$", stripped)
+                if heading:
+                    level = len(heading.group(1))
+                    write_line(heading.group(2), size=16 if level == 1 else 14 if level == 2 else 12, leading=24 if level == 1 else 21, bold=True)
+                elif stripped.startswith("|"):
+                    write_line(stripped, size=9, leading=14)
+                elif stripped.startswith("!["):
+                    write_line(re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"[图] \1", stripped), size=10, leading=16)
+                else:
+                    write_line(stripped, size=11, leading=17)
+        doc.save(pdf_path)
+        doc.close()
+
+    @staticmethod
+    def _pick_cjk_font():
+        for path in (
+            r"C:\Windows\Fonts\msyh.ttc",
+            r"C:\Windows\Fonts\simsun.ttc",
+            r"C:\Windows\Fonts\simhei.ttf",
+            r"C:\Windows\Fonts\arial.ttf",
+        ):
+            if os.path.exists(path):
+                return path
+        raise RuntimeError("No usable PDF font found.")
+
+    @staticmethod
+    def _markdown_to_simple_html(markdown_text):
+        from html import escape
+
+        html = []
+        in_code = False
+        code = []
+        for line in (markdown_text or "").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                if in_code:
+                    html.append("<pre><code>" + escape("\n".join(code)) + "</code></pre>")
+                    code = []
+                    in_code = False
+                else:
+                    in_code = True
+                continue
+            if in_code:
+                code.append(line)
+                continue
+            m = re.match(r"^(#{1,6})\s+(.+)$", stripped)
+            if m:
+                level = min(len(m.group(1)), 3)
+                html.append(f"<h{level}>{escape(m.group(2))}</h{level}>")
+            elif stripped:
+                html.append("<p>" + escape(stripped) + "</p>")
+        if code:
+            html.append("<pre><code>" + escape("\n".join(code)) + "</code></pre>")
+        return "\n".join(html)
+
     def execute_sandbox(self, code, timeout=30):
         from agent.textbook.sandbox.executor import SandboxExecutor
 
@@ -873,36 +1154,52 @@ class TextbookBridge:
     def save_outline_version(self, book_id: str, content: str, message: str = "") -> dict:
         versions_dir = os.path.join(self._book_dir(book_id), "outline", "versions")
         os.makedirs(versions_dir, exist_ok=True)
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        version_id = f"v_{timestamp}"
-        version_file = os.path.join(versions_dir, f"{version_id}.md")
-        with open(version_file, "w", encoding="utf-8") as f:
-            f.write(content)
-        metadata_path = os.path.join(versions_dir, "metadata.json")
-        if os.path.exists(metadata_path):
-            with open(metadata_path, "r", encoding="utf-8") as f:
-                metadata = json.load(f)
-        else:
-            metadata = {"versions": []}
-        version_info = {
-            "version_id": version_id,
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "message": message,
-            "size": len(content.encode("utf-8")),
-        }
-        metadata["versions"].append(version_info)
-        with open(metadata_path, "w", encoding="utf-8") as f:
-            json.dump(metadata, f, ensure_ascii=False, indent=2)
+        metadata = self._load_outline_version_metadata(versions_dir)
+        saved_versions = []
+        current_outline = self.get_outline(book_id) or ""
+        if content == current_outline:
+            return {
+                "version_id": "",
+                "timestamp": "",
+                "message": message,
+                "saved_versions": [],
+                "unchanged": True,
+            }
+
+        latest_content = ""
+        versions = metadata.get("versions", [])
+        if versions:
+            latest_content = self.get_outline_version(book_id, versions[-1].get("version_id", ""))
+        if current_outline.strip() and current_outline != latest_content and current_outline != content:
+            saved_versions.append(self._append_outline_version(
+                versions_dir,
+                metadata,
+                current_outline,
+                "保存修改前大纲",
+                "本版本为本次编辑前的当前大纲，用于回溯比较。",
+            ))
+
+        if content != latest_content:
+            saved_versions.append(self._append_outline_version(
+                versions_dir,
+                metadata,
+                content,
+                message or "手动修改大纲",
+                self._outline_change_summary(current_outline, content, message),
+            ))
+        self._write_outline_version_metadata(versions_dir, metadata)
         self.update_outline(book_id, content)
-        return {"version_id": version_id, "timestamp": version_info["timestamp"], "message": message}
+        latest = saved_versions[-1] if saved_versions else (metadata.get("versions") or [{}])[-1]
+        return {
+            "version_id": latest.get("version_id", ""),
+            "timestamp": latest.get("timestamp", ""),
+            "message": latest.get("message", message),
+            "saved_versions": saved_versions,
+        }
 
     def list_outline_versions(self, book_id: str) -> list:
         versions_dir = os.path.join(self._book_dir(book_id), "outline", "versions")
-        metadata_path = os.path.join(versions_dir, "metadata.json")
-        if not os.path.exists(metadata_path):
-            return []
-        with open(metadata_path, "r", encoding="utf-8") as f:
-            metadata = json.load(f)
+        metadata = self._load_outline_version_metadata(versions_dir)
         return metadata.get("versions", [])
 
     def get_outline_version(self, book_id: str, version_id: str) -> str:
@@ -913,12 +1210,93 @@ class TextbookBridge:
         with open(version_file, "r", encoding="utf-8") as f:
             return f.read()
 
+    def get_outline_version_info(self, book_id: str, version_id: str) -> dict:
+        versions_dir = os.path.join(self._book_dir(book_id), "outline", "versions")
+        metadata = self._load_outline_version_metadata(versions_dir)
+        for version in metadata.get("versions", []):
+            if version.get("version_id") == version_id:
+                return version
+        return {}
+
     def restore_outline_version(self, book_id: str, version_id: str) -> dict:
         content = self.get_outline_version(book_id, version_id)
         if not content:
             return {"version_id": version_id, "restored": False}
         self.update_outline(book_id, content)
         return {"version_id": version_id, "restored": True}
+
+    def _load_outline_version_metadata(self, versions_dir: str) -> dict:
+        metadata_path = os.path.join(versions_dir, "metadata.json")
+        metadata = {"versions": []}
+        if os.path.exists(metadata_path):
+            try:
+                with open(metadata_path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict) and isinstance(loaded.get("versions"), list):
+                    metadata = loaded
+            except Exception:
+                metadata = {"versions": []}
+        metadata["versions"] = self._normalize_outline_versions(metadata.get("versions", []))
+        return metadata
+
+    def _write_outline_version_metadata(self, versions_dir: str, metadata: dict) -> None:
+        metadata["versions"] = self._normalize_outline_versions(metadata.get("versions", []))
+        with open(os.path.join(versions_dir, "metadata.json"), "w", encoding="utf-8") as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+    def _normalize_outline_versions(self, versions: list) -> list:
+        normalized = []
+        for idx, version in enumerate(versions, start=1):
+            item = dict(version or {})
+            item.setdefault("version_id", f"v{idx}_0")
+            item.setdefault("label", f"V{idx}.0")
+            item.setdefault("timestamp", "")
+            item.setdefault("message", "")
+            item.setdefault("summary", item.get("message", ""))
+            item.setdefault("version_no", idx)
+            normalized.append(item)
+        normalized.sort(key=lambda v: int(v.get("version_no") or self._version_no_from_id(v.get("version_id", "")) or 0))
+        for idx, item in enumerate(normalized, start=1):
+            item["version_no"] = idx
+            if not re.match(r"^v\d+_0$", str(item.get("version_id", ""))):
+                item.setdefault("legacy_version_id", item.get("version_id", ""))
+            item.setdefault("label", f"V{idx}.0")
+        return normalized
+
+    def _version_no_from_id(self, version_id: str) -> int:
+        match = re.match(r"^v(\d+)_0$", str(version_id or ""))
+        return int(match.group(1)) if match else 0
+
+    def _append_outline_version(self, versions_dir: str, metadata: dict, content: str, message: str, summary: str) -> dict:
+        next_no = len(metadata.get("versions", [])) + 1
+        version_id = f"v{next_no}_0"
+        version_info = {
+            "version_id": version_id,
+            "label": f"V{next_no}.0",
+            "version_no": next_no,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "message": message,
+            "summary": summary,
+            "size": len(content.encode("utf-8")),
+        }
+        with open(os.path.join(versions_dir, f"{version_id}.md"), "w", encoding="utf-8") as f:
+            f.write(content)
+        metadata.setdefault("versions", []).append(version_info)
+        return version_info
+
+    def _outline_change_summary(self, old: str, new: str, message: str = "") -> str:
+        old_lines = len((old or "").splitlines())
+        new_lines = len((new or "").splitlines())
+        old_chars = len(old or "")
+        new_chars = len(new or "")
+        delta_lines = new_lines - old_lines
+        delta_chars = new_chars - old_chars
+        parts = []
+        if message:
+            parts.append(message)
+        parts.append(f"行数变化 {old_lines}→{new_lines}（{delta_lines:+d}）")
+        parts.append(f"字符变化 {old_chars}→{new_chars}（{delta_chars:+d}）")
+        return "；".join(parts)
 
     def review_content(self, book_id: str, level: str, target: str = "") -> dict:
         from agent.textbook.models.review import ReviewResult

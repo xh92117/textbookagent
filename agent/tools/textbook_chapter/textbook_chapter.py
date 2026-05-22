@@ -44,6 +44,10 @@ class TextbookChapterTool(BaseTool):
             "completed": {
                 "type": "boolean",
                 "description": "Whether the chapter should be marked completed after write/append/replace"
+            },
+            "allow_overwrite": {
+                "type": "boolean",
+                "description": "Explicitly allow replacing an existing substantial chapter with a full new body. Prefer append_section/replace_section for edits."
             }
         },
         "required": ["action", "book_id", "chapter_num"]
@@ -93,7 +97,14 @@ class TextbookChapterTool(BaseTool):
                 if not isinstance(content, str):
                     return ToolResult.fail("content must be a string")
                 if action == "write_chapter":
-                    return self._write_chapter(mgr, book_id, chapter_num, content, bool(args.get("completed", False)))
+                    return self._write_chapter(
+                        mgr,
+                        book_id,
+                        chapter_num,
+                        content,
+                        bool(args.get("completed", False)),
+                        bool(args.get("allow_overwrite", False)),
+                    )
                 heading = str(args.get("heading", "")).strip()
                 if not heading:
                     return ToolResult.fail("heading is required for append_section/replace_section")
@@ -116,9 +127,9 @@ class TextbookChapterTool(BaseTool):
             "encoding": self._validate_text(content),
         })
 
-    def _write_chapter(self, mgr, book_id: str, chapter_num: int, content: str, completed: bool) -> ToolResult:
+    def _write_chapter(self, mgr, book_id: str, chapter_num: int, content: str, completed: bool, allow_overwrite: bool = False) -> ToolResult:
         existing = mgr.read_chapter(chapter_num)
-        safety_error = self._overwrite_safety_error(existing, content, completed)
+        safety_error = self._overwrite_safety_error(existing, content, completed, allow_overwrite)
         if safety_error:
             return ToolResult.fail(safety_error)
         backup_path = self._backup_existing_chapter(mgr, chapter_num, existing, content)
@@ -256,7 +267,7 @@ class TextbookChapterTool(BaseTool):
         return backup_path
 
     @classmethod
-    def _overwrite_safety_error(cls, existing: str, content: str, completed: bool) -> str:
+    def _overwrite_safety_error(cls, existing: str, content: str, completed: bool, allow_overwrite: bool = False) -> str:
         normalized = (content or "").strip()
         lowered = normalized.lower()
         if not normalized:
@@ -284,6 +295,12 @@ class TextbookChapterTool(BaseTool):
                 f"Refusing dangerous full-chapter overwrite: existing chapter has {existing_len} chars, "
                 f"new content has {content_len} chars. Use replace_section/append_section for partial edits, "
                 "or provide a complete chapter body."
+            )
+        if existing_len >= cls.DANGEROUS_OVERWRITE_EXISTING_CHARS and not allow_overwrite:
+            return (
+                f"Refusing full-chapter overwrite of an existing chapter ({existing_len} chars). "
+                "Use replace_section/append_section for partial edits, mark_completed for status-only updates, "
+                "or pass allow_overwrite=true only for an intentional full rewrite."
             )
         return ""
 

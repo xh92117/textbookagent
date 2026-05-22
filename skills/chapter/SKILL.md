@@ -80,6 +80,7 @@ Report the following upon completion:
 - Anti-AI-tone language is mandatory (see anti_ai_rules.md)
 - Terminology must be consistent with the terminology table
 - Code examples must be runnable when used, but code volume must follow WritingSpec.
+- All code examples must be wrapped in fenced code blocks such as ```python ... ```. Never leave bare code lines in chapter Markdown; keep `#` comments inside the fence so Word export does not treat them as headings.
 - Exercises must match the textbook audience and learning orientation.
 - Chart markers must use standard format: `[图表: ...]` or `[插图: ...]`
 

@@ -206,6 +206,74 @@ def test_outline_read_write():
         assert loaded == outline
 
 
+def test_outline_versions_preserve_previous_and_new_content():
+    with tempfile.TemporaryDirectory() as tmp:
+        bridge = _make_bridge(tmp)
+        created = bridge.create_textbook(_make_config())
+        bridge.update_outline(created.id, "# V0\n\n旧大纲")
+
+        result = bridge.save_outline_version(created.id, "# V1\n\n新大纲", "调整章节顺序")
+        versions = bridge.list_outline_versions(created.id)
+
+        assert result["version_id"] == "v2_0"
+        assert [v["label"] for v in versions] == ["V1.0", "V2.0"]
+        assert bridge.get_outline_version(created.id, "v1_0") == "# V0\n\n旧大纲"
+        assert bridge.get_outline_version(created.id, "v2_0") == "# V1\n\n新大纲"
+        assert "调整章节顺序" in versions[-1]["summary"]
+        assert bridge.get_outline(created.id) == "# V1\n\n新大纲"
+
+
+def test_outline_version_not_saved_when_content_unchanged():
+    with tempfile.TemporaryDirectory() as tmp:
+        bridge = _make_bridge(tmp)
+        created = bridge.create_textbook(_make_config())
+        outline = "# V0\n\n旧大纲"
+        bridge.update_outline(created.id, outline)
+
+        result = bridge.save_outline_version(created.id, outline, "未修改")
+
+        assert result["unchanged"] is True
+        assert result["saved_versions"] == []
+        assert bridge.list_outline_versions(created.id) == []
+
+
+def test_list_textbook_cards_counts_written_chapters_even_with_stale_metadata():
+    with tempfile.TemporaryDirectory() as tmp:
+        bridge = _make_bridge(tmp)
+        created = bridge.create_textbook(_make_config(total_chapters=2, status="writing"))
+        mgr = bridge._memory_manager.get_truth_manager(created.id)
+        mgr.write_chapter(1, "# 第一章\n\n" + "正文内容" * 30)
+        mgr.write_chapter(2, "# 第二章\n\n" + "正文内容" * 30)
+        with open(mgr.chapter_metadata_path(2), "w", encoding="utf-8") as f:
+            json.dump({"status": "draft", "content_hash": "stale"}, f)
+
+        card = bridge.list_textbook_cards()[0]
+
+        assert card["completed_chapters"] == 2
+        assert card["completed_chapter_numbers"] == [1, 2]
+        assert card["progress"] == 100
+        assert card["status"] == "reviewing"
+
+
+def test_recent_activity_returns_multiple_items_for_one_textbook():
+    with tempfile.TemporaryDirectory() as tmp:
+        bridge = _make_bridge(tmp)
+        created = bridge.create_textbook(_make_config(total_chapters=5))
+        mgr = bridge._memory_manager.get_truth_manager(created.id)
+        bridge.update_outline(created.id, "# 大纲")
+        for num in range(1, 6):
+            mgr.write_chapter(num, f"# 第{num}章\n\n" + "正文内容" * 30)
+            path = os.path.join(mgr.book_dir, "chapters", f"chapter_{num:03d}.md")
+            os.utime(path, (time.time() + num, time.time() + num))
+
+        activities = bridge.list_recent_activity(limit=5)
+
+        assert len(activities) == 5
+        assert all(item["book_id"] == created.id for item in activities)
+        assert all(item["kind"] == "chapter" for item in activities)
+        assert [item["chapter_num"] for item in activities] == [5, 4, 3, 2, 1]
+
+
 def test_outline_empty():
     with tempfile.TemporaryDirectory() as tmp:
         bridge = _make_bridge(tmp)

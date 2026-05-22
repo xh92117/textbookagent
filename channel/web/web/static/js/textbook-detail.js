@@ -254,6 +254,7 @@ function loadChapterContent(num, scrollToSection) {
             var area = document.getElementById('chapterContentArea');
             if (!area) return;
             if (data.status === 'success' && data.content) {
+                currentChapterContentHash = data.content_hash || '';
                 document.getElementById('currentChapterStatus').textContent = '已编写';
                 document.getElementById('currentChapterStatus').style.color = 'var(--success)';
                 var content = data.content;
@@ -264,6 +265,7 @@ function loadChapterContent(num, scrollToSection) {
                     setTimeout(function() { _scrollToSection(scrollToSection); }, 100);
                 }
             } else {
+                currentChapterContentHash = data.content_hash || '';
                 document.getElementById('currentChapterStatus').textContent = '未编写';
                 document.getElementById('currentChapterStatus').style.color = 'var(--muted-fg)';
                 area.innerHTML = '<div style="text-align:center;padding:60px 20px;color:var(--muted-fg);"><div style="font-size:48px;margin-bottom:12px;">📝</div><div style="font-size:14px;">该章节尚未编写</div><div style="font-size:12px;margin-top:8px;">点击"一键编写"或通过AI对话让智能体编写此章节</div></div>';
@@ -287,6 +289,7 @@ function toggleChapterEditMode() {
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 content = (data.status === 'success' && data.content) ? data.content : '';
+                currentChapterContentHash = data.content_hash || '';
                 area.innerHTML =
                     '<div class="chapter-editor-shell">' +
                         '<div class="chapter-editor-actions">' +
@@ -321,12 +324,13 @@ function saveChapterEdit() {
     fetch('/api/textbook/' + currentBookId + '/chapters/' + currentChapterNum, {
         method: 'PUT',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({content: content})
+        body: JSON.stringify({content: content, expected_hash: currentChapterContentHash})
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
         if (data.status === 'success') {
             showToast('章节已保存');
+            currentChapterContentHash = '';
             chapterEditMode = false;
             document.getElementById('btnToggleEdit').innerHTML = '<i class="fas fa-edit"></i> 编辑';
             document.getElementById('btnSaveChapter').style.display = 'none';
@@ -339,6 +343,7 @@ function saveChapterEdit() {
 }
 
 var exportFormat = 'word';
+var currentChapterContentHash = '';
 
 function populateExportChapterDropdown() {
     var dropdown = document.getElementById('exportChapterNum');
@@ -395,9 +400,11 @@ function startExport() {
     var progressEl = document.getElementById('exportProgress');
     var fillEl = document.getElementById('exportProgressFill');
     var textEl = document.getElementById('exportProgressText');
+    var includeGlossary = document.getElementById('exportIncludeGlossary');
     progressEl.style.display = '';
 
     var url = '/api/textbook/' + currentBookId + '/export?format=' + encodeURIComponent(format) + '&range=' + encodeURIComponent(range) + '&template=' + encodeURIComponent(selectedTemplate || 'academic');
+    url += '&include_glossary=' + encodeURIComponent(includeGlossary && includeGlossary.checked ? '1' : '0');
     if (range === 'chapter') {
         var chNum = document.getElementById('exportChapterNum').value;
         url += '&chapter=' + encodeURIComponent(chNum || '');

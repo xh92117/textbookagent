@@ -4,7 +4,7 @@
                             <h1 id="detailBookTitle" style="margin:0;">教材详情</h1>
                             <div id="detailBookMeta" style="font-size:12px;color:var(--muted-fg);margin-top:4px;">选择一本教材查看详情</div>
                         </div>
-                        <button class="btn-primary" onclick="navigateToChat('请启动一键编写，按照当前教材配置开始自动编写全部章节')">
+                        <button class="btn-primary" onclick="startFullBookWritingChat()">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                             一键编写
                         </button>
@@ -17,14 +17,10 @@
                     </div>
                     <div class="tab-panes">
                         <div class="tab-pane active" id="tab-outline-edit">
-                            <div style="display:flex;gap:8px;margin-bottom:16px;">
-                                <button class="btn-primary" onclick="saveOutlineEdit()">
+                            <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center;">
+                                <button class="pipeline-btn" id="btnToggleOutlineEdit" onclick="toggleOutlineEditMode()">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-                                    保存大纲
-                                </button>
-                                <button class="pipeline-btn" onclick="previewOutline()">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                                    预览
+                                    编辑
                                 </button>
                                 <button class="pipeline-btn" onclick="showOutlineHistory()">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -34,16 +30,22 @@
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
                                     AI优化
                                 </button>
-                                <button class="btn-primary" style="background:var(--phase-review);" onclick="navigateToChat('请审查当前教材的大纲，给出改进建议')">
+                                <button class="btn-primary" style="background:var(--phase-review);" onclick="reviewCurrentOutline()">
                                     <i class="fas fa-search"></i>
                                     大纲审查
                                 </button>
+                                <input id="outlineVersionMessage" type="text" placeholder="本次修改摘要" style="display:none;flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--card);color:var(--fg);">
                             </div>
-                            <div style="display:flex;gap:16px;flex:1;min-height:0;">
-                                <div style="flex:1;display:flex;flex-direction:column;">
+                            <div style="display:flex;gap:16px;flex:1;min-height:0;height:calc(100vh - 300px);">
+                                <div style="width:260px;flex-shrink:0;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;overflow-y:auto;">
+                                    <div style="font-size:12px;font-weight:700;color:var(--muted-fg);margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">大纲版本</div>
+                                    <div id="outlineVersionList"></div>
+                                    <div id="outlineVersionSummary" style="margin-top:12px;font-size:12px;line-height:1.6;color:var(--muted-fg);"></div>
+                                </div>
+                                <div id="outlineEditorPane" style="flex:1;display:none;flex-direction:column;">
                                     <textarea id="outlineEditor" style="flex:1;width:100%;padding:12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-mono);resize:none;background:var(--card);color:var(--fg);" placeholder="在此编辑大纲内容..."></textarea>
                                 </div>
-                                <div style="flex:1;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;overflow-y:auto;">
+                                <div id="outlinePreviewPane" style="flex:1;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px;overflow-y:auto;">
                                     <div id="outlinePreview" style="font-size:13px;line-height:1.7;color:var(--muted-fg);">大纲预览区域</div>
                                 </div>
                             </div>
@@ -67,7 +69,7 @@
                                             <button class="pipeline-btn" id="btnSaveChapter" onclick="saveChapterEdit()" style="display:none;background:var(--success);color:white;border-color:var(--success);">
                                                 <i class="fas fa-save"></i> 保存
                                             </button>
-                                            <button class="pipeline-btn" style="background:var(--phase-review);color:white;border-color:var(--phase-review);" onclick="navigateToChat('请审查当前选中的章节内容，给出改进建议')">
+                                            <button class="pipeline-btn" style="background:var(--phase-review);color:white;border-color:var(--phase-review);" onclick="reviewCurrentChapter()">
                                                 <i class="fas fa-search"></i> 审查此章节
                                             </button>
                                         </div>

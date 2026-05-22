@@ -159,6 +159,72 @@ class MarkdownToWordConverter:
         p.paragraph_format.space_after = Pt(6)
         p.paragraph_format.line_spacing = 1.5
 
+    @staticmethod
+    def _is_markdown_heading(stripped: str, lines: List[str], index: int) -> bool:
+        match = re.match(r"^(#{1,6})\s+(.+)$", stripped)
+        if not match:
+            return False
+        # A single-hash Python/shell comment followed by code is not a
+        # Markdown heading, even when the code generator forgot fences.
+        if len(match.group(1)) == 1 and MarkdownToWordConverter._near_unfenced_code(lines, index):
+            return False
+        return True
+
+    @staticmethod
+    def _near_unfenced_code(lines: List[str], index: int) -> bool:
+        window = lines[max(0, index - 2): min(len(lines), index + 4)]
+        return sum(1 for line in window if MarkdownToWordConverter._is_code_like_line(line)) >= 2
+
+    @staticmethod
+    def _is_code_like_line(line: str) -> bool:
+        if not line:
+            return False
+        stripped = line.strip()
+        if not stripped:
+            return False
+        if line.startswith(("    ", "\t")):
+            return True
+        if stripped.startswith(("# ", "#\t", "//", "/*", "* ", "*/")):
+            return True
+        if re.match(r"^(import|from|def|class|async\s+def|await|return|yield|for|while|if|elif|else:|try:|except|finally:|with|print\()", stripped):
+            return True
+        if re.search(r"(:\s*$|=\s*[^=]|->|\{|\}|\(|\)|\[|\]|;)", stripped) and not re.match(r"^(#{1,6})\s+", stripped):
+            return True
+        return False
+
+    @staticmethod
+    def _starts_unfenced_code(lines: List[str], index: int) -> bool:
+        stripped = lines[index].strip()
+        if re.match(r"^(#{2,6})\s+", stripped):
+            return False
+        if not MarkdownToWordConverter._is_code_like_line(lines[index]):
+            return False
+        return MarkdownToWordConverter._near_unfenced_code(lines, index)
+
+    @staticmethod
+    def _collect_unfenced_code(lines: List[str], index: int) -> tuple:
+        code_lines = []
+        i = index
+        blank_seen = 0
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+            if not stripped:
+                if code_lines and blank_seen == 0:
+                    code_lines.append(line)
+                    blank_seen += 1
+                    i += 1
+                    continue
+                break
+            if re.match(r"^(#{2,6})\s+", stripped):
+                break
+            if not MarkdownToWordConverter._is_code_like_line(line):
+                break
+            blank_seen = 0
+            code_lines.append(line)
+            i += 1
+        return "\n".join(code_lines).rstrip(), i
+
     def add_image(self, image_path: str, caption: str = "", width: float = None):
         if os.path.exists(image_path):
             if width:
@@ -269,13 +335,21 @@ class MarkdownToWordConverter:
                 i += 1
                 continue
 
-            if stripped.startswith('#'):
+            if self._starts_unfenced_code(lines, i):
+                code, next_i = self._collect_unfenced_code(lines, i)
+                self.add_code_block(code)
+                i = next_i
+                continue
+
+            if self._is_markdown_heading(stripped, lines, i):
                 level = len(stripped) - len(stripped.lstrip('#'))
                 text = stripped.lstrip('#').strip()
                 if level <= 3:
                     self.add_heading(text, level)
                 else:
                     self.add_paragraph(text)
+            elif stripped.startswith('#'):
+                self.add_paragraph(stripped)
             elif stripped.startswith('> '):
                 self.add_quote(stripped[2:])
             elif stripped.startswith('- ') or stripped.startswith('* '):

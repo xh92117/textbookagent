@@ -180,11 +180,12 @@ async function refreshSkills() {
 
 function aiOptimizeOutline() {
     if (!currentBookId) { alert('请先选择一本教材'); return; }
-    navigateToChat('请优化教材《' + (currentBookData ? currentBookData.title : '') + '》的大纲结构，给出优化建议');
+    var title = typeof getCurrentBookTitle === 'function' ? getCurrentBookTitle() : ((currentBookData && currentBookData.title) || '当前教材');
+    navigateToChat('请优化《' + title + '》教材大纲');
 }
 
 function reviewOutline() {
     if (!currentBookId) { alert('请先选择一本教材'); return; }
-    navigateToChat('请审查教材《' + (currentBookData ? currentBookData.title : '') + '》的大纲');
+    var title = typeof getCurrentBookTitle === 'function' ? getCurrentBookTitle() : ((currentBookData && currentBookData.title) || '当前教材');
+    navigateToChat('请审查《' + title + '》教材大纲');
 }
-

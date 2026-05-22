@@ -90,6 +90,7 @@ var currentPipelineSource = null;
 var currentPipelinePollTimer = null;
 var chatHistoryLoaded = false;
 var activeChatRequestId = null;
+var recentActivities = [];
 
 function navigateToChat(prefill) {
     switchView('chat');
@@ -194,12 +195,80 @@ async function loadTextbooks() {
         var data = await response.json();
         if (data.status === 'success') {
             textbooks = data.textbooks || [];
+            recentActivities = data.recent_activity || [];
             renderTextbookGrid(textbooks);
+            renderRecentActivity(recentActivities);
         }
     } catch (e) {
         console.error('Failed to load textbooks:', e);
         document.getElementById('textbookGrid').innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted-fg);">加载教材列表失败，请刷新重试</div>';
     }
+}
+
+function renderRecentActivity(items) {
+    var list = document.getElementById('activityList');
+    if (!list) return;
+    if (!items || items.length === 0) {
+        list.innerHTML = '<div class="activity-empty">暂无最近活动</div>';
+        return;
+    }
+    var html = '';
+    var colors = {
+        chapter: 'var(--primary)',
+        progress: 'var(--secondary)',
+        outline: 'var(--accent)',
+        created: 'var(--phase-review)',
+        updated: 'var(--muted-fg)'
+    };
+    items.slice(0, 5).forEach(function(item, index) {
+        var color = colors[item.kind] || colors.updated;
+        html += '<div class="activity-item" role="button" tabindex="0" onclick="openRecentActivity(' + index + ')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();openRecentActivity(' + index + ');}">';
+        html += '<span class="activity-dot" style="background:' + color + '"></span>';
+        html += '<div class="activity-text"><strong>' + escapeHtml(item.message || item.title || '教材活动') + '</strong>';
+        if (item.file) html += '<span>' + escapeHtml(item.file) + '</span>';
+        html += '</div>';
+        html += '<div class="activity-time">' + escapeHtml(formatActivityTime(item.time || '')) + '</div>';
+        html += '</div>';
+    });
+    list.innerHTML = html;
+}
+
+function openRecentActivity(index) {
+    var item = recentActivities && recentActivities[index];
+    if (!item || !item.book_id) return;
+    selectTextbook(item.book_id);
+    setTimeout(function() {
+        if (item.kind === 'chapter' && item.chapter_num) {
+            var tab = document.querySelector('.tab[data-tab="chapter-preview"]');
+            if (tab) switchTab(tab, 'chapter-preview');
+            setTimeout(function() {
+                var node = document.querySelector('#chapterTree .tree-node[data-chapter="' + item.chapter_num + '"]');
+                if (node) {
+                    node.click();
+                    node.scrollIntoView({behavior: 'smooth', block: 'center'});
+                } else if (typeof selectChapter === 'function') {
+                    selectChapter(Number(item.chapter_num), '第' + item.chapter_num + '章');
+                }
+            }, 500);
+        } else if (item.kind === 'outline') {
+            var outlineTab = document.querySelector('.tab[data-tab="outline-edit"]');
+            if (outlineTab) switchTab(outlineTab, 'outline-edit');
+        } else if (item.kind === 'progress') {
+            var exportTab = document.querySelector('.tab[data-tab="export"]');
+            if (exportTab) switchTab(exportTab, 'export');
+        }
+    }, 250);
+}
+
+function formatActivityTime(value) {
+    if (!value) return '';
+    var date = new Date(value);
+    if (isNaN(date.getTime())) return value;
+    var diff = Date.now() - date.getTime();
+    if (diff >= 0 && diff < 60000) return '刚刚';
+    if (diff >= 0 && diff < 3600000) return Math.floor(diff / 60000) + '分钟前';
+    if (diff >= 0 && diff < 86400000) return Math.floor(diff / 3600000) + '小时前';
+    return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
 }
 
 function renderTextbookGrid(books) {
@@ -213,13 +282,15 @@ function renderTextbookGrid(books) {
     for (var i = 0; i < books.length; i++) {
         var book = books[i];
         var emoji = EMOJIS[i % EMOJIS.length];
-        var progress = book.progress || 0;
+        var progress = Number(book.progress || 0);
+        if (progress > 0 && progress <= 1) progress = progress * 100;
+        progress = Math.max(0, Math.min(100, Math.round(progress)));
         var completedChapters = book.completed_chapters || 0;
         var totalChapters = book.total_chapters || 0;
         var statusClass = 'status-writing';
         var statusText = '编写中';
-        if (progress >= 100) { statusClass = 'status-completed'; statusText = '已完成'; }
-        else if (book.status === 'reviewing') { statusClass = 'status-reviewing'; statusText = '审查中'; }
+        if (book.status === 'reviewing') { statusClass = 'status-reviewing'; statusText = '审阅中'; }
+        else if (progress >= 100) { statusClass = 'status-completed'; statusText = '已完成'; }
         else if (book.status === 'idle' || !book.status) { statusClass = 'status-writing'; statusText = '待开始'; }
 
         var accentGradient = 'linear-gradient(90deg, var(--secondary), var(--accent))';
@@ -689,10 +760,10 @@ function selectCompletedChapters() {
     updateChapterCount();
 }
 
-async function exportWord(bookId, template, chapters) {
+async function exportWord(bookId, template, chapters, format) {
     try {
         var chaptersParam = chapters.join(',');
-        var response = await fetch(API_BASE + '/api/textbook/' + bookId + '/export?template=' + template + '&chapters=' + chaptersParam);
+        var response = await fetch(API_BASE + '/api/textbook/' + bookId + '/export?template=' + template + '&format=' + encodeURIComponent(format || 'word') + '&chapters=' + chaptersParam);
         var data = await response.json();
         return data;
     } catch (e) {
@@ -746,7 +817,7 @@ function generateWord() {
         }
     }, 600);
 
-    exportWord(currentBookId, selectedTemplate, chapters).then(function(data) {
+    exportWord(currentBookId, selectedTemplate, chapters, format).then(function(data) {
         clearInterval(stepInterval);
 
         steps.forEach(function(s) { s.querySelector('.gen-dot').className = 'gen-dot done'; });

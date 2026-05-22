@@ -493,18 +493,57 @@ function switchTab(el, tabName) {
     if (tabName === 'preferences') loadBookPreferences();
 }
 
+var outlineEditMode = false;
+var currentOutlineText = '';
+var currentOutlineVersionId = 'current';
+var outlineVersions = [];
+
+function getCurrentBookTitle() {
+    var title = (currentBookData && currentBookData.title) || '';
+    if (!title) {
+        var titleEl = document.getElementById('detailBookTitle');
+        title = titleEl ? titleEl.textContent.trim() : '';
+    }
+    return title || '当前教材';
+}
+
+function startFullBookWritingChat() {
+    navigateToChat('请启动一键编写，按照《' + getCurrentBookTitle() + '》教材配置开始自动编写全部章节');
+}
+
+function reviewCurrentOutline() {
+    navigateToChat('请审查《' + getCurrentBookTitle() + '》教材大纲');
+}
+
+function reviewCurrentChapter() {
+    if (!currentChapterNum) {
+        showToast('请先选择章节', 'error');
+        return;
+    }
+    navigateToChat('请审查《' + getCurrentBookTitle() + '》教材的第' + currentChapterNum + '章');
+}
+
 function loadOutlineForEditor() {
     if (!currentBookId) return;
-    fetch(`/api/textbook/${currentBookId}/outline`)
-        .then(r => r.json())
-        .then(data => {
-            if (data.status === 'success' && data.outline) {
-                const editor = document.getElementById('outlineEditor');
-                if (editor) editor.value = data.outline;
-                renderOutlinePreview(data.outline);
-            }
-        })
-        .catch(err => console.error('Load outline error:', err));
+    Promise.all([
+        fetch(`/api/textbook/${currentBookId}/outline`).then(r => r.json()),
+        fetch(`/api/textbook/${currentBookId}/outline/versions`).then(r => r.json()).catch(() => ({status: 'error', versions: []}))
+    ])
+    .then(results => {
+        var outlineData = results[0] || {};
+        var versionData = results[1] || {};
+        if (outlineData.status === 'success') {
+            currentOutlineText = outlineData.outline || '';
+            const editor = document.getElementById('outlineEditor');
+            if (editor) editor.value = currentOutlineText;
+            outlineEditMode = false;
+            setOutlineEditMode(false);
+            renderOutlinePreview(currentOutlineText);
+        }
+        outlineVersions = Array.isArray(versionData.versions) ? versionData.versions : [];
+        renderOutlineVersionList();
+    })
+    .catch(err => console.error('Load outline error:', err));
 }
 
 function renderOutlinePreview(markdown) {
@@ -524,12 +563,46 @@ function previewOutline() {
     if (editor) renderOutlinePreview(editor.value);
 }
 
+function setOutlineEditMode(isEditing) {
+    outlineEditMode = isEditing;
+    var editorPane = document.getElementById('outlineEditorPane');
+    var previewPane = document.getElementById('outlinePreviewPane');
+    var btn = document.getElementById('btnToggleOutlineEdit');
+    var messageInput = document.getElementById('outlineVersionMessage');
+    if (editorPane) editorPane.style.display = isEditing ? 'flex' : 'none';
+    if (previewPane) previewPane.style.display = isEditing ? 'none' : '';
+    if (messageInput) {
+        messageInput.style.display = isEditing ? '' : 'none';
+        if (isEditing && !messageInput.value) messageInput.value = '手动修改大纲';
+    }
+    if (btn) {
+        btn.innerHTML = isEditing
+            ? '<i class="fas fa-save"></i> 保存'
+            : '<i class="fas fa-edit"></i> 编辑';
+        btn.style.background = isEditing ? 'var(--success)' : '';
+        btn.style.color = isEditing ? 'white' : '';
+        btn.style.borderColor = isEditing ? 'var(--success)' : '';
+    }
+}
+
+function toggleOutlineEditMode() {
+    if (!outlineEditMode) {
+        var editor = document.getElementById('outlineEditor');
+        if (editor) editor.value = currentOutlineText || editor.value || '';
+        setOutlineEditMode(true);
+        if (editor) editor.focus();
+        return;
+    }
+    saveOutlineEdit();
+}
+
 function saveOutlineEdit() {
     if (!currentBookId) return;
     const editor = document.getElementById('outlineEditor');
     if (!editor) return;
     const content = editor.value;
-    const message = prompt('版本说明（可选）:', '手动编辑大纲') || '手动编辑大纲';
+    const messageInput = document.getElementById('outlineVersionMessage');
+    const message = (messageInput && messageInput.value.trim()) || '手动修改大纲';
 
     fetch(`/api/textbook/${currentBookId}/outline/versions`, {
         method: 'POST',
@@ -539,8 +612,15 @@ function saveOutlineEdit() {
     .then(r => r.json())
     .then(data => {
         if (data.status === 'success') {
-            showToast('大纲已保存');
+            currentOutlineText = content;
+            setOutlineEditMode(false);
             renderOutlinePreview(content);
+            if (data.unchanged) {
+                showToast('大纲未修改，未生成新版本');
+            } else {
+                showToast('大纲已保存');
+                loadOutlineForEditor();
+            }
         } else {
             showToast('保存失败: ' + (data.message || '未知错误'), 'error');
         }
@@ -548,6 +628,60 @@ function saveOutlineEdit() {
     .catch(err => {
         showToast('保存失败: ' + err, 'error');
     });
+}
+
+function renderOutlineVersionList() {
+    var list = document.getElementById('outlineVersionList');
+    var summary = document.getElementById('outlineVersionSummary');
+    if (!list) return;
+    var html = '';
+    var currentActive = currentOutlineVersionId === 'current' ? 'outline-version-item active' : 'outline-version-item';
+    html += '<div class="' + currentActive + '" onclick="previewOutlineVersion(\'current\')" style="padding:10px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;cursor:pointer;">';
+    html += '<div style="font-weight:700;font-size:13px;">当前大纲</div>';
+    html += '<div style="font-size:11px;color:var(--muted-fg);margin-top:4px;">正在使用的最新版本</div>';
+    html += '</div>';
+    outlineVersions.forEach(function(v) {
+        var active = currentOutlineVersionId === v.version_id ? 'outline-version-item active' : 'outline-version-item';
+        html += '<div class="' + active + '" onclick="previewOutlineVersion(\'' + escapeHtml(v.version_id) + '\')" style="padding:10px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;cursor:pointer;">';
+        html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">';
+        html += '<span style="font-weight:700;font-size:13px;">' + escapeHtml(v.label || v.version_id) + '</span>';
+        html += '<span style="font-size:10px;color:var(--muted-fg);">' + escapeHtml((v.timestamp || '').replace('T', ' ')) + '</span>';
+        html += '</div>';
+        html += '<div style="font-size:11px;color:var(--muted-fg);margin-top:4px;line-height:1.45;">' + escapeHtml(v.message || v.summary || '无摘要') + '</div>';
+        html += '</div>';
+    });
+    list.innerHTML = html;
+    if (summary && currentOutlineVersionId === 'current') {
+        summary.innerHTML = '<strong>摘要：</strong>当前教材正在使用的大纲版本。';
+    }
+}
+
+function previewOutlineVersion(versionId) {
+    if (!currentBookId) return;
+    currentOutlineVersionId = versionId || 'current';
+    if (currentOutlineVersionId === 'current') {
+        setOutlineEditMode(false);
+        renderOutlinePreview(currentOutlineText || '');
+        renderOutlineVersionList();
+        return;
+    }
+    fetch('/api/textbook/' + currentBookId + '/outline/versions/' + encodeURIComponent(currentOutlineVersionId))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.status === 'success') {
+                setOutlineEditMode(false);
+                renderOutlinePreview(data.content || '');
+                var summary = document.getElementById('outlineVersionSummary');
+                var version = data.version || {};
+                if (summary) {
+                    summary.innerHTML = '<strong>摘要：</strong>' + escapeHtml(version.summary || version.message || '无摘要说明');
+                }
+                renderOutlineVersionList();
+            } else {
+                showToast('读取版本失败: ' + (data.message || '未知错误'), 'error');
+            }
+        })
+        .catch(function(err) { showToast('读取版本失败: ' + err, 'error'); });
 }
 
 function showOutlineHistory() {
@@ -558,9 +692,10 @@ function showOutlineHistory() {
             if (data.status === 'success' && data.versions) {
                 let html = '<div style="max-height:400px;overflow-y:auto;">';
                 data.versions.forEach(v => {
-                    html += `<div style="padding:10px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="restoreOutlineVersion('${v.version_id}')">
-                        <div style="font-weight:600;font-size:13px;">${v.message || '无说明'}</div>
-                        <div style="font-size:11px;color:var(--muted-fg);">${v.timestamp}</div>
+                    html += `<div style="padding:12px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="previewOutlineVersion('${v.version_id}');document.getElementById('simpleModal').style.display='none';">
+                        <div style="font-weight:700;font-size:13px;">${escapeHtml(v.label || v.version_id)} · ${escapeHtml(v.message || '无说明')}</div>
+                        <div style="font-size:12px;color:var(--muted-fg);line-height:1.6;margin-top:4px;">${escapeHtml(v.summary || '')}</div>
+                        <div style="font-size:11px;color:var(--muted-fg);margin-top:4px;">${escapeHtml(v.timestamp || '')}</div>
                     </div>`;
                 });
                 html += '</div>';

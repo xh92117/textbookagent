@@ -93,6 +93,7 @@ def test_textbook_chapter_appends_duplicate_heading_and_accepts_large_chunks(tmp
         "book_id": book.id,
         "chapter_num": 1,
         "content": "太长" * 7000,
+        "allow_overwrite": True,
     })
     assert huge.status == "success"
     assert huge.result["warning"].startswith("Large content accepted")
@@ -159,3 +160,39 @@ def test_textbook_chapter_rejects_short_full_overwrite_of_existing_long_chapter(
     assert blocked.status == "error"
     assert "dangerous full-chapter overwrite" in str(blocked.result)
     assert bridge.get_chapter(book.id, 2) == full_content
+
+
+def test_textbook_chapter_requires_explicit_overwrite_for_existing_long_chapter(tmp_path, monkeypatch):
+    bridge = _bridge(tmp_path)
+    book = _book(bridge)
+    monkeypatch.setattr("bridge.textbook_bridge.get_bridge", lambda: bridge)
+
+    tool = TextbookChapterTool()
+    full_content = "# Chapter\n\n" + ("long section\n" * 300)
+    assert tool.execute({
+        "action": "write_chapter",
+        "book_id": book.id,
+        "chapter_num": 3,
+        "content": full_content,
+    }).status == "success"
+
+    rewritten = "# Chapter\n\n" + ("replacement section\n" * 300)
+    blocked = tool.execute({
+        "action": "write_chapter",
+        "book_id": book.id,
+        "chapter_num": 3,
+        "content": rewritten,
+    })
+    assert blocked.status == "error"
+    assert "allow_overwrite=true" in str(blocked.result)
+    assert bridge.get_chapter(book.id, 3) == full_content
+
+    allowed = tool.execute({
+        "action": "write_chapter",
+        "book_id": book.id,
+        "chapter_num": 3,
+        "content": rewritten,
+        "allow_overwrite": True,
+    })
+    assert allowed.status == "success"
+    assert bridge.get_chapter(book.id, 3) == rewritten

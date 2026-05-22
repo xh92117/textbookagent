@@ -91,6 +91,22 @@ def test_converter_code_block():
     assert last_p.paragraph_format.left_indent is not None
 
 
+def test_converter_does_not_treat_unfenced_python_comments_as_headings():
+    converter = MarkdownToWordConverter()
+    converter.convert_markdown(
+        "## 2.1 异步编程\n\n"
+        "# 定义协程函数：使用 async def\n"
+        "async def fetch_data():\n"
+        "    return await client.get('/data')\n\n"
+        "正文继续。"
+    )
+
+    heading_texts = [p.text for p in converter.doc.paragraphs if p.style.name.startswith("Heading")]
+    assert "2.1 异步编程" in heading_texts
+    assert "定义协程函数：使用 async def" not in heading_texts
+    assert any("async def fetch_data" in p.text for p in converter.doc.paragraphs)
+
+
 def test_converter_table():
     converter = MarkdownToWordConverter()
     headers = ["姓名", "年龄", "城市"]
