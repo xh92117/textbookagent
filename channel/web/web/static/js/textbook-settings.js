@@ -230,6 +230,7 @@ function loadSettings() {
         if (timeout) timeout.value = data.request_timeout || data.timeout || 180;
         var thinking = document.getElementById('settingThinking');
         if (thinking) thinking.checked = data.enable_thinking || false;
+        renderMineruSettings(data.mineru || {});
         var password = document.getElementById('settingPassword');
         if (password) password.value = '';
         renderWorkspaceSettings(data.workspace || {});
@@ -258,6 +259,24 @@ function renderWorkspaceSettings(workspace) {
     if (systemLabel) systemLabel.textContent = systemDir || '-';
 }
 
+function renderMineruSettings(mineru) {
+    mineru = mineru || {};
+    var keyInput = document.getElementById('settingMineruApiKey');
+    var baseInput = document.getElementById('settingMineruApiBase');
+    var modelInput = document.getElementById('settingMineruModelVersion');
+    var langInput = document.getElementById('settingMineruLanguage');
+    var formulaInput = document.getElementById('settingMineruFormula');
+    var tableInput = document.getElementById('settingMineruTable');
+    var ocrInput = document.getElementById('settingMineruOcr');
+    if (keyInput) keyInput.value = mineru.api_key || '';
+    if (baseInput) baseInput.value = mineru.api_base || 'https://mineru.net';
+    if (modelInput) modelInput.value = mineru.model_version || 'vlm';
+    if (langInput) langInput.value = mineru.language || 'auto';
+    if (formulaInput) formulaInput.checked = mineru.enable_formula !== false;
+    if (tableInput) tableInput.checked = mineru.enable_table !== false;
+    if (ocrInput) ocrInput.checked = mineru.enable_ocr !== false;
+}
+
 function saveSettings() {
     var maxTokens = document.getElementById('settingMaxTokens');
     var maxTurns = document.getElementById('settingMaxTurns');
@@ -282,6 +301,20 @@ function saveSettings() {
     if (maxSteps) updates.agent_max_steps = parseInt(maxSteps.value) || 20;
     if (timeout) updates.request_timeout = parseInt(timeout.value) || 180;
     if (thinking) updates.enable_thinking = thinking.checked;
+    var mineruKey = document.getElementById('settingMineruApiKey');
+    var mineruBase = document.getElementById('settingMineruApiBase');
+    var mineruModel = document.getElementById('settingMineruModelVersion');
+    var mineruLang = document.getElementById('settingMineruLanguage');
+    var mineruFormula = document.getElementById('settingMineruFormula');
+    var mineruTable = document.getElementById('settingMineruTable');
+    var mineruOcr = document.getElementById('settingMineruOcr');
+    if (mineruKey && mineruKey.value.trim() && mineruKey.value.indexOf('*') < 0) updates.mineru_api_key = mineruKey.value.trim();
+    if (mineruBase) updates.mineru_api_base = mineruBase.value.trim() || 'https://mineru.net';
+    if (mineruModel) updates.mineru_model_version = mineruModel.value || 'vlm';
+    if (mineruLang) updates.mineru_language = mineruLang.value.trim() || 'auto';
+    if (mineruFormula) updates.mineru_enable_formula = mineruFormula.checked;
+    if (mineruTable) updates.mineru_enable_table = mineruTable.checked;
+    if (mineruOcr) updates.mineru_enable_ocr = mineruOcr.checked;
     if (password && password.value.trim()) updates.web_password = password.value.trim();
     var activeWorkspace = document.getElementById('settingActiveWorkspace');
     var textbooksStorageDir = document.getElementById('settingTextbooksStorageDir');
@@ -609,4 +642,3 @@ function renderReviewResults(result) {
     }
     container.innerHTML = html;
 }
-

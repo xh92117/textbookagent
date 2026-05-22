@@ -14,7 +14,8 @@ class KnowledgeQueryTool(BaseTool):
         "Token-safe knowledge-base access tool over the existing LLM-WIKI index.json. "
         "Use metadata-first actions instead of reading whole documents. Actions: "
         "glob/list source-level inventory, search metadata without excerpts, peek "
-        "top hit snippets, read_range selected chunks only, and pack a compact "
+        "top hit snippets, read_range selected chunks only, read_neighbors/read_section "
+        "for local context, and pack a compact "
         "evidence pack for textbook writing."
     )
 
@@ -23,7 +24,7 @@ class KnowledgeQueryTool(BaseTool):
         "properties": {
             "action": {
                 "type": "string",
-                "description": "One of: glob, search, peek, read_range, pack",
+                "description": "One of: glob, search, peek, read_range, read_neighbors, read_section, pack",
             },
             "book_id": {
                 "type": "string",
@@ -57,6 +58,14 @@ class KnowledgeQueryTool(BaseTool):
                 "type": "boolean",
                 "description": "Only for search/peek. Search defaults false; peek defaults true.",
             },
+            "radius": {
+                "type": "integer",
+                "description": "For read_neighbors: number of adjacent chunks on each side. Defaults to 1, max 3.",
+            },
+            "section": {
+                "type": "string",
+                "description": "For read_section: section/title text to locate if chunk_id/path is not provided.",
+            },
         },
         "required": ["action"],
     }
@@ -71,8 +80,8 @@ class KnowledgeQueryTool(BaseTool):
         query = str(args.get("query", "") or "").strip()
         limit = self._int(args.get("limit"), 8, 1, 30)
 
-        if action not in {"glob", "search", "peek", "read_range", "pack"}:
-            return ToolResult.fail("action must be one of: glob, search, peek, read_range, pack")
+        if action not in {"glob", "search", "peek", "read_range", "read_neighbors", "read_section", "pack"}:
+            return ToolResult.fail("action must be one of: glob, search, peek, read_range, read_neighbors, read_section, pack")
 
         try:
             if action == "glob":
@@ -92,6 +101,13 @@ class KnowledgeQueryTool(BaseTool):
                 max_chars = self._int(args.get("max_chars"), 2500, 200, 8000)
                 offset = self._int(args.get("offset"), 0, 0, 10_000_000)
                 return ToolResult.success(self._read_range(book_id, args.get("chunk_id", ""), args.get("path", ""), offset, max_chars))
+            if action == "read_neighbors":
+                max_chars = self._int(args.get("max_chars"), 5000, 500, 12000)
+                radius = self._int(args.get("radius"), 1, 0, 3)
+                return ToolResult.success(self._read_neighbors(book_id, args.get("chunk_id", ""), args.get("path", ""), radius, max_chars))
+            if action == "read_section":
+                max_chars = self._int(args.get("max_chars"), 7000, 500, 16000)
+                return ToolResult.success(self._read_section(book_id, args.get("chunk_id", ""), args.get("path", ""), args.get("section", ""), max_chars))
             if action == "pack":
                 if not query:
                     return ToolResult.fail("query is required for pack")
@@ -157,8 +173,8 @@ class KnowledgeQueryTool(BaseTool):
             "count": len(results),
             "results": [self._compact_hit(item, include_excerpt=excerpt_chars > 0) for item in results],
             "next": (
-                "Use read_range with a specific chunk_id only if the snippet is insufficient; "
-                "use pack for chapter-writing evidence."
+                "Use read_neighbors/read_section when local context is needed; use read_range "
+                "only for exact quotes, formulas, tables, or source verification; use pack for chapter-writing evidence."
             ),
         }
 
@@ -188,6 +204,79 @@ class KnowledgeQueryTool(BaseTool):
             "truncated": offset + max_chars < total,
             "content": content,
             "citation": f"knowledge/{book_id}/_llm_wiki/{rel_path}" if book_id else f"knowledge/_llm_wiki/{rel_path}",
+        }
+
+    def _read_neighbors(self, book_id: str, chunk_id: Any, path: Any, radius: int, max_chars: int) -> Dict[str, Any]:
+        retriever = self._retriever(book_id)
+        chunks = retriever.index.get("chunks", []) or []
+        chunk = self._find_chunk(retriever, str(chunk_id or ""), str(path or ""))
+        if not chunk:
+            raise ValueError("chunk_id or path not found")
+        idx = chunks.index(chunk)
+        start = max(0, idx - radius)
+        end = min(len(chunks), idx + radius + 1)
+        selected = chunks[start:end]
+        content_parts = []
+        used = 0
+        for item in selected:
+            text = self._read_chunk_text(retriever, item)
+            remaining = max_chars - used
+            if remaining <= 0:
+                break
+            snippet = text[:remaining]
+            used += len(snippet)
+            content_parts.append(f"## {item.get('title', item.get('id', ''))}\n\n{snippet}")
+        return {
+            "mode": "read_neighbors",
+            "book_id": book_id,
+            "center_chunk_id": chunk.get("id", ""),
+            "radius": radius,
+            "chunk_ids": [item.get("id", "") for item in selected],
+            "sections": [item.get("section", "") for item in selected],
+            "max_chars": max_chars,
+            "truncated": used >= max_chars,
+            "content": "\n\n---\n\n".join(content_parts),
+        }
+
+    def _read_section(self, book_id: str, chunk_id: Any, path: Any, section: Any, max_chars: int) -> Dict[str, Any]:
+        retriever = self._retriever(book_id)
+        chunks = retriever.index.get("chunks", []) or []
+        anchor = self._find_chunk(retriever, str(chunk_id or ""), str(path or ""))
+        section_text = str(section or "").strip().lower()
+        if not anchor and section_text:
+            for chunk in chunks:
+                haystack = " ".join([str(chunk.get("title", "")), str(chunk.get("section", ""))]).lower()
+                if section_text in haystack:
+                    anchor = chunk
+                    break
+        if not anchor:
+            raise ValueError("chunk_id/path/section not found")
+        target_section = anchor.get("section") or anchor.get("title", "")
+        same = [
+            chunk for chunk in chunks
+            if (chunk.get("section") or chunk.get("title", "")) == target_section
+            or str(chunk.get("title", "")).startswith(str(target_section))
+        ]
+        if not same:
+            same = [anchor]
+        content_parts = []
+        used = 0
+        for item in same:
+            text = self._read_chunk_text(retriever, item)
+            remaining = max_chars - used
+            if remaining <= 0:
+                break
+            snippet = text[:remaining]
+            used += len(snippet)
+            content_parts.append(f"## {item.get('title', item.get('id', ''))}\n\n{snippet}")
+        return {
+            "mode": "read_section",
+            "book_id": book_id,
+            "section": target_section,
+            "chunk_ids": [item.get("id", "") for item in same],
+            "max_chars": max_chars,
+            "truncated": used >= max_chars,
+            "content": "\n\n---\n\n".join(content_parts),
         }
 
     def _pack(self, book_id: str, query: str, limit: int, excerpt_chars: int) -> Dict[str, Any]:
@@ -244,6 +333,12 @@ class KnowledgeQueryTool(BaseTool):
             if path and chunk.get("path", "").replace("\\", "/") == path:
                 return chunk
         return {}
+
+    @classmethod
+    def _read_chunk_text(cls, retriever: KnowledgeRetriever, chunk: Dict[str, Any]) -> str:
+        full_path = cls._safe_wiki_path(retriever, chunk.get("path", ""))
+        with open(full_path, "r", encoding="utf-8") as f:
+            return cls._strip_frontmatter(f.read())
 
     @staticmethod
     def _safe_wiki_path(retriever: KnowledgeRetriever, rel_path: str) -> str:

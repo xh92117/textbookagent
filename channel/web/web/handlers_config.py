@@ -157,8 +157,13 @@ class ConfigHandler:
         "agent_max_context_tokens", "agent_max_context_turns", "agent_model_context_window",
         "agent_context_reserve_tokens", "agent_max_steps", "request_timeout",
         "knowledge_organize_mode", "knowledge_fast_chunk_threshold", "knowledge_extract_assets",
+        "knowledge_chunk_strategy", "knowledge_chunk_target_chars", "knowledge_chunk_max_chars", "knowledge_chunk_overlap_chars",
+        "knowledge_secondary_graph_enabled", "knowledge_secondary_graph_max_sections", "knowledge_secondary_graph_sample_chars",
         "knowledge_skip_logo_watermark_assets", "knowledge_min_asset_width",
         "knowledge_min_asset_height", "knowledge_min_asset_area",
+        "mineru_api_key", "mineru_api_base", "mineru_model_version", "mineru_language",
+        "mineru_enable_formula", "mineru_enable_table", "mineru_enable_ocr",
+        "mineru_timeout_seconds", "mineru_poll_interval_seconds",
         "enable_thinking", "web_password", "web_require_password_on_public_host",
         "log_dir", "log_file", "log_max_bytes", "log_backup_count",
         "active_workspace", "system_workspace", "workspace_split_enabled", "textbooks_storage_dir",
@@ -312,6 +317,17 @@ class ConfigHandler:
                 "api_bases": api_bases,
                 "api_keys": api_keys_masked,
                 "providers": providers,
+                "mineru": {
+                    "api_key": self._mask_key(local_config.get("mineru_api_key", "")) if local_config.get("mineru_api_key", "") else "",
+                    "api_base": local_config.get("mineru_api_base", "https://mineru.net"),
+                    "model_version": local_config.get("mineru_model_version", "vlm"),
+                    "language": local_config.get("mineru_language", "auto"),
+                    "enable_formula": bool(local_config.get("mineru_enable_formula", True)),
+                    "enable_table": bool(local_config.get("mineru_enable_table", True)),
+                    "enable_ocr": bool(local_config.get("mineru_enable_ocr", True)),
+                    "timeout_seconds": local_config.get("mineru_timeout_seconds", 1800),
+                    "poll_interval_seconds": local_config.get("mineru_poll_interval_seconds", 5),
+                },
                 "web_password_masked": masked_pwd,
                 "workspace": self._workspace_payload(),
             }, ensure_ascii=False)
@@ -349,9 +365,16 @@ class ConfigHandler:
                     "agent_max_context_tokens", "agent_max_context_turns",
                     "agent_model_context_window", "agent_context_reserve_tokens",
                     "agent_max_steps", "log_max_bytes", "log_backup_count",
+                    "mineru_timeout_seconds", "mineru_poll_interval_seconds",
+                    "knowledge_chunk_target_chars", "knowledge_chunk_max_chars", "knowledge_chunk_overlap_chars",
+                    "knowledge_secondary_graph_max_sections", "knowledge_secondary_graph_sample_chars",
                 ):
                     value = int(value)
-                if key in ("use_linkai", "enable_thinking", "workspace_split_enabled", "web_require_password_on_public_host"):
+                if key in (
+                    "use_linkai", "enable_thinking", "workspace_split_enabled",
+                    "web_require_password_on_public_host", "mineru_enable_formula",
+                    "mineru_enable_table", "mineru_enable_ocr", "knowledge_secondary_graph_enabled",
+                ):
                     value = bool(value)
                 local_config[key] = value
                 applied[key] = value

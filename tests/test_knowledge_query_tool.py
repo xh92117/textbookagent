@@ -48,3 +48,13 @@ def test_knowledge_query_search_peek_pack_and_read_range(tmp_path):
     assert read.status == "success"
     assert read.result["content"]
     assert read.result["total_chars"] >= len(read.result["content"])
+
+    neighbors = tool.execute({"action": "read_neighbors", "book_id": "tb", "chunk_id": chunk_id, "radius": 1, "max_chars": 800})
+    assert neighbors.status == "success"
+    assert chunk_id in neighbors.result["chunk_ids"]
+    assert neighbors.result["content"]
+
+    section = tool.execute({"action": "read_section", "book_id": "tb", "chunk_id": chunk_id, "max_chars": 800})
+    assert section.status == "success"
+    assert chunk_id in section.result["chunk_ids"]
+    assert section.result["content"]

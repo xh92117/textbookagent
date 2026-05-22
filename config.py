@@ -250,12 +250,28 @@ available_setting = {
     "reasoning_effort": "high",  # Reasoning depth under thinking mode: "high" or "max"
     "knowledge": True,  # 鏄惁寮€鍚煡璇嗗簱鍔熻兘
     "knowledge_organize_mode": "auto",  # Knowledge organize mode: auto, fast/local, or deep/llm/accurate
-    "knowledge_fast_chunk_threshold": 20,  # Use local metadata when a source has more chunks than this in auto mode
+    "knowledge_fast_chunk_threshold": 200,  # Use local metadata when a source has more chunks than this in auto mode
+    "knowledge_chunk_strategy": "h1",  # h1 keeps one top-level heading per chunk; size uses legacy character chunks
+    "knowledge_chunk_target_chars": 6500,
+    "knowledge_chunk_max_chars": 0,
+    "knowledge_chunk_overlap_chars": 450,
+    "knowledge_secondary_graph_enabled": True,  # Extract section-level graph candidates inside chapter chunks
+    "knowledge_secondary_graph_max_sections": 40,
+    "knowledge_secondary_graph_sample_chars": 1800,
     "knowledge_extract_assets": True,  # Extract useful images from PDF/DOCX into LLM-WIKI assets
     "knowledge_skip_logo_watermark_assets": True,  # Skip likely logos/watermarks when extracting document images
     "knowledge_min_asset_width": 120,  # Minimum extracted image width to keep
     "knowledge_min_asset_height": 120,  # Minimum extracted image height to keep
     "knowledge_min_asset_area": 20000,  # Minimum extracted image pixel area to keep
+    "mineru_api_key": "",  # MinerU API token; when empty PDF parsing falls back to local extractors
+    "mineru_api_base": "https://mineru.net",
+    "mineru_model_version": "vlm",
+    "mineru_language": "auto",
+    "mineru_enable_formula": True,
+    "mineru_enable_table": True,
+    "mineru_enable_ocr": True,
+    "mineru_timeout_seconds": 1800,
+    "mineru_poll_interval_seconds": 5,
     "skill": {},  # Per-skill runtime config; nested keys flatten to SKILL_<NAME>_<KEY> env vars at startup
     "mcp_servers": [],  # MCP server list; each entry supports type "stdio" (local process) or "sse" (remote URL)
 }
@@ -434,6 +450,8 @@ def load_config():
         "ark_api_base": "ARK_API_BASE",
         "dashscope_api_key": "DASHSCOPE_API_KEY",
         "dashscope_api_base": "DASHSCOPE_API_BASE",
+        "mineru_api_key": "MINERU_TOKEN",
+        "mineru_api_base": "MINERU_API_BASE",
         # Channel credentials (used by skills that check env vars)
         "feishu_app_id": "FEISHU_APP_ID",
         "feishu_app_secret": "FEISHU_APP_SECRET",

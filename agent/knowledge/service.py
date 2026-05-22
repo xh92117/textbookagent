@@ -8,6 +8,7 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urljoin
 
 from common.log import logger
 from config import conf
@@ -401,7 +402,7 @@ class KnowledgeService:
         if not os.path.isdir(scan_dir):
             return {"sources": sources, "total": 0}
         for root, dirs, files in os.walk(scan_dir):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d != "_llm_wiki"]
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in {"_llm_wiki", "_parsed", "_raw"}]
             for fname in sorted(files):
                 if fname.startswith("."):
                     continue
@@ -437,7 +438,7 @@ class KnowledgeService:
         total_size = 0
         categories = set()
         for root, dirs, files in os.walk(base):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d != "_llm_wiki"]
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in {"_llm_wiki", "_parsed", "_raw"}]
             for fname in files:
                 if fname.startswith("."):
                     continue
@@ -499,7 +500,250 @@ class KnowledgeService:
             return self._extract_doc(file_path)
         return ""
 
-    def _extract_pdf(self, file_path: str) -> str:
+    def _mineru_config(self) -> dict:
+        return {
+            "api_key": str(conf().get("mineru_api_key", "") or os.environ.get("MINERU_TOKEN", "")).strip(),
+            "api_base": str(conf().get("mineru_api_base", "") or os.environ.get("MINERU_API_BASE", "") or "https://mineru.net").strip().rstrip("/"),
+            "model_version": str(conf().get("mineru_model_version", "vlm") or "vlm").strip(),
+            "language": str(conf().get("mineru_language", "auto") or "auto").strip(),
+            "enable_formula": bool(conf().get("mineru_enable_formula", True)),
+            "enable_table": bool(conf().get("mineru_enable_table", True)),
+            "enable_ocr": bool(conf().get("mineru_enable_ocr", True)),
+            "timeout_seconds": int(conf().get("mineru_timeout_seconds", 1800) or 1800),
+            "poll_interval_seconds": max(1, int(conf().get("mineru_poll_interval_seconds", 5) or 5)),
+        }
+
+    def _mineru_available(self) -> bool:
+        return bool(self._mineru_config().get("api_key"))
+
+    def _safe_extract_zip(self, zip_path: str, target_dir: str):
+        target_dir = os.path.normpath(target_dir)
+        with zipfile.ZipFile(zip_path) as zf:
+            for member in zf.infolist():
+                name = member.filename.replace("\\", "/")
+                if not name or name.endswith("/"):
+                    continue
+                dest = os.path.normpath(os.path.join(target_dir, name))
+                if not dest.startswith(target_dir + os.sep) and dest != target_dir:
+                    logger.warning(f"[KnowledgeService] skipped unsafe MinerU zip member: {member.filename}")
+                    continue
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with zf.open(member) as src, open(dest, "wb") as out:
+                    shutil.copyfileobj(src, out)
+
+    def _find_mineru_markdown(self, parsed_dir: str) -> str:
+        candidates = []
+        for root, _dirs, files in os.walk(parsed_dir):
+            for name in files:
+                if name.lower().endswith(".md"):
+                    path = os.path.join(root, name)
+                    score = 0
+                    lower = name.lower()
+                    if lower in {"full.md", "middle.md", "content.md"}:
+                        score += 20
+                    if os.path.getsize(path) > 0:
+                        score += min(os.path.getsize(path), 1000000) / 1000000
+                    candidates.append((score, path))
+        if not candidates:
+            return ""
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1]
+
+    def _pdf_page_count(self, file_path: str) -> int:
+        try:
+            from pypdf import PdfReader
+            return len(PdfReader(file_path).pages)
+        except Exception:
+            pass
+        try:
+            import fitz
+            with fitz.open(file_path) as doc:
+                return len(doc)
+        except Exception:
+            return 0
+
+    def _split_pdf_for_mineru(self, file_path: str, split_dir: str, max_pages: int = 200) -> list:
+        os.makedirs(split_dir, exist_ok=True)
+        try:
+            from pypdf import PdfReader, PdfWriter
+            reader = PdfReader(file_path)
+            total = len(reader.pages)
+            if total <= max_pages:
+                return [file_path]
+            parts = []
+            stem = os.path.splitext(os.path.basename(file_path))[0]
+            for start in range(0, total, max_pages):
+                writer = PdfWriter()
+                end = min(start + max_pages, total)
+                for page in reader.pages[start:end]:
+                    writer.add_page(page)
+                part_path = os.path.join(split_dir, f"{stem}_pages_{start + 1:04d}_{end:04d}.pdf")
+                with open(part_path, "wb") as f:
+                    writer.write(f)
+                parts.append(part_path)
+            return parts
+        except Exception as exc:
+            logger.warning(f"[KnowledgeService] failed to split PDF for MinerU: {exc}")
+            return [file_path]
+
+    def _extract_single_pdf_with_mineru(self, file_path: str, parsed_dir: str, data_id: str) -> str:
+        cfg = self._mineru_config()
+        if not cfg.get("api_key"):
+            return ""
+
+        os.makedirs(parsed_dir, exist_ok=True)
+        cached_md = self._find_mineru_markdown(parsed_dir)
+        if cached_md:
+            with open(cached_md, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+            if text.strip():
+                self._emit_progress("mineru_cache", f"Using cached MinerU parse for {os.path.basename(file_path)}")
+                return self._normalize_formula_blocks(text)
+
+        try:
+            import requests
+        except Exception as exc:
+            logger.warning(f"[KnowledgeService] MinerU unavailable because requests cannot be imported: {exc}")
+            return ""
+
+        headers = {
+            "Authorization": f"Bearer {cfg['api_key']}",
+            "Content-Type": "application/json",
+        }
+        file_name = os.path.basename(file_path)
+        base = cfg["api_base"] + "/"
+        create_url = urljoin(base, "api/v4/file-urls/batch")
+        payload = {
+            "files": [{"name": file_name, "data_id": data_id, "is_ocr": cfg["enable_ocr"]}],
+            "model_version": cfg["model_version"],
+            "language": cfg["language"],
+            "enable_formula": cfg["enable_formula"],
+            "enable_table": cfg["enable_table"],
+        }
+        self._emit_progress("mineru_upload_init", f"Requesting MinerU upload URL for {file_name}")
+        try:
+            resp = requests.post(create_url, headers=headers, json=payload, timeout=60)
+            resp.raise_for_status()
+            created = resp.json()
+            data = created.get("data") or created
+            batch_id = data.get("batch_id") or created.get("batch_id")
+            upload_urls = data.get("file_urls") or data.get("upload_urls") or created.get("file_urls") or []
+            upload_url = upload_urls[0] if upload_urls else data.get("upload_url")
+            if isinstance(upload_url, dict):
+                upload_url = upload_url.get("url") or upload_url.get("upload_url")
+            if not batch_id or not upload_url:
+                raise RuntimeError(f"MinerU did not return batch_id/upload_url: {str(created)[:300]}")
+
+            self._emit_progress("mineru_uploading", f"Uploading {file_name} to MinerU", batch_id=batch_id)
+            with open(file_path, "rb") as f:
+                put_resp = requests.put(upload_url, data=f, timeout=300)
+            put_resp.raise_for_status()
+
+            result_url = urljoin(base, f"api/v4/extract-results/batch/{batch_id}")
+            deadline = time.time() + cfg["timeout_seconds"]
+            result_item = None
+            while time.time() < deadline:
+                self._emit_progress("mineru_processing", f"Waiting for MinerU parse: {file_name}", batch_id=batch_id)
+                poll = requests.get(result_url, headers={"Authorization": f"Bearer {cfg['api_key']}"}, timeout=60)
+                poll.raise_for_status()
+                result_json = poll.json()
+                data = result_json.get("data") or result_json
+                items = data.get("extract_result") or data.get("extract_results") or data.get("results") or []
+                if isinstance(items, dict):
+                    items = [items]
+                for item in items:
+                    item_data_id = str(item.get("data_id", data_id))
+                    if item_data_id and item_data_id != str(data_id):
+                        continue
+                    state = str(item.get("state") or item.get("status") or "").lower()
+                    if state in {"done", "completed", "success"} or item.get("full_zip_url"):
+                        result_item = item
+                        break
+                    if state in {"failed", "error"}:
+                        raise RuntimeError(item.get("err_msg") or item.get("message") or "MinerU parse failed")
+                if result_item:
+                    break
+                time.sleep(cfg["poll_interval_seconds"])
+            if not result_item:
+                raise TimeoutError(f"MinerU parse timed out after {cfg['timeout_seconds']} seconds")
+
+            zip_url = result_item.get("full_zip_url") or result_item.get("zip_url") or result_item.get("download_url")
+            if not zip_url:
+                raise RuntimeError(f"MinerU result has no zip URL: {str(result_item)[:300]}")
+            self._emit_progress("mineru_downloading", f"Downloading MinerU result for {file_name}")
+            zip_resp = requests.get(zip_url, timeout=300)
+            zip_resp.raise_for_status()
+            zip_path = os.path.join(parsed_dir, "mineru_result.zip")
+            with open(zip_path, "wb") as f:
+                f.write(zip_resp.content)
+            self._safe_extract_zip(zip_path, parsed_dir)
+            md_path = self._find_mineru_markdown(parsed_dir)
+            if not md_path:
+                raise RuntimeError("MinerU result did not include a Markdown file")
+            with open(md_path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+            self._emit_progress("mineru_done", f"MinerU parse completed for {file_name}")
+            return self._normalize_formula_blocks(text)
+        except Exception as exc:
+            logger.warning(f"[KnowledgeService] MinerU parse failed for {file_path}: {exc}")
+            self._emit_progress("mineru_fallback", f"MinerU failed; using local PDF parser: {exc}", current_file=os.path.basename(file_path))
+            return ""
+
+    def _extract_pdf_with_mineru(self, file_path: str, book_id: str = "") -> str:
+        signature = self._source_file_signature(file_path)
+        source_hash = (signature.get("content_hash") or hashlib.sha256(file_path.encode("utf-8")).hexdigest())[:16]
+        parsed_root = os.path.join(self._resolve_book_dir(book_id), "_parsed", "mineru", source_hash)
+        os.makedirs(parsed_root, exist_ok=True)
+
+        combined_md = os.path.join(parsed_root, "combined.md")
+        if os.path.isfile(combined_md):
+            with open(combined_md, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+            if text.strip():
+                self._emit_progress("mineru_cache", f"Using cached MinerU parse for {os.path.basename(file_path)}")
+                return self._normalize_formula_blocks(text)
+
+        page_count = self._pdf_page_count(file_path)
+        pdf_parts = [file_path]
+        if page_count > 200:
+            self._emit_progress(
+                "mineru_split",
+                f"PDF has {page_count} pages; splitting into MinerU-compatible parts",
+                current_file=os.path.basename(file_path),
+                total_pages=page_count,
+            )
+            pdf_parts = self._split_pdf_for_mineru(file_path, os.path.join(parsed_root, "splits"), max_pages=200)
+
+        texts = []
+        for idx, part_path in enumerate(pdf_parts, start=1):
+            part_dir = parsed_root if len(pdf_parts) == 1 else os.path.join(parsed_root, f"part_{idx:03d}")
+            part_id = source_hash if len(pdf_parts) == 1 else f"{source_hash}_part_{idx:03d}"
+            self._emit_progress(
+                "mineru_part",
+                f"Parsing PDF part {idx}/{len(pdf_parts)} with MinerU",
+                current_file=os.path.basename(part_path),
+                current_part=idx,
+                total_parts=len(pdf_parts),
+            )
+            text = self._extract_single_pdf_with_mineru(part_path, part_dir, part_id)
+            if not text.strip():
+                return ""
+            texts.append(f"\n\n<!-- mineru_part:{idx}/{len(pdf_parts)} source:{os.path.basename(part_path)} -->\n\n{text.strip()}")
+
+        merged = "\n\n".join(texts).strip()
+        if merged:
+            with open(combined_md, "w", encoding="utf-8") as f:
+                f.write(merged + "\n")
+        return self._normalize_formula_blocks(merged)
+
+    def _extract_pdf(self, file_path: str, book_id: str = "") -> str:
+        if self._mineru_available():
+            mineru_text = self._extract_pdf_with_mineru(file_path, book_id=book_id)
+            if mineru_text.strip():
+                return mineru_text
+        return self._extract_pdf_local(file_path)
+
+    def _extract_pdf_local(self, file_path: str) -> str:
         try:
             import pdfplumber
             parts = []
@@ -797,6 +1041,17 @@ class KnowledgeService:
         slug = re.sub(r"[^\w\u4e00-\u9fff]+", "_", (text or "").strip(), flags=re.UNICODE).strip("_").lower()
         return slug[:80] or f"{fallback}_{int(time.time())}"
 
+    def _unique_chunk_stem(self, source_name: str, chunk_title: str, idx: int, used: set) -> str:
+        source_stem = os.path.splitext(os.path.basename(source_name or "source"))[0]
+        base = self._safe_slug(f"{source_stem}_{chunk_title}", f"chunk_{idx + 1:03d}")
+        candidate = base
+        suffix = 2
+        while candidate in used:
+            candidate = self._safe_slug(f"{base}_{suffix}", f"chunk_{idx + 1:03d}_{suffix}")
+            suffix += 1
+        used.add(candidate)
+        return candidate
+
     def _load_wiki_index(self, book_id: str = "") -> dict:
         index_path = os.path.join(self._wiki_base_dir(book_id), "index.json")
         if os.path.isfile(index_path):
@@ -831,14 +1086,102 @@ class KnowledgeService:
         signature = self._source_file_signature(file_path)
         content_hash = signature.get("content_hash", "")
         task_status = self._load_task_status(book_id).get("sources", {})
-        for source in self._load_wiki_index(book_id).get("sources", []):
+        index = self._load_wiki_index(book_id)
+        for source in index.get("sources", []):
             if content_hash and source.get("content_hash") != content_hash:
                 continue
             source_key = source.get("content_hash") or source.get("hash") or source.get("id")
             source_state = task_status.get(source_key, {}).get("status", "indexed")
-            if source_state == "indexed":
+            if source_state == "indexed" and self._source_pipeline_complete(source, index):
                 return True
         return False
+
+    def _pipeline_versions(self) -> dict:
+        return {
+            "parse": str(conf().get("mineru_model_version", "local") or "local"),
+            "chunk": f"h1-semantic-v2:{conf().get('knowledge_chunk_strategy', 'h1')}",
+            "primary_metadata": "llm-wiki-primary-v1",
+            "secondary_graph": "section-graph-v1" if bool(conf().get("knowledge_secondary_graph_enabled", True)) else "disabled",
+            "graph": "llm-wiki-graph-v1",
+        }
+
+    def _find_source_record(self, index: dict, file_path: str) -> dict:
+        signature = self._source_file_signature(file_path)
+        content_hash = signature.get("content_hash", "")
+        norm_path = os.path.normpath(file_path)
+        for source in index.get("sources", []) or []:
+            if content_hash and source.get("content_hash") == content_hash:
+                return source
+            if os.path.normpath(source.get("path", "")) == norm_path:
+                return source
+        return {}
+
+    def _source_pipeline_complete(self, source: dict, index: dict) -> bool:
+        if not source:
+            return False
+        versions = self._pipeline_versions()
+        stages = source.get("pipeline_stages") or {}
+        source_id = source.get("id", "")
+        source_chunks = [c for c in index.get("chunks", []) or [] if c.get("source_id") == source_id]
+        source_pages = [p for p in index.get("pages", []) or [] if p.get("source_id") == source_id]
+        if not source_chunks or not source_pages:
+            return False
+        if stages.get("chunk", {}).get("version") != versions["chunk"]:
+            return False
+        primary_done = stages.get("primary_metadata", {}).get("version") == versions["primary_metadata"]
+        if not primary_done and not source.get("primary_metadata_version") and not source_pages:
+            return False
+        if versions["secondary_graph"] != "disabled":
+            if stages.get("secondary_graph", {}).get("version") != versions["secondary_graph"]:
+                return False
+        if stages.get("graph", {}).get("version") != versions["graph"]:
+            return False
+        return True
+
+    def _chunk_files_exist(self, book_id: str, chunks: list) -> bool:
+        wiki_dir = self._wiki_base_dir(book_id)
+        for chunk in chunks or []:
+            rel_path = chunk.get("path", "")
+            if not rel_path or not os.path.isfile(os.path.join(wiki_dir, rel_path)):
+                return False
+        return True
+
+    def _read_index_chunk_texts(self, book_id: str, chunk_records: list) -> list:
+        wiki_dir = self._wiki_base_dir(book_id)
+        chunks = []
+        for record in chunk_records or []:
+            path = os.path.join(wiki_dir, record.get("path", ""))
+            if not os.path.isfile(path):
+                return []
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                text = self._strip_wiki_frontmatter(f.read())
+            heading = f"# {record.get('title', '')}".strip()
+            if text.startswith(heading):
+                text = text[len(heading):].strip()
+            chunks.append({
+                "title": record.get("title") or "Document",
+                "section": record.get("section") or record.get("title") or "Document",
+                "text": text,
+                "part": 1,
+            })
+        return chunks
+
+    @staticmethod
+    def _strip_wiki_frontmatter(text: str) -> str:
+        if text.startswith("---"):
+            parts = text.split("---", 2)
+            if len(parts) == 3:
+                return parts[2].strip()
+        return text.strip()
+
+    def _mark_source_stage(self, source: dict, stage: str, version: str, **extra):
+        stages = source.setdefault("pipeline_stages", {})
+        stages[stage] = {
+            "status": "done",
+            "version": version,
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            **extra,
+        }
 
     def _save_wiki_index(self, book_id: str, index: dict):
         wiki_dir = self._wiki_base_dir(book_id)
@@ -892,6 +1235,44 @@ class KnowledgeService:
             "entities": len(index.get("entities", [])),
             "relations": len(index.get("relations", [])),
         }
+
+    def _resolve_source_chunk_ids(self, raw_ids: list, chunk_records: list) -> list:
+        linked = []
+        for raw_id in raw_ids or []:
+            if isinstance(raw_id, int) and 0 <= raw_id < len(chunk_records):
+                linked.append(chunk_records[raw_id]["id"])
+            elif isinstance(raw_id, str) and raw_id.isdigit() and int(raw_id) < len(chunk_records):
+                linked.append(chunk_records[int(raw_id)]["id"])
+            elif isinstance(raw_id, str) and raw_id:
+                linked.append(raw_id)
+        deduped = []
+        for item in linked:
+            if item not in deduped:
+                deduped.append(item)
+        return deduped
+
+    def _prune_source_wiki_files(self, wiki_dir: str, subdir: str, source_name: str, keep_rel_paths: set) -> int:
+        target_dir = os.path.join(wiki_dir, subdir)
+        if not os.path.isdir(target_dir):
+            return 0
+        source_stem = os.path.splitext(os.path.basename(source_name or ""))[0]
+        source_slug = self._safe_slug(source_stem, "source")
+        removed = 0
+        for name in os.listdir(target_dir):
+            if not name.lower().endswith(".md"):
+                continue
+            rel_path = f"{subdir}/{name}".replace("\\", "/")
+            if rel_path in keep_rel_paths:
+                continue
+            file_stem = os.path.splitext(name)[0]
+            if not source_slug or not file_stem.startswith(source_slug):
+                continue
+            try:
+                os.remove(os.path.join(target_dir, name))
+                removed += 1
+            except OSError as exc:
+                logger.warning(f"[KnowledgeService] failed to prune stale wiki file {rel_path}: {exc}")
+        return removed
 
     def _source_index_record(self, source: dict, book_id: str, index: dict) -> dict:
         source_id = source.get("id", "")
@@ -987,12 +1368,33 @@ class KnowledgeService:
         self._save_compat_index(book_id, index)
         return self._index_counts(index)
 
-    def _chunk_for_wiki(self, content: str, max_tokens: int = 900, overlap_tokens: int = 90) -> list:
-        max_chars = max_tokens * 2
-        overlap_chars = overlap_tokens * 2
+    def _chunk_for_wiki(self, content: str, max_tokens: int = None, overlap_tokens: int = None) -> list:
+        strategy = str(conf().get("knowledge_chunk_strategy", "h1") or "h1").strip().lower()
+        target_chars = int(conf().get("knowledge_chunk_target_chars", 6500) or 6500)
+        max_chars = int(conf().get("knowledge_chunk_max_chars", 9000) or 9000)
+        overlap_chars = int(conf().get("knowledge_chunk_overlap_chars", 450) or 450)
+        if max_tokens is not None:
+            max_chars = max(1200, int(max_tokens) * 2)
+            target_chars = max(800, int(max_chars * 0.75))
+        if overlap_tokens is not None:
+            overlap_chars = max(0, int(overlap_tokens) * 2)
+        if max_tokens is None and strategy in {"h1", "heading", "top", "chapter"}:
+            blocks = self._split_markdown_top_sections(content)
+            chunks = []
+            for block in blocks:
+                title = block.get("title") or "Document"
+                text = (block.get("text") or "").strip()
+                if text:
+                    chunks.append({"title": title, "text": text, "section": title, "part": 1})
+            return chunks
+
+        if max_chars <= 0:
+            max_chars = max(target_chars, 9000)
         blocks = self._split_markdown_sections(content)
         if not blocks:
             blocks = [{"title": "Document", "level": 1, "text": (content or "").strip()}]
+
+        blocks = self._merge_small_wiki_sections(blocks, target_chars=target_chars, max_chars=max_chars)
 
         chunks = []
         for block in blocks:
@@ -1012,6 +1414,117 @@ class KnowledgeService:
                     "part": part_idx,
                 })
         return [c for c in chunks if c["text"].strip()]
+
+    def _split_markdown_top_sections(self, content: str) -> list:
+        lines = (content or "").splitlines()
+        has_semantic_top = any(
+            self._is_semantic_top_title(self._heading_title(line.strip()) or line.strip())
+            for line in lines
+        )
+        sections = []
+        current_title = "Document"
+        current = []
+        has_top_heading = False
+        top_plain_re = re.compile(
+            r"^\s*((?:第\s*[\u4e00-\u9fff\d]+\s*[\u7ae0\u7bc7\u90e8]|Chapter\s+\d+)\s*[^\n]{0,100})\s*$",
+            re.I,
+        )
+        hash_re = re.compile(r"^\s*(#{1,6})\s+(.+?)\s*$")
+        for raw in lines:
+            stripped = raw.strip()
+            hash_match = hash_re.match(stripped)
+            plain_match = top_plain_re.match(stripped)
+            title = ""
+            is_top = False
+            if hash_match and len(hash_match.group(1)) == 1:
+                title = hash_match.group(2).strip()
+                is_top = bool(title) and (not has_semantic_top or self._is_semantic_top_title(title))
+            elif plain_match and self._is_wiki_heading(stripped, plain_match, primary=True):
+                title = plain_match.group(1).strip()
+                is_top = bool(title) and self._is_semantic_top_title(title)
+
+            if is_top:
+                has_top_heading = True
+                if current:
+                    sections.append({"title": current_title, "level": 1, "text": "\n".join(current).strip()})
+                    current = []
+                current_title = title
+                continue
+            current.append(raw)
+
+        if current:
+            sections.append({"title": current_title, "level": 1, "text": "\n".join(current).strip()})
+        if has_top_heading:
+            return [s for s in sections if s.get("text", "").strip()]
+
+        fallback = self._split_markdown_sections(content)
+        if len(fallback) > 1:
+            merged_text = []
+            for section in fallback:
+                title = section.get("title") or "Document"
+                text = (section.get("text") or "").strip()
+                if text:
+                    merged_text.append(f"## {title}\n\n{text}" if title != "Document" else text)
+            return [{"title": "Document", "level": 1, "text": "\n\n".join(merged_text).strip()}]
+        return fallback or [{"title": "Document", "level": 1, "text": (content or "").strip()}]
+
+    def _heading_title(self, line: str) -> str:
+        match = re.match(r"^\s*#{1,6}\s+(.+?)\s*$", line or "")
+        return match.group(1).strip() if match else ""
+
+    def _is_semantic_top_title(self, title: str) -> bool:
+        title = (title or "").strip()
+        if not title:
+            return False
+        if re.match(r"^(第\s*[\u4e00-\u9fff\d]+\s*[\u7ae0\u7bc7\u90e8])\b", title):
+            return True
+        if re.match(r"^Chapter\s+\d+\b", title, re.I):
+            return True
+        if title in {"前言", "序言", "绪论", "引言", "导论", "附录"}:
+            return True
+        return False
+
+    def _merge_small_wiki_sections(self, sections: list, target_chars: int, max_chars: int) -> list:
+        merged = []
+        current = None
+        for section in sections or []:
+            title = section.get("title") or "Document"
+            text = (section.get("text") or "").strip()
+            if not text:
+                continue
+            if len(text) >= target_chars:
+                if current:
+                    merged.append(current)
+                    current = None
+                merged.append(section)
+                continue
+            block_text = f"## {title}\n\n{text}" if title and title != "Document" else text
+            if not current:
+                current = {
+                    "title": title,
+                    "level": section.get("level", 1),
+                    "text": block_text,
+                    "section_titles": [title],
+                }
+                continue
+            combined_len = len(current.get("text", "")) + len(block_text) + 2
+            if combined_len <= max_chars:
+                current["text"] = current.get("text", "").rstrip() + "\n\n" + block_text
+                current.setdefault("section_titles", []).append(title)
+                first = current["section_titles"][0]
+                last = current["section_titles"][-1]
+                current["title"] = first if first == last else f"{first} / {last}"
+            else:
+                merged.append(current)
+                current = {
+                    "title": title,
+                    "level": section.get("level", 1),
+                    "text": block_text,
+                    "section_titles": [title],
+                }
+        if current:
+            merged.append(current)
+        return merged
 
     def _split_markdown_sections(self, content: str) -> list:
         heading_re = re.compile(
@@ -1233,6 +1746,315 @@ class KnowledgeService:
                     })
         return {"pages": pages, "entities": list(entities.values()), "relations": relations, "chunk_metadata": []}
 
+    def _section_graph_windows(self, chunks: list) -> list:
+        max_sections = int(conf().get("knowledge_secondary_graph_max_sections", 40) or 40)
+        windows = []
+        heading_re = re.compile(r"^\s*#{1,6}\s+(.+?)\s*$|^\s*(\d+(?:\.\d+){1,3}\s+[^\n]{2,100})\s*$")
+        for chunk_idx, chunk in enumerate(chunks or []):
+            lines = (chunk.get("text") or "").splitlines()
+            current_title = chunk.get("title") or "Document"
+            current = []
+            for raw in lines:
+                stripped = raw.strip()
+                match = heading_re.match(stripped)
+                title = ""
+                if match:
+                    title = (match.group(1) or match.group(2) or "").strip()
+                    if title and self._is_semantic_top_title(title):
+                        title = ""
+                if title and self._is_wiki_heading(stripped, match, primary=False):
+                    if current:
+                        self._append_section_window(windows, chunk_idx, chunk, current_title, current)
+                        if len(windows) >= max_sections:
+                            return windows
+                        current = []
+                    current_title = title
+                    continue
+                current.append(raw)
+            if current:
+                self._append_section_window(windows, chunk_idx, chunk, current_title, current)
+                if len(windows) >= max_sections:
+                    return windows
+        return windows
+
+    def _append_section_window(self, windows: list, chunk_idx: int, chunk: dict, title: str, lines: list):
+        text = "\n".join(lines).strip()
+        if len(text) < 60:
+            return
+        windows.append({
+            "chunk_index": chunk_idx,
+            "chunk_title": chunk.get("title") or "Document",
+            "section_title": title or chunk.get("title") or "Document",
+            "text": text,
+        })
+
+    def _extract_secondary_graph_items(self, chunks: list, source_name: str) -> dict:
+        if not bool(conf().get("knowledge_secondary_graph_enabled", True)):
+            return {"entities": [], "relations": [], "pages": [], "chunk_metadata": []}
+        sections = self._section_graph_windows(chunks)
+        if not sections:
+            return {"entities": [], "relations": [], "pages": [], "chunk_metadata": []}
+        sample_chars = int(conf().get("knowledge_secondary_graph_sample_chars", 1800) or 1800)
+        merged = {"entities": [], "relations": [], "pages": [], "chunk_metadata": []}
+        try:
+            llm = self._get_llm()
+            batch_size = 8
+            for start in range(0, len(sections), batch_size):
+                batch = sections[start:start + batch_size]
+                self._emit_progress(
+                    "secondary_graph",
+                    f"Extracting section graph {min(start + batch_size, len(sections))}/{len(sections)}",
+                    current_chunks=min(start + batch_size, len(sections)),
+                    total_chunks=len(sections),
+                )
+                parts = []
+                for offset, section in enumerate(batch):
+                    idx = start + offset
+                    parts.append(
+                        f"### section_index: {idx}\n"
+                        f"chunk_index: {section['chunk_index']}\n"
+                        f"chunk_title: {section['chunk_title']}\n"
+                        f"section_title: {section['section_title']}\n\n"
+                        f"{section['text'][:sample_chars]}"
+                    )
+                messages = [
+                    {"role": "system", "content": (
+                        "Extract a clean section-level knowledge graph for textbook retrieval. "
+                        "Return strict JSON only with keys entities and relations. "
+                        "Allowed entity types: concept, method, framework, platform, component, class_or_function, "
+                        "api, metric, workflow_step, standard_or_protocol, dataset, organization, person. "
+                        "Allowed relation labels: contains, belongs_to, used_for, based_on, implements, calls, depends_on, "
+                        "compares_with, advantage, limitation, metric_of, evolves_to, example_of, part_of, defines. "
+                        "Every entity must include name, type, description, source_chunk_ids, section_title, evidence. "
+                        "Every relation must include source, target, relation, source_chunk_ids, section_title, evidence, confidence. "
+                        "Use numeric chunk_index values from the input as source_chunk_ids. "
+                        "Drop image hashes, file extensions, paths, Markdown debris, generic verbs, and unsupported facts."
+                    )},
+                    {"role": "user", "content": f"Source: {source_name}\n\nSections:\n" + "\n\n".join(parts)},
+                ]
+                response = llm.call(messages, temperature=0.1)
+                if isinstance(response, str) and response.strip().startswith("[ERROR]"):
+                    raise RuntimeError(response.strip()[:300])
+                parsed = self._parse_llm_json(response)
+                if isinstance(parsed, dict):
+                    for key in ("entities", "relations"):
+                        value = parsed.get(key, [])
+                        if isinstance(value, list):
+                            merged[key].extend(value)
+        except Exception as exc:
+            logger.warning(f"[KnowledgeService] section graph LLM extraction failed, using local candidates: {exc}")
+            merged = self._fallback_section_graph_items(sections)
+        if not (merged["entities"] or merged["relations"]):
+            merged = self._fallback_section_graph_items(sections)
+        return self._filter_graph_items(merged)
+
+    def _fallback_section_graph_items(self, sections: list) -> dict:
+        entities = []
+        relations = []
+        strong_terms = [
+            r"\b(?:RAG|MCP|LLM|API|ReAct|Qdrant|Dify|Coze|n8n|LangChain|AutoGPT|BabyAGI|Transformer|OpenAI|Claude|GPT|Agent)\b",
+            r"\b[A-Z][A-Za-z]+(?:Agent|Tool|Memory|Retriever|Planner|LLM|API)\b",
+            r"(?:大语言模型|基础模型|语言模型|智能体|多智能体|智能体框架|智能体系统|上下文工程|低代码平台|向量数据库|知识库|记忆系统|检索系统|通信协议|评价体系|性能评估|深度研究智能体|智能旅行助手|赛博小镇)",
+        ]
+        term_re = re.compile("|".join(strong_terms), re.I)
+        for section in sections:
+            text = re.sub(r"\s+", " ", section.get("text", ""))
+            names = []
+            for match in term_re.finditer(text):
+                name = match.group(0).strip(" ，。；;:：()（）[]【】")
+                if name and name not in names and not self._is_noise_entity(name):
+                    names.append(name)
+                if len(names) >= 8:
+                    break
+            for name in names:
+                entities.append({
+                    "name": self._canonical_entity_name(name),
+                    "type": self._guess_entity_type(name),
+                    "description": f"{name} appears in section {section.get('section_title', '')}.",
+                    "source_chunk_ids": [section.get("chunk_index")],
+                    "section_title": section.get("section_title", ""),
+                    "evidence": self._evidence_around(text, name),
+                })
+            section_title = section.get("section_title") or section.get("chunk_title")
+            for name in names[:6]:
+                relations.append({
+                    "source": section_title,
+                    "target": self._canonical_entity_name(name),
+                    "relation": "contains",
+                    "source_chunk_ids": [section.get("chunk_index")],
+                    "section_title": section.get("section_title", ""),
+                    "evidence": self._evidence_around(text, name),
+                    "confidence": 0.45,
+                })
+        return {"entities": entities, "relations": relations, "pages": [], "chunk_metadata": []}
+
+    def _filter_graph_items(self, extracted: dict) -> dict:
+        entities = []
+        for ent in extracted.get("entities", []) or []:
+            name = self._canonical_entity_name(ent.get("name", ""))
+            if self._is_noise_entity(name):
+                continue
+            ent = dict(ent)
+            ent["name"] = name
+            ent["type"] = self._normalize_entity_type(ent.get("type", "concept"))
+            ent["evidence"] = str(ent.get("evidence") or ent.get("description") or "")[:300]
+            if not ent["evidence"].strip():
+                continue
+            entities.append(ent)
+        entity_names = {e["name"] for e in entities}
+        relations = []
+        for rel in extracted.get("relations", []) or []:
+            source = self._canonical_entity_name(rel.get("source", ""))
+            target = self._canonical_entity_name(rel.get("target", ""))
+            if self._is_noise_entity(source) or self._is_noise_entity(target) or source == target:
+                continue
+            relation = self._normalize_relation_type(rel.get("relation", "related"))
+            evidence = str(rel.get("evidence") or "")[:360]
+            if not evidence.strip():
+                continue
+            rel = dict(rel)
+            rel.update({"source": source, "target": target, "relation": relation, "evidence": evidence})
+            relations.append(rel)
+            for name in (source, target):
+                if name not in entity_names and not self._is_noise_entity(name):
+                    entities.append({
+                        "name": name,
+                        "type": "concept",
+                        "description": f"Entity inferred from relation evidence: {evidence[:120]}",
+                        "source_chunk_ids": rel.get("source_chunk_ids") or [],
+                        "section_title": rel.get("section_title", ""),
+                        "evidence": evidence[:300],
+                    })
+                    entity_names.add(name)
+        return {"entities": entities, "relations": relations, "pages": extracted.get("pages", []), "chunk_metadata": extracted.get("chunk_metadata", [])}
+
+    def _canonical_entity_name(self, name: str) -> str:
+        name = re.sub(r"\s+", " ", str(name or "")).strip(" \t\r\n-_*`'\"，。；;:：()（）[]【】")
+        aliases = {
+            "大语言模型": "LLM",
+            "大型语言模型": "LLM",
+            "llm": "LLM",
+            "检索增强生成": "RAG",
+            "rag": "RAG",
+            "模型上下文协议": "MCP",
+            "mcp": "MCP",
+            "人工智能智能体": "智能体",
+            "agent": "智能体",
+            "Agent": "智能体",
+            "AI Agent": "智能体",
+            "openai": "OpenAI",
+            "Openai": "OpenAI",
+        }
+        return aliases.get(name, name)
+
+    def _normalize_entity_type(self, value: str) -> str:
+        value = str(value or "concept").strip().lower()
+        if value in {"技术", "方法", "算法", "范式", "架构范式"}:
+            return "method"
+        if value in {"框架"}:
+            return "framework"
+        if value in {"平台"}:
+            return "platform"
+        if value in {"协议", "标准", "标准/协议"}:
+            return "standard_or_protocol"
+        if value in {"组件", "系统", "模块"}:
+            return "component"
+        if value in {"类", "函数", "类/函数", "api接口"}:
+            return "class_or_function"
+        if value in {"组织", "机构"}:
+            return "organization"
+        if value in {"人物", "作者"}:
+            return "person"
+        allowed = {
+            "concept", "method", "framework", "platform", "component", "class_or_function",
+            "api", "metric", "workflow_step", "standard_or_protocol", "dataset", "organization", "person",
+        }
+        mapping = {
+            "技术": "method", "方法": "method", "平台": "platform", "协议": "standard_or_protocol",
+            "架构范式": "method", "类": "class_or_function", "函数": "class_or_function", "系统": "component",
+        }
+        return mapping.get(value, value if value in allowed else "concept")
+
+    def _normalize_relation_type(self, value: str) -> str:
+        value = str(value or "related").strip().lower()
+        if value in {"包含", "提到", "涉及", "核心组件", "核心属性", "组成", "组成部分", "组成关系"}:
+            return "contains"
+        if value in {"属于", "实例类型", "并列关系"}:
+            return "belongs_to"
+        if value in {"用于", "应用于", "用途"}:
+            return "used_for"
+        if value in {"基于", "理论基础", "依托"}:
+            return "based_on"
+        if value in {"实现", "实现方式"}:
+            return "implements"
+        if value in {"调用", "依赖关系", "依赖"}:
+            return "depends_on"
+        if value in {"对比", "比较"}:
+            return "compares_with"
+        if value in {"优点", "优势"}:
+            return "advantage"
+        if value in {"缺点", "局限", "限制"}:
+            return "limitation"
+        if value in {"评价指标", "指标"}:
+            return "metric_of"
+        if value in {"发展为", "演化为"}:
+            return "evolves_to"
+        if value in {"示例", "例子"}:
+            return "example_of"
+        if value in {"定义", "定义为"}:
+            return "defines"
+        if value in {"提出者", "发起方", "作者"}:
+            return "based_on"
+        mapping = {
+            "包含": "contains", "属于": "belongs_to", "用于": "used_for", "基于": "based_on",
+            "实现": "implements", "调用": "calls", "依赖": "depends_on", "对比": "compares_with",
+            "优点": "advantage", "缺点": "limitation", "评价指标": "metric_of", "发展为": "evolves_to",
+            "示例": "example_of", "组成": "part_of", "定义": "defines", "mentions": "contains",
+        }
+        allowed = {
+            "contains", "belongs_to", "used_for", "based_on", "implements", "calls", "depends_on",
+            "compares_with", "advantage", "limitation", "metric_of", "evolves_to", "example_of", "part_of", "defines",
+        }
+        return mapping.get(value, value if value in allowed else "contains")
+
+    def _guess_entity_type(self, name: str) -> str:
+        if re.search(r"API|class|function|函数|类", name, re.I):
+            return "class_or_function"
+        if re.search(r"MCP|协议", name, re.I):
+            return "standard_or_protocol"
+        if re.search(r"Dify|Coze|n8n|LangChain|Qdrant", name, re.I):
+            return "platform"
+        if re.search(r"RAG|ReAct|方法|算法|范式", name, re.I):
+            return "method"
+        return "concept"
+
+    def _is_noise_entity(self, name: str) -> bool:
+        name = str(name or "").strip()
+        if len(name) < 2 or len(name) > 80:
+            return True
+        if len(re.findall(r"[\u4e00-\u9fff]", name)) > 18:
+            return True
+        if re.fullmatch(r"[0-9a-fA-F]{16,}", name):
+            return True
+        if re.fullmatch(r"\d+(?:\.\d+)*", name):
+            return True
+        if re.search(r"\.(?:jpg|jpeg|png|svg|gif|pdf|md|json|py|js|ts)$", name, re.I):
+            return True
+        if any(token in name.lower() for token in ("mineru_part", "source:", "images/", "\\", "/", "http://", "https://")):
+            return True
+        generic = {
+            "source", "page", "result", "results", "data", "file", "image", "images", "title",
+            "summary", "section", "document", "details", "text_image", "jpg", "jpeg", "png",
+            "pdf", "md", "json", "the", "day", "repository", "使用", "配置", "系统", "结果", "内容", "步骤",
+        }
+        return name.lower() in generic or name in generic
+
+    def _evidence_around(self, text: str, name: str, radius: int = 90) -> str:
+        idx = text.lower().find(str(name).lower())
+        if idx < 0:
+            return text[:180]
+        return text[max(0, idx - radius): idx + len(name) + radius].strip()
+
     def _extract_wiki_items(self, chunks: list, source_name: str) -> dict:
         if self._should_use_fast_wiki(chunks):
             self._emit_progress(
@@ -1304,6 +2126,9 @@ class KnowledgeService:
             merged["chunk_metadata"] = fallback.get("chunk_metadata", [])
         if not merged["pages"]:
             merged["pages"] = fallback.get("pages", [])
+        secondary = self._extract_secondary_graph_items(chunks, source_name)
+        merged["entities"].extend(secondary.get("entities", []))
+        merged["relations"].extend(secondary.get("relations", []))
         return self._dedupe_extracted_wiki(merged)
 
     def _should_use_fast_wiki(self, chunks: list) -> bool:
@@ -1312,7 +2137,7 @@ class KnowledgeService:
             return False
         if mode in ("fast", "local"):
             return True
-        threshold = int(conf().get("knowledge_fast_chunk_threshold", 20) or 20)
+        threshold = int(conf().get("knowledge_fast_chunk_threshold", 200) or 200)
         return len(chunks or []) > threshold
 
     def _dedupe_extracted_wiki(self, extracted: dict) -> dict:
@@ -1337,19 +2162,27 @@ class KnowledgeService:
 
         entities = {}
         for ent in extracted.get("entities", []):
-            name = (ent.get("name") or "").strip()
-            if not name:
+            name = self._canonical_entity_name(ent.get("name") or "")
+            if self._is_noise_entity(name):
                 continue
             existing = entities.setdefault(name, {
                 "name": name,
-                "type": ent.get("type", "entity"),
+                "type": self._normalize_entity_type(ent.get("type", "concept")),
                 "description": ent.get("description", ""),
                 "source_chunk_ids": [],
+                "sections": [],
+                "evidence": "",
             })
             if len(ent.get("description", "")) > len(existing.get("description", "")):
                 existing["description"] = ent.get("description", "")
-            if ent.get("type") and existing.get("type") == "entity":
-                existing["type"] = ent.get("type")
+            if ent.get("type") and existing.get("type") == "concept":
+                existing["type"] = self._normalize_entity_type(ent.get("type"))
+            section_title = ent.get("section_title")
+            if section_title and section_title not in existing["sections"]:
+                existing["sections"].append(section_title)
+            evidence = str(ent.get("evidence", "") or "")
+            if len(evidence) > len(existing.get("evidence", "")):
+                existing["evidence"] = evidence[:300]
             for item in ent.get("source_chunk_ids") or []:
                 if item not in existing["source_chunk_ids"]:
                     existing["source_chunk_ids"].append(item)
@@ -1357,10 +2190,11 @@ class KnowledgeService:
         relations = []
         seen_rel = set()
         for rel in extracted.get("relations", []):
-            source = (rel.get("source") or "").strip()
-            target = (rel.get("target") or "").strip()
-            relation = (rel.get("relation") or "related").strip()
-            if not source or not target or source == target:
+            source = self._canonical_entity_name(rel.get("source") or "")
+            target = self._canonical_entity_name(rel.get("target") or "")
+            relation = self._normalize_relation_type(rel.get("relation") or "related")
+            evidence = str(rel.get("evidence", "") or "")
+            if self._is_noise_entity(source) or self._is_noise_entity(target) or source == target or not evidence.strip():
                 continue
             key = (source, target, relation)
             if key in seen_rel:
@@ -1371,7 +2205,8 @@ class KnowledgeService:
                 "target": target,
                 "relation": relation,
                 "source_chunk_ids": rel.get("source_chunk_ids") or [],
-                "evidence": rel.get("evidence", ""),
+                "section_title": rel.get("section_title", ""),
+                "evidence": evidence[:360],
                 "confidence": rel.get("confidence", 0.6),
             })
 
@@ -1400,7 +2235,15 @@ class KnowledgeService:
             name = ent.get("name", "")
             if name:
                 ent_id = "entity/" + self._safe_slug(name, "entity")
-                nodes[ent_id] = {"id": ent_id, "label": name, "category": ent.get("type", "entity")}
+                nodes[ent_id] = {
+                    "id": ent_id,
+                    "label": name,
+                    "category": ent.get("type", "entity"),
+                    "description": ent.get("description", ""),
+                    "sections": ent.get("sections", []),
+                    "source_chunk_ids": ent.get("source_chunk_ids", []),
+                    "evidence": ent.get("evidence", ""),
+                }
         for chunk in index.get("chunks", []):
             chunk_id = chunk.get("id", "")
             if chunk_id:
@@ -1440,6 +2283,7 @@ class KnowledgeService:
                     "target": target_id,
                     "label": rel.get("relation", "related"),
                     "source_chunk_ids": rel.get("source_chunk_ids") or [],
+                    "section_title": rel.get("section_title", ""),
                     "evidence": rel.get("evidence", ""),
                     "confidence": rel.get("confidence", 0.6),
                 })
@@ -1449,6 +2293,217 @@ class KnowledgeService:
         with open(os.path.join(wiki_dir, "graph.json"), "w", encoding="utf-8") as f:
             json.dump(graph, f, ensure_ascii=False, indent=2)
         return graph
+
+    def migrate_graph_normalization(self, book_id: str = "") -> dict:
+        index = self._load_wiki_index(book_id)
+        before = {
+            "entities": len(index.get("entities", []) or []),
+            "relations": len(index.get("relations", []) or []),
+        }
+
+        entities = {}
+        for ent in index.get("entities", []) or []:
+            name = self._canonical_entity_name(ent.get("name", ""))
+            if self._is_noise_entity(name):
+                continue
+            normalized = dict(ent)
+            normalized["name"] = name
+            normalized["type"] = self._normalize_entity_type(ent.get("type", "concept"))
+            normalized["source_chunk_ids"] = self._dedupe_list(ent.get("source_chunk_ids") or [])
+            normalized["sections"] = self._dedupe_list((ent.get("sections") or []) + ([ent.get("section_title")] if ent.get("section_title") else []))
+            normalized["evidence"] = str(ent.get("evidence") or "")[:300]
+            self._merge_entity_record(entities, normalized)
+
+        relation_map = {}
+        for rel in index.get("relations", []) or []:
+            source = self._canonical_entity_name(rel.get("source", ""))
+            target = self._canonical_entity_name(rel.get("target", ""))
+            if self._is_noise_entity(source) or self._is_noise_entity(target) or source == target:
+                continue
+            relation = self._normalize_relation_type(rel.get("relation", "related"))
+            evidence = str(rel.get("evidence") or "")[:360]
+            section_title = rel.get("section_title", "") or ""
+            key = (source, target, relation, section_title)
+            existing = relation_map.setdefault(key, {
+                "source": source,
+                "target": target,
+                "relation": relation,
+                "source_chunk_ids": [],
+                "section_title": section_title,
+                "evidence": "",
+                "confidence": 0.0,
+            })
+            for cid in rel.get("source_chunk_ids") or []:
+                if cid not in existing["source_chunk_ids"]:
+                    existing["source_chunk_ids"].append(cid)
+            if len(evidence) > len(existing.get("evidence", "")):
+                existing["evidence"] = evidence
+            try:
+                existing["confidence"] = max(float(existing.get("confidence", 0.0)), float(rel.get("confidence", 0.6)))
+            except Exception:
+                existing["confidence"] = existing.get("confidence", 0.6)
+            for endpoint in (source, target):
+                if endpoint not in entities and not self._is_noise_entity(endpoint):
+                    self._merge_entity_record(entities, {
+                        "name": endpoint,
+                        "type": "concept",
+                        "description": "",
+                        "source_chunk_ids": existing["source_chunk_ids"],
+                        "sections": [section_title] if section_title else [],
+                        "evidence": evidence[:300],
+                    })
+
+        index["entities"] = list(entities.values())
+        index["relations"] = list(relation_map.values())
+        index["graph_migration"] = {
+            "version": "graph-normalize-v1",
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "before": before,
+            "after": {
+                "entities": len(index["entities"]),
+                "relations": len(index["relations"]),
+            },
+        }
+        self._save_wiki_index(book_id, index)
+        graph = self._write_wiki_graph(book_id, index)
+        return {
+            "status": "success",
+            "before": before,
+            "after": index["graph_migration"]["after"],
+            "graph_nodes": len(graph.get("nodes", [])),
+            "graph_edges": len(graph.get("edges", [])),
+        }
+
+    def _merge_entity_record(self, entities: dict, ent: dict):
+        name = ent.get("name", "")
+        if not name:
+            return
+        existing = entities.setdefault(name, {
+            "name": name,
+            "type": ent.get("type", "concept"),
+            "description": ent.get("description", ""),
+            "source_chunk_ids": [],
+            "sections": [],
+            "evidence": "",
+        })
+        if ent.get("type") and existing.get("type") == "concept":
+            existing["type"] = ent.get("type")
+        if len(ent.get("description", "") or "") > len(existing.get("description", "") or ""):
+            existing["description"] = ent.get("description", "")
+        if len(ent.get("evidence", "") or "") > len(existing.get("evidence", "") or ""):
+            existing["evidence"] = ent.get("evidence", "")[:300]
+        if ent.get("source_id") and not existing.get("source_id"):
+            existing["source_id"] = ent.get("source_id")
+        existing["source_chunk_ids"] = self._dedupe_list(existing.get("source_chunk_ids", []) + (ent.get("source_chunk_ids") or []))
+        existing["sections"] = self._dedupe_list(existing.get("sections", []) + (ent.get("sections") or []))
+
+    @staticmethod
+    def _dedupe_list(items: list) -> list:
+        deduped = []
+        for item in items or []:
+            if item and item not in deduped:
+                deduped.append(item)
+        return deduped
+
+    def _resume_indexed_source(self, file_path: str, book_id: str = "") -> Optional[dict]:
+        index = self._load_wiki_index(book_id)
+        source = self._find_source_record(index, file_path)
+        if not source:
+            return None
+        source_id = source.get("id", "")
+        chunk_records = [c for c in index.get("chunks", []) or [] if c.get("source_id") == source_id]
+        page_records = [p for p in index.get("pages", []) or [] if p.get("source_id") == source_id]
+        if not chunk_records or not self._chunk_files_exist(book_id, chunk_records):
+            return None
+
+        versions = self._pipeline_versions()
+        resumed = False
+        self._mark_source_stage(source, "parse", versions["parse"])
+        if source.get("pipeline_stages", {}).get("chunk", {}).get("version") != versions["chunk"]:
+            self._mark_source_stage(source, "chunk", versions["chunk"], chunk_count=len(chunk_records))
+            resumed = True
+        if page_records and source.get("pipeline_stages", {}).get("primary_metadata", {}).get("version") != versions["primary_metadata"]:
+            self._mark_source_stage(source, "primary_metadata", versions["primary_metadata"], page_count=len(page_records))
+            resumed = True
+
+        secondary_needed = (
+            versions["secondary_graph"] != "disabled"
+            and source.get("pipeline_stages", {}).get("secondary_graph", {}).get("version") != versions["secondary_graph"]
+        )
+        if secondary_needed:
+            chunks = self._read_index_chunk_texts(book_id, chunk_records)
+            if not chunks:
+                return None
+            self._emit_progress(
+                "resume_secondary_graph",
+                f"Resuming section-level graph for {os.path.basename(file_path)}",
+                current_file=os.path.basename(file_path),
+                total_chunks=len(chunks),
+            )
+            secondary = self._dedupe_extracted_wiki(
+                self._extract_secondary_graph_items(chunks, os.path.basename(file_path))
+            )
+            entity_map = {e.get("name"): e for e in index.get("entities", []) if e.get("name")}
+            for ent in secondary.get("entities", []):
+                if not ent.get("name"):
+                    continue
+                ent["source_id"] = source_id
+                ent["source_chunk_ids"] = self._resolve_source_chunk_ids(ent.get("source_chunk_ids") or [], chunk_records)
+                ent["sections"] = ent.get("sections") or ([ent.get("section_title")] if ent.get("section_title") else [])
+                existing = entity_map.get(ent["name"])
+                if existing:
+                    existing_sections = existing.setdefault("sections", [])
+                    for section in ent.get("sections") or []:
+                        if section and section not in existing_sections:
+                            existing_sections.append(section)
+                    existing_ids = existing.setdefault("source_chunk_ids", [])
+                    for cid in ent.get("source_chunk_ids") or []:
+                        if cid not in existing_ids:
+                            existing_ids.append(cid)
+                    if len(ent.get("description", "")) > len(existing.get("description", "")):
+                        existing["description"] = ent.get("description", "")
+                    if len(ent.get("evidence", "")) > len(existing.get("evidence", "")):
+                        existing["evidence"] = ent.get("evidence", "")
+                else:
+                    entity_map[ent["name"]] = ent
+            index["entities"] = list(entity_map.values())
+
+            rel_keys = {(r.get("source"), r.get("target"), r.get("relation"), r.get("section_title", "")) for r in index.get("relations", [])}
+            for rel in secondary.get("relations", []):
+                rel["source_id"] = source_id
+                rel["source_chunk_ids"] = self._resolve_source_chunk_ids(rel.get("source_chunk_ids") or [], chunk_records)
+                key = (rel.get("source"), rel.get("target"), rel.get("relation"), rel.get("section_title", ""))
+                if key not in rel_keys and key[0] and key[1]:
+                    index.setdefault("relations", []).append(rel)
+                    rel_keys.add(key)
+            self._mark_source_stage(
+                source,
+                "secondary_graph",
+                versions["secondary_graph"],
+                enabled=True,
+                entity_count=len(secondary.get("entities", [])),
+                relation_count=len(secondary.get("relations", [])),
+            )
+            resumed = True
+        elif versions["secondary_graph"] == "disabled":
+            self._mark_source_stage(source, "secondary_graph", versions["secondary_graph"], enabled=False)
+
+        self._mark_source_stage(source, "graph", versions["graph"])
+        source["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        if self._source_pipeline_complete(source, index):
+            self._save_wiki_index(book_id, index)
+            self._write_wiki_graph(book_id, index)
+            return {
+                "entries": [],
+                "organized_count": 0,
+                "chunks": len(chunk_records),
+                "entities": len(index.get("entities", [])),
+                "relations": len(index.get("relations", [])),
+                "resumed": resumed,
+                "skipped_existing": not resumed,
+                "stage": "resume" if resumed else "indexed",
+            }
+        return None
 
     def _build_llm_wiki(self, file_path: str, content: str, book_id: str = "") -> dict:
         wiki_dir = self._wiki_base_dir(book_id)
@@ -1483,11 +2538,13 @@ class KnowledgeService:
                 continue
 
         chunk_records = []
+        used_chunk_stems = set()
         for idx, chunk in enumerate(chunks):
             if idx % 10 == 0:
                 self._emit_progress("writing_chunks", f"Writing chunks {idx + 1}/{len(chunks)}", current_chunks=idx + 1, total_chunks=len(chunks))
-            chunk_id = f"{source_id}_chunk_{idx + 1:03d}"
-            chunk_rel = f"chunks/{chunk_id}.md"
+            chunk_stem = self._unique_chunk_stem(source_name, chunk.get("title", ""), idx, used_chunk_stems)
+            chunk_id = f"{source_id}_{idx + 1:03d}"
+            chunk_rel = f"chunks/{chunk_stem}.md"
             metadata = self._chunk_skill_metadata(chunk, source_name)
             llm_metadata = metadata_by_idx.get(idx) or {}
             for key in ("summary", "use_when", "keywords", "content_type", "source_quote"):
@@ -1552,6 +2609,15 @@ class KnowledgeService:
                 },
             })
 
+        pruned_chunks = self._prune_source_wiki_files(
+            wiki_dir,
+            "chunks",
+            source_name,
+            {record.get("path", "") for record in chunk_records},
+        )
+        if pruned_chunks:
+            self._emit_progress("pruning_chunks", f"Pruned {pruned_chunks} stale chunk files", current_file=source_name)
+
         index = self._load_wiki_index(book_id)
         same_source_ids = {
             s.get("id") for s in index.get("sources", [])
@@ -1562,17 +2628,28 @@ class KnowledgeService:
             )
         }
         same_source_ids.add(source_id)
+        source_stem = os.path.splitext(source_name)[0]
+
+        def belongs_to_current_source(item: dict) -> bool:
+            if item.get("source_id") in same_source_ids:
+                return True
+            raw_ids = item.get("source_chunk_ids") or []
+            if not item.get("source_id") and raw_ids and all(str(cid).isdigit() for cid in raw_ids):
+                return True
+            for cid in item.get("source_chunk_ids") or []:
+                if str(cid).startswith(tuple(same_source_ids)):
+                    return True
+            text = " ".join(
+                str(item.get(key, ""))
+                for key in ("source", "target", "description", "evidence")
+            )
+            return bool(source_name and source_name in text) or bool(source_stem and source_stem in text)
+
         index["sources"] = [s for s in index.get("sources", []) if s.get("id") not in same_source_ids]
         index["chunks"] = [c for c in index.get("chunks", []) if c.get("source_id") not in same_source_ids]
         index["pages"] = [p for p in index.get("pages", []) if p.get("source_id") not in same_source_ids]
-        index["entities"] = [
-            e for e in index.get("entities", [])
-            if not any(str(cid).startswith(tuple(same_source_ids)) for cid in (e.get("source_chunk_ids") or []))
-        ]
-        index["relations"] = [
-            r for r in index.get("relations", [])
-            if not any(str(cid).startswith(tuple(same_source_ids)) for cid in (r.get("source_chunk_ids") or []))
-        ]
+        index["entities"] = [e for e in index.get("entities", []) if not belongs_to_current_source(e)]
+        index["relations"] = [r for r in index.get("relations", []) if not belongs_to_current_source(r)]
         index["sources"].append({
             "id": source_id,
             "name": source_name,
@@ -1582,6 +2659,36 @@ class KnowledgeService:
             "chunk_count": len(chunk_records),
             "asset_count": len(assets),
             "assets": assets,
+            "pipeline_stages": {
+                "parse": {
+                    "status": "done",
+                    "version": self._pipeline_versions()["parse"],
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                },
+                "chunk": {
+                    "status": "done",
+                    "version": self._pipeline_versions()["chunk"],
+                    "chunk_count": len(chunk_records),
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                },
+                "primary_metadata": {
+                    "status": "done",
+                    "version": self._pipeline_versions()["primary_metadata"],
+                    "page_count": len(extracted.get("pages", [])),
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                },
+                "secondary_graph": {
+                    "status": "done",
+                    "version": self._pipeline_versions()["secondary_graph"],
+                    "enabled": bool(conf().get("knowledge_secondary_graph_enabled", True)),
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                },
+                "graph": {
+                    "status": "done",
+                    "version": self._pipeline_versions()["graph"],
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                },
+            },
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         })
         index["chunks"].extend(chunk_records)
@@ -1592,15 +2699,7 @@ class KnowledgeService:
             slug = self._safe_slug(title, "page")
             page_id = "page/" + slug
             page_rel = f"pages/{slug}.md"
-            raw_chunk_ids = page.get("source_chunk_ids") or []
-            linked_chunks = []
-            for raw_id in raw_chunk_ids:
-                if isinstance(raw_id, int) and 0 <= raw_id < len(chunk_records):
-                    linked_chunks.append(chunk_records[raw_id]["id"])
-                elif isinstance(raw_id, str) and raw_id.isdigit() and int(raw_id) < len(chunk_records):
-                    linked_chunks.append(chunk_records[int(raw_id)]["id"])
-                elif isinstance(raw_id, str):
-                    linked_chunks.append(raw_id)
+            linked_chunks = self._resolve_source_chunk_ids(page.get("source_chunk_ids") or [], chunk_records)
             md = f"# {title}\n\n{page.get('summary', '')}\n\n"
             keywords = page.get("keywords") or []
             if keywords:
@@ -1624,12 +2723,17 @@ class KnowledgeService:
         entity_map = {e.get("name"): e for e in index.get("entities", []) if e.get("name")}
         for ent in extracted.get("entities", []):
             if ent.get("name"):
+                ent["source_id"] = source_id
+                ent["source_chunk_ids"] = self._resolve_source_chunk_ids(ent.get("source_chunk_ids") or [], chunk_records)
+                ent["sections"] = ent.get("sections") or ([ent.get("section_title")] if ent.get("section_title") else [])
                 entity_map[ent["name"]] = ent
         index["entities"] = list(entity_map.values())
         rel_keys = {(r.get("source"), r.get("target"), r.get("relation")) for r in index.get("relations", [])}
         for rel in extracted.get("relations", []):
             key = (rel.get("source"), rel.get("target"), rel.get("relation"))
             if key not in rel_keys and key[0] and key[1]:
+                rel["source_id"] = source_id
+                rel["source_chunk_ids"] = self._resolve_source_chunk_ids(rel.get("source_chunk_ids") or [], chunk_records)
                 index.setdefault("relations", []).append(rel)
                 rel_keys.add(key)
         index["embedding"] = index.get("embedding") or {
@@ -1658,6 +2762,9 @@ class KnowledgeService:
             raise ValueError("invalid file path")
         if not os.path.isfile(file_path):
             raise FileNotFoundError(f"file not found: {file_path}")
+        resumed = self._resume_indexed_source(file_path, book_id)
+        if resumed:
+            return resumed
         ext = os.path.splitext(file_path)[1].lower()
         if ext == ".md":
             with open(file_path, "r", encoding="utf-8") as f:
@@ -1665,7 +2772,11 @@ class KnowledgeService:
         elif ext in (".txt", ".csv", ".json"):
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
-        elif ext in (".pdf", ".doc", ".docx"):
+        elif ext == ".pdf":
+            content = self._extract_pdf(file_path, book_id=book_id)
+            if not content.strip():
+                content = f"[binary document: {os.path.basename(file_path)}]"
+        elif ext in (".doc", ".docx"):
             content = self._extract_text(file_path)
             if not content.strip():
                 content = f"[binary document: {os.path.basename(file_path)}]"
@@ -1782,7 +2893,7 @@ class KnowledgeService:
         organized_categories = {"concepts", "methods", "entities", "principles", "standards", "facts", "procedures"}
         all_files = []
         for root, dirs, files in os.walk(base):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d != "_llm_wiki"]
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in {"_llm_wiki", "_parsed", "_raw"}]
             rel = os.path.relpath(root, base).replace("\\", "/")
             if rel != ".":
                 first_part = rel.split("/")[0]

@@ -360,11 +360,12 @@ def _build_knowledge_section(workspace_dir: str, language: str) -> List[str]:
         ])
 
     lines.extend([
-        "**知识库查询方式**：优先使用 `knowledge_query`，按 `glob -> search -> peek -> pack -> read_range` 分层访问。",
+        "**知识库查询方式**：优先使用 `knowledge_query`，按 `glob -> search -> peek -> pack -> read_neighbors/read_section -> read_range` 分层访问。",
         "- `glob` 只看知识库概览、来源文档和主题页；不要枚举 `_llm_wiki/chunks/` 内部分块文件。",
         "- `search`/`peek` 基于现有 `_llm_wiki/index.json` 的元数据检索，并只返回少量命中片段，不返回正文全文。",
         "- `pack` 生成教材写作用证据包，优先用于章节写作。",
-        "- `read_range` 只能在需要核对定义、公式、数据、表格、页码或精确引用时按 `chunk_id/path + offset + max_chars` 读取局部内容。",
+        "- `read_neighbors` 用于读取命中块周边上下文；`read_section` 用于读取同一章节/小节的局部内容。",
+        "- `read_range` 只能在需要核对定义、公式、数据、表格、页码或精确引用时按 `chunk_id/path + offset + max_chars` 读取更窄内容。",
         "- 禁止因为关键词命中文档就整篇 `read` PDF/论文/长 Markdown；分块是检索底层，不是上下文注入清单。",
         "",
     ])

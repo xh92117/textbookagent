@@ -325,8 +325,7 @@ class KnowledgeRetriever:
             len(seeds) < max(3, min(limit, 6))
             or (combined.get(seeds[0], 0.0) if seeds else 0.0) < 2.0
         )
-        should_scan_body = weak_metadata or len(chunks) <= 2500
-        if should_scan_body:
+        if weak_metadata:
             body_details = self._body_fallback_scores(query, chunks, max_candidates=max(limit * 3, 12))
             if body_details:
                 max_body = max((info.get("score", 0.0) for info in body_details.values()), default=1.0) or 1.0

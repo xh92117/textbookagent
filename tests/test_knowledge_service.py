@@ -31,6 +31,25 @@ $$M = ql^2 / 8$$
     assert len([chunk for chunk in chunks if "设计计算" in chunk["section"]]) > 1
 
 
+def test_wiki_chunking_uses_top_level_sections_by_default():
+    content = "\n\n".join(
+        [
+            "# Chapter 1\n\n" + ("A" * 12000),
+            "## Section 1.1\n\nNested content",
+            "# Chapter 2\n\nSecond chapter",
+        ]
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        service = KnowledgeService(tmp)
+        chunks = service._chunk_for_wiki(content)
+
+    assert len(chunks) == 2
+    assert chunks[0]["title"] == "Chapter 1"
+    assert "Section 1.1" in chunks[0]["text"]
+    assert len(chunks[0]["text"]) > 12000
+
+
 def test_build_llm_wiki_fallback_records_chunk_metadata_and_graph_evidence():
     content = """# 第一章 桥梁概况
 
@@ -54,6 +73,159 @@ def test_build_llm_wiki_fallback_records_chunk_metadata_and_graph_evidence():
         assert index["chunks"][0]["summary"]
         assert index["chunks"][0]["use_when"]
         assert "source_quote" in index["chunks"][0]
+        assert index["chunks"][0]["path"].startswith("chunks/paper_")
+        assert index["chunks"][0]["path"].endswith(".md")
+
+
+def test_secondary_graph_filters_noise_and_keeps_section_evidence():
+    content = """# 第八章 记忆与检索
+
+# 8.1 RAG 与向量数据库
+
+RAG（检索增强生成）通过查询 Qdrant 向量数据库召回证据，再交给 LLM 生成答案。
+图片 9f2c0d1ab7396e001122334455667788.jpg 不应成为实体。
+
+# 8.2 记忆系统
+
+长期记忆依赖向量检索，短期记忆依赖上下文窗口。
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        service = KnowledgeService(tmp)
+        chunks = service._chunk_for_wiki(content)
+        extracted = service._fallback_section_graph_items(service._section_graph_windows(chunks))
+        filtered = service._dedupe_extracted_wiki(service._filter_graph_items(extracted))
+
+    names = {item["name"] for item in filtered["entities"]}
+    assert "RAG" in names
+    assert "Qdrant" in names
+    assert not any("9f2c0d1ab7396e001122334455667788" in name for name in names)
+    assert all(rel.get("evidence") for rel in filtered["relations"])
+
+
+def test_parse_document_resumes_missing_secondary_graph_without_rebuilding():
+    import json
+
+    with tempfile.TemporaryDirectory() as tmp:
+        service = KnowledgeService(tmp)
+        source_dir = os.path.join(tmp, "knowledge", "tb", "sources")
+        wiki_dir = os.path.join(tmp, "knowledge", "tb", "_llm_wiki")
+        os.makedirs(os.path.join(wiki_dir, "chunks"), exist_ok=True)
+        os.makedirs(os.path.join(wiki_dir, "pages"), exist_ok=True)
+        source_path = os.path.join(source_dir, "paper.md")
+        os.makedirs(source_dir, exist_ok=True)
+        with open(source_path, "w", encoding="utf-8") as f:
+            f.write("# 第八章 记忆与检索\n\nRAG 与 Qdrant。")
+        signature = service._source_file_signature(source_path)
+        source_id = "paper_source"
+        chunk_id = source_id + "_001"
+        with open(os.path.join(wiki_dir, "chunks", "paper_第八章_记忆与检索.md"), "w", encoding="utf-8") as f:
+            f.write("---\nid: paper_source_001\n---\n\n# 第八章 记忆与检索\n\n## 8.1 RAG\n\nRAG 调用 Qdrant。")
+        index = {
+            "version": "llm-wiki-v1",
+            "sources": [{
+                "id": source_id,
+                "name": "paper.md",
+                "path": source_path,
+                **signature,
+                "pipeline_stages": {
+                    "chunk": {"status": "done", "version": service._pipeline_versions()["chunk"]},
+                    "primary_metadata": {"status": "done", "version": service._pipeline_versions()["primary_metadata"]},
+                },
+            }],
+            "chunks": [{
+                "id": chunk_id,
+                "source_id": source_id,
+                "title": "第八章 记忆与检索",
+                "section": "第八章 记忆与检索",
+                "path": "chunks/paper_第八章_记忆与检索.md",
+                "summary": "RAG",
+                "use_when": "RAG",
+                "keywords": ["RAG"],
+                "related_entities": [],
+                "chars": 20,
+            }],
+            "pages": [{
+                "id": "page/rag",
+                "title": "RAG",
+                "path": "pages/rag.md",
+                "summary": "RAG",
+                "source_id": source_id,
+                "source_chunk_ids": [chunk_id],
+            }],
+            "entities": [],
+            "relations": [],
+        }
+        with open(os.path.join(wiki_dir, "index.json"), "w", encoding="utf-8") as f:
+            json.dump(index, f, ensure_ascii=False)
+
+        service._build_llm_wiki = lambda *a, **k: (_ for _ in ()).throw(AssertionError("should resume instead of rebuilding"))
+        service._extract_secondary_graph_items = lambda chunks, source_name: {
+            "pages": [],
+            "chunk_metadata": [],
+            "entities": [{
+                "name": "RAG",
+                "type": "method",
+                "description": "检索增强生成",
+                "source_chunk_ids": [0],
+                "section_title": "8.1 RAG",
+                "evidence": "RAG 调用 Qdrant",
+            }],
+            "relations": [{
+                "source": "RAG",
+                "target": "Qdrant",
+                "relation": "calls",
+                "source_chunk_ids": [0],
+                "section_title": "8.1 RAG",
+                "evidence": "RAG 调用 Qdrant",
+                "confidence": 0.8,
+            }],
+        }
+
+        result = service.parse_document(source_path, "tb")
+        updated = service._load_wiki_index("tb")
+
+        assert result["resumed"] is True
+        assert updated["sources"][0]["pipeline_stages"]["secondary_graph"]["version"] == service._pipeline_versions()["secondary_graph"]
+        assert updated["entities"][0]["source_chunk_ids"] == [chunk_id]
+        assert updated["relations"][0]["source_chunk_ids"] == [chunk_id]
+
+
+def test_graph_normalization_migration_normalizes_types_and_relations():
+    import json
+
+    with tempfile.TemporaryDirectory() as tmp:
+        service = KnowledgeService(tmp)
+        wiki_dir = os.path.join(tmp, "knowledge", "tb", "_llm_wiki")
+        os.makedirs(wiki_dir, exist_ok=True)
+        index = {
+            "version": "llm-wiki-v1",
+            "sources": [],
+            "chunks": [],
+            "pages": [],
+            "entities": [
+                {"name": "openai", "type": "平台", "description": "OpenAI 平台", "source_chunk_ids": ["c1"]},
+                {"name": "OpenAI", "type": "platform", "description": "OpenAI", "source_chunk_ids": ["c1"], "sections": ["s1"]},
+                {"name": "9f2c0d1ab7396e001122334455667788", "type": "concept", "source_chunk_ids": ["c1"]},
+            ],
+            "relations": [
+                {"source": "HelloAgentsLLM", "target": "openai", "relation": "依赖关系", "source_chunk_ids": ["c1"], "evidence": "client = OpenAI(...)"},
+                {"source": "HelloAgentsLLM", "target": "OpenAI", "relation": "depends_on", "source_chunk_ids": ["c2"], "evidence": "client = OpenAI(...)", "section_title": "s1"},
+                {"source": "source", "target": "OpenAI", "relation": "包含", "source_chunk_ids": ["c3"], "evidence": "noise"},
+            ],
+        }
+        with open(os.path.join(wiki_dir, "index.json"), "w", encoding="utf-8") as f:
+            json.dump(index, f, ensure_ascii=False)
+
+        result = service.migrate_graph_normalization("tb")
+        migrated = service._load_wiki_index("tb")
+
+    assert result["status"] == "success"
+    names = {e["name"]: e for e in migrated["entities"]}
+    assert "OpenAI" in names
+    assert names["OpenAI"]["type"] == "platform"
+    assert not any("9f2c0d1ab7396e001122334455667788" == name for name in names)
+    assert all(r["relation"] in {"depends_on", "contains"} for r in migrated["relations"])
+    assert any(r["relation"] == "depends_on" and r["target"] == "OpenAI" for r in migrated["relations"])
 
 
 def test_organize_knowledge_skips_unchanged_indexed_sources():
@@ -162,6 +334,7 @@ def test_get_status_reports_actual_wiki_chunk_counts():
 
 def test_large_wiki_uses_fast_local_metadata(monkeypatch):
     import tempfile
+    from config import conf
     with tempfile.TemporaryDirectory() as tmp:
         service = KnowledgeService(tmp)
         chunks = [{"title": f"Section {i}", "text": "桥梁结构 智能体 知识库 " * 80, "section": f"Section {i}", "part": 1} for i in range(25)]
@@ -172,7 +345,12 @@ def test_large_wiki_uses_fast_local_metadata(monkeypatch):
             raise AssertionError("LLM should not be called for fast large-source metadata")
 
         service._get_llm = fail_llm
-        result = service._extract_wiki_items(chunks, "paper.md")
+        old_threshold = conf().get("knowledge_fast_chunk_threshold", 200)
+        conf()["knowledge_fast_chunk_threshold"] = 20
+        try:
+            result = service._extract_wiki_items(chunks, "paper.md")
+        finally:
+            conf()["knowledge_fast_chunk_threshold"] = old_threshold
         assert called["llm"] is False
         assert result["pages"]
         assert result["entities"]
@@ -335,3 +513,63 @@ def test_extracted_asset_filter_skips_small_and_logo_like_images():
 
         keep, reason = service._should_keep_extracted_asset(b"not an image", name="diagram.png", width=800, height=500)
         assert keep is True
+
+
+def test_pdf_parse_prefers_mineru_when_configured():
+    from config import conf
+
+    with tempfile.TemporaryDirectory() as tmp:
+        service = KnowledgeService(tmp)
+        source_dir = os.path.join(tmp, "knowledge", "tb", "sources")
+        os.makedirs(source_dir, exist_ok=True)
+        path = os.path.join(source_dir, "paper.pdf")
+        with open(path, "wb") as f:
+            f.write(b"%PDF demo")
+
+        old_key = conf().get("mineru_api_key", "")
+        conf()["mineru_api_key"] = "token"
+        captured = {}
+        try:
+            service._extract_pdf_with_mineru = lambda fp, book_id="": "# MinerU Parsed\n\nclean markdown"
+            service._extract_pdf_local = lambda fp: (_ for _ in ()).throw(AssertionError("local parser should not be used"))
+            def fake_build(fp, content, book_id=""):
+                captured["content"] = content
+                return {"organized_count": 1, "chunks": 1}
+
+            service._build_llm_wiki = fake_build
+            result = service.parse_document(path, "tb")
+        finally:
+            conf()["mineru_api_key"] = old_key
+
+        assert result["chunks"] == 1
+        assert "MinerU Parsed" in captured["content"]
+
+
+def test_pdf_parse_falls_back_when_mineru_returns_empty():
+    from config import conf
+
+    with tempfile.TemporaryDirectory() as tmp:
+        service = KnowledgeService(tmp)
+        source_dir = os.path.join(tmp, "knowledge", "tb", "sources")
+        os.makedirs(source_dir, exist_ok=True)
+        path = os.path.join(source_dir, "paper.pdf")
+        with open(path, "wb") as f:
+            f.write(b"%PDF demo")
+
+        old_key = conf().get("mineru_api_key", "")
+        conf()["mineru_api_key"] = "token"
+        captured = {}
+        try:
+            service._extract_pdf_with_mineru = lambda fp, book_id="": ""
+            service._extract_pdf_local = lambda fp: "# Local Parsed\n\nfallback markdown"
+            def fake_build(fp, content, book_id=""):
+                captured["content"] = content
+                return {"organized_count": 1, "chunks": 1}
+
+            service._build_llm_wiki = fake_build
+            result = service.parse_document(path, "tb")
+        finally:
+            conf()["mineru_api_key"] = old_key
+
+        assert result["chunks"] == 1
+        assert "Local Parsed" in captured["content"]

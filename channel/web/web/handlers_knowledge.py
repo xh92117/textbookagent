@@ -162,7 +162,7 @@ class KnowledgeOrganizeHandler:
         try:
             body = read_json_body()
             book_id = body.get("book_id", "")
-            force_value = body.get("force", body.get("force_rebuild", True))
+            force_value = body.get("force", body.get("force_rebuild", False))
             force = str(force_value).strip().lower() not in ("0", "false", "no", "off")
             status_key = book_id or "__global__"
             if _organize_status.get(status_key, {}).get("running"):
