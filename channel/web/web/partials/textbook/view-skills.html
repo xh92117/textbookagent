@@ -1,22 +1,22 @@
 <div class="view-page" id="view-skills">
-                    <div class="workspace-header" style="display:flex;align-items:center;justify-content:space-between;">
-                        <h1>技能管理</h1>
-                        <div style="display:flex;gap:8px;">
-                            <button onclick="refreshSkills()" style="background:var(--card);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 12px;font-size:13px;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:6px;">
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
-                                同步技能
-                            </button>
-                            <button onclick="showAddSkillModal()" style="background:#10b981;color:#fff;border:none;border-radius:var(--radius-sm);padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                                上传技能
-                            </button>
-                        </div>
-                    </div>
-                    <div style="margin-bottom:12px;display:flex;gap:8px;">
-                        <button onclick="filterSkills('all')" id="filter-all" class="skill-filter-btn active" style="padding:4px 12px;border-radius:var(--radius-sm);border:1px solid var(--border);font-size:12px;cursor:pointer;">全部</button>
-                        <button onclick="filterSkills('builtin')" id="filter-builtin" class="skill-filter-btn" style="padding:4px 12px;border-radius:var(--radius-sm);border:1px solid var(--border);font-size:12px;cursor:pointer;">内置技能</button>
-                        <button onclick="filterSkills('custom')" id="filter-custom" class="skill-filter-btn" style="padding:4px 12px;border-radius:var(--radius-sm);border:1px solid var(--border);font-size:12px;cursor:pointer;">自定义技能</button>
-                    </div>
-                    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;" id="skillsGrid">
-                    </div>
-                </div>
+    <div class="workspace-header" style="display:flex;align-items:center;justify-content:space-between;">
+        <h1>技能管理</h1>
+        <div style="display:flex;gap:8px;">
+            <button onclick="refreshSkills()" style="background:var(--card);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 12px;font-size:13px;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:6px;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+                同步技能
+            </button>
+            <button onclick="showAddSkillModal()" style="background:#10b981;color:#fff;border:none;border-radius:var(--radius-sm);padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                上传技能
+            </button>
+        </div>
+    </div>
+    <div style="margin-bottom:12px;display:flex;gap:8px;">
+        <button onclick="filterSkills('all')" id="filter-all" class="skill-filter-btn active" style="padding:4px 12px;border-radius:var(--radius-sm);border:1px solid var(--border);font-size:12px;cursor:pointer;">全部</button>
+        <button onclick="filterSkills('builtin')" id="filter-builtin" class="skill-filter-btn" style="padding:4px 12px;border-radius:var(--radius-sm);border:1px solid var(--border);font-size:12px;cursor:pointer;">内置技能</button>
+        <button onclick="filterSkills('custom')" id="filter-custom" class="skill-filter-btn" style="padding:4px 12px;border-radius:var(--radius-sm);border:1px solid var(--border);font-size:12px;cursor:pointer;">自定义技能</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;" id="skillsGrid">
+    </div>
+</div>

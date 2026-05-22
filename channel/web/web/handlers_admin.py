@@ -1,6 +1,11 @@
 import json
 import os
+import re
+import shutil
 import time
+import zipfile
+import tempfile
+from pathlib import Path
 
 import web
 
@@ -15,6 +20,77 @@ from channel.web.web.utils import (
 def _generate_session_title(user_message: str, assistant_reply: str = "") -> str:
     from agent.chat.session_service import generate_session_title
     return generate_session_title(user_message, assistant_reply)
+
+
+def _safe_skill_name(name: str) -> str:
+    name = re.sub(r"\.zip$", "", os.path.basename(name or ""), flags=re.IGNORECASE)
+    name = re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip(".-")
+    return name or "uploaded-skill"
+
+
+def _safe_extract_zip(zip_path: str, extract_dir: str) -> None:
+    extract_root = Path(extract_dir).resolve()
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for member in zf.infolist():
+            target = (extract_root / member.filename).resolve()
+            try:
+                target.relative_to(extract_root)
+            except ValueError:
+                raise ValueError("zip contains unsafe path")
+        zf.extractall(extract_root)
+
+
+def _find_uploaded_skill_dirs(extract_dir: str, fallback_name: str) -> list:
+    root = Path(extract_dir)
+    if (root / "SKILL.md").is_file():
+        return [(fallback_name, root)]
+
+    found = []
+    for skill_md in root.rglob("SKILL.md"):
+        skill_dir = skill_md.parent
+        if any(part.startswith(".") for part in skill_dir.relative_to(root).parts):
+            continue
+        found.append((_safe_skill_name(skill_dir.name), skill_dir))
+    return found
+
+
+def _install_uploaded_skill_zip(zip_path: str, filename: str, custom_dir: str) -> list:
+    fallback_name = _safe_skill_name(filename)
+    installed = []
+    os.makedirs(custom_dir, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="skill_upload_") as tmp_dir:
+        extract_dir = os.path.join(tmp_dir, "extracted")
+        os.makedirs(extract_dir, exist_ok=True)
+        _safe_extract_zip(zip_path, extract_dir)
+
+        skill_dirs = _find_uploaded_skill_dirs(extract_dir, fallback_name)
+        if not skill_dirs:
+            raise ValueError("压缩包中未找到包含 SKILL.md 的技能目录")
+
+        for skill_name, src_dir in skill_dirs:
+            dst_dir = os.path.join(custom_dir, skill_name)
+            dst_resolved = Path(dst_dir).resolve()
+            custom_resolved = Path(custom_dir).resolve()
+            try:
+                dst_resolved.relative_to(custom_resolved)
+            except ValueError:
+                raise ValueError(f"invalid skill name: {skill_name}")
+            if os.path.exists(dst_resolved):
+                shutil.rmtree(dst_resolved)
+            shutil.copytree(src_dir, dst_resolved)
+            installed.append(skill_name)
+
+    return installed
+
+
+def _refresh_running_agent_skills() -> int:
+    try:
+        from bridge.bridge import Bridge
+        return Bridge().get_agent_bridge().refresh_all_skills()
+    except Exception as e:
+        logger.debug(f"[WebChannel] refresh running skills skipped: {e}")
+        return 0
 
 
 class ToolsHandler:
@@ -67,6 +143,49 @@ class SkillsHandler:
             from agent.skills.manager import SkillManager
             workspace_root = get_workspace_root()
             content_type = web.ctx.env.get('CONTENT_TYPE', '')
+
+            if 'multipart/form-data' in content_type:
+                web.header('Content-Type', 'application/json; charset=utf-8')
+                import shutil
+                import tempfile
+                import zipfile
+                x = web.input(file={})
+                uploaded = x.get('file')
+                if not getattr(uploaded, 'filename', None):
+                    return json.dumps({"status": "error", "message": "请选择要上传的文件"}, ensure_ascii=False)
+
+                filename = uploaded.filename
+                if not filename.lower().endswith('.zip'):
+                    return json.dumps({"status": "error", "message": "仅支持 .zip 压缩文件格式"}, ensure_ascii=False)
+
+                custom_dir = os.path.join(workspace_root, "skills")
+                os.makedirs(custom_dir, exist_ok=True)
+                tmp_dir = tempfile.mkdtemp(prefix="skill_upload_")
+                try:
+                    zip_path = os.path.join(tmp_dir, os.path.basename(filename))
+                    with open(zip_path, 'wb') as f:
+                        f.write(uploaded.file.read())
+
+                    installed = _install_uploaded_skill_zip(zip_path, filename, custom_dir)
+                    manager = SkillManager(custom_dir=custom_dir)
+                    manager.refresh_skills()
+                    refreshed = _refresh_running_agent_skills()
+                    service = SkillService(manager)
+                    skills = service.query()
+                    for s in skills:
+                        s['source'] = s.get('source', 'builtin')
+                    return json.dumps({
+                        "status": "success",
+                        "message": f"成功安装/更新: {', '.join(installed)}；已同步 skills_config.json；已刷新 {refreshed} 个运行中的智能体",
+                        "installed": installed,
+                        "skills": skills,
+                    }, ensure_ascii=False)
+                except zipfile.BadZipFile:
+                    return json.dumps({"status": "error", "message": "压缩文件已损坏，无法解压"}, ensure_ascii=False)
+                except ValueError as e:
+                    return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+                finally:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
 
             if 'multipart/form-data' in content_type:
                 web.header('Content-Type', 'application/json; charset=utf-8')
@@ -152,13 +271,16 @@ class SkillsHandler:
                 if not name:
                     return json.dumps({"status": "error", "message": "name is required"})
                 service.open({"name": name})
+                _refresh_running_agent_skills()
             elif action == "close":
                 name = body.get("name")
                 if not name:
                     return json.dumps({"status": "error", "message": "name is required"})
                 service.close({"name": name})
+                _refresh_running_agent_skills()
             elif action == "refresh":
                 manager.refresh_skills()
+                _refresh_running_agent_skills()
                 skills = service.query()
                 for s in skills:
                     s['source'] = s.get('source', 'builtin')
@@ -171,6 +293,7 @@ class SkillsHandler:
                 if entry and entry.skill.source == 'builtin':
                     return json.dumps({"status": "error", "message": "内置技能不可删除"}, ensure_ascii=False)
                 service.delete({"name": name})
+                _refresh_running_agent_skills()
                 return json.dumps({"status": "success", "message": f"技能 '{name}' 已删除"}, ensure_ascii=False)
             else:
                 return json.dumps({"status": "error", "message": f"unknown action: {action}"})

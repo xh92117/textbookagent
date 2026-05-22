@@ -1,5 +1,6 @@
 import inspect
 import json
+import zipfile
 
 from channel.web.web.routes import get_urls
 import channel.web.web.web_channel as web_channel
@@ -93,3 +94,44 @@ def test_config_handler_can_switch_active_chat_model(tmp_path, monkeypatch):
     assert response["applied"]["model"] == "deepseek-reasoner"
     assert saved["active_chat_model_id"] == "m2"
     assert saved["model"] == "deepseek-reasoner"
+
+
+def test_uploaded_skill_zip_installs_to_workspace_and_updates_config(tmp_path):
+    zip_path = tmp_path / "demo-skill.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr(
+            "demo-skill/SKILL.md",
+            "---\nname: demo-skill\ndescription: Demo uploaded skill.\n---\n\nUse this skill for tests.\n",
+        )
+
+    custom_dir = tmp_path / "workspace" / "skills"
+    installed = handlers_admin._install_uploaded_skill_zip(str(zip_path), zip_path.name, str(custom_dir))
+
+    assert installed == ["demo-skill"]
+    assert (custom_dir / "demo-skill" / "SKILL.md").exists()
+
+    from agent.skills.manager import SkillManager
+
+    manager = SkillManager(custom_dir=str(custom_dir))
+    assert "demo-skill" in manager.skills
+    config = json.loads((custom_dir / "skills_config.json").read_text(encoding="utf-8"))
+    assert config["demo-skill"]["enabled"] is True
+    assert config["demo-skill"]["source"] == "custom"
+
+
+def test_uploaded_skill_with_bom_skill_md_is_usable(tmp_path):
+    zip_path = tmp_path / "bom-skill.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr(
+            "SKILL.md",
+            "\ufeff---\nname: bom-skill\ndescription: BOM skill should load.\n---\n\nBody.\n",
+        )
+
+    custom_dir = tmp_path / "workspace" / "skills"
+    installed = handlers_admin._install_uploaded_skill_zip(str(zip_path), zip_path.name, str(custom_dir))
+
+    from agent.skills.manager import SkillManager
+
+    manager = SkillManager(custom_dir=str(custom_dir))
+    assert installed == ["bom-skill"]
+    assert "bom-skill" in manager.skills

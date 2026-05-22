@@ -515,6 +515,14 @@ function reviewCurrentOutline() {
     navigateToChat('请审查《' + getCurrentBookTitle() + '》教材大纲');
 }
 
+function aiOptimizeOutline() {
+    navigateToChat('请优化《' + getCurrentBookTitle() + '》教材大纲');
+}
+
+function reviewOutline() {
+    reviewCurrentOutline();
+}
+
 function reviewCurrentChapter() {
     if (!currentChapterNum) {
         showToast('请先选择章节', 'error');

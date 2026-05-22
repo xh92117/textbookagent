@@ -38,6 +38,7 @@ function filterSkills(filter) {
 
 function renderSkills(skills) {
     var grid = document.getElementById('skillsGrid');
+    if (!grid) return;
     if (!skills || skills.length === 0) {
         grid.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted-fg);grid-column:1/-1;">暂无技能数据</div>';
         return;
@@ -62,16 +63,16 @@ function renderSkills(skills) {
 
         html += '<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-md);padding:16px;display:flex;align-items:center;gap:12px;">';
         html += '<div style="width:36px;height:36px;border-radius:var(--radius-sm);background:' + bgColor + ';color:' + txtColor + ';display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;">' + icon + '</div>';
-        html += '<div style="flex:1"><div style="font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;">' + escapeHtml(name);
+        html += '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' + escapeHtml(name);
         if (isBuiltin) {
             html += '<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(99,102,241,0.1);color:var(--phase-persist);font-weight:500;">内置</span>';
         } else {
             html += '<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(16,185,129,0.1);color:var(--accent);font-weight:500;">自定义</span>';
         }
-        html += '</div><div style="font-size:11px;color:var(--muted-fg)">' + escapeHtml(desc) + '</div></div>';
-        html += '<label class="export-toggle" style="margin:0;"><input type="checkbox" ' + (isEnabled ? 'checked' : '') + ' onchange="toggleSkill(\'' + escapeHtml(name) + '\', this.checked)"><span class="toggle-switch"></span></label>';
+        html += '</div><div style="font-size:11px;color:var(--muted-fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(desc) + '</div></div>';
+        html += '<label class="export-toggle" style="margin:0;"><input type="checkbox" ' + (isEnabled ? 'checked' : '') + ' onchange="toggleSkill(\'' + escapeJsString(name) + '\', this.checked)"><span class="toggle-switch"></span></label>';
         if (!isBuiltin) {
-            html += '<button onclick="deleteSkill(\'' + escapeHtml(name) + '\')" title="删除技能" style="background:none;border:none;color:var(--muted-fg);cursor:pointer;padding:4px;font-size:14px;line-height:1;">&times;</button>';
+            html += '<button onclick="deleteSkill(\'' + escapeJsString(name) + '\')" title="删除技能" style="background:none;border:none;color:var(--muted-fg);cursor:pointer;padding:4px;font-size:14px;line-height:1;">&times;</button>';
         }
         html += '</div>';
     }
@@ -80,13 +81,19 @@ function renderSkills(skills) {
 
 async function toggleSkill(name, enabled) {
     try {
-        await fetch(API_BASE + '/api/skills', {
+        var response = await fetch(API_BASE + '/api/skills', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({action: enabled ? 'open' : 'close', name: name})
         });
+        var data = await response.json();
+        if (data.status !== 'success') {
+            alert(data.message || '操作失败');
+            loadSkills();
+        }
     } catch (e) {
         console.error('Failed to toggle skill:', e);
+        loadSkills();
     }
 }
 
@@ -110,6 +117,7 @@ async function deleteSkill(name) {
 }
 
 function showAddSkillModal() {
+    ensureAddSkillModal();
     document.getElementById('addSkillModal').style.display = 'flex';
     var fileInput = document.getElementById('skillZipFile');
     if (fileInput) fileInput.value = '';
@@ -118,7 +126,33 @@ function showAddSkillModal() {
 }
 
 function hideAddSkillModal() {
-    document.getElementById('addSkillModal').style.display = 'none';
+    var modal = document.getElementById('addSkillModal');
+    if (modal) modal.style.display = 'none';
+}
+
+function ensureAddSkillModal() {
+    if (document.getElementById('addSkillModal')) return;
+    var modal = document.createElement('div');
+    modal.id = 'addSkillModal';
+    modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;align-items:center;justify-content:center;padding:20px;';
+    modal.innerHTML = ''
+        + '<div style="width:min(520px,92vw);background:var(--card);border:1px solid var(--border);border-radius:var(--radius-md);box-shadow:0 20px 60px rgba(0,0,0,.28);padding:20px;">'
+        + '  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;">'
+        + '    <h3 style="margin:0;font-size:18px;color:var(--fg);">上传技能</h3>'
+        + '    <button type="button" onclick="hideAddSkillModal()" style="background:none;border:none;color:var(--muted-fg);font-size:24px;line-height:1;cursor:pointer;">&times;</button>'
+        + '  </div>'
+        + '  <p style="margin:0 0 14px;color:var(--muted-fg);font-size:13px;line-height:1.6;">请选择 .zip 技能包。压缩包可直接包含 SKILL.md，也可包含一个或多个“技能名/SKILL.md”目录。上传后会保存到当前工作区 skills 目录，并同步 skills_config.json。</p>'
+        + '  <input id="skillZipFile" type="file" accept=".zip" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--fg);">'
+        + '  <div id="skillUploadStatus" style="display:none;margin-top:12px;font-size:13px;"></div>'
+        + '  <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px;">'
+        + '    <button type="button" onclick="hideAddSkillModal()" style="background:var(--card);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 14px;cursor:pointer;">取消</button>'
+        + '    <button id="uploadSkillBtn" type="button" onclick="uploadSkill()" style="background:#10b981;color:#fff;border:none;border-radius:var(--radius-sm);padding:8px 16px;font-weight:600;cursor:pointer;">上传并安装</button>'
+        + '  </div>'
+        + '</div>';
+    modal.addEventListener('click', function(event) {
+        if (event.target === modal) hideAddSkillModal();
+    });
+    document.body.appendChild(modal);
 }
 
 async function uploadSkill() {
@@ -148,7 +182,8 @@ async function uploadSkill() {
         var data = await response.json();
         if (data.status === 'success') {
             if (statusEl) { statusEl.style.color = '#10b981'; statusEl.textContent = data.message || '安装成功'; }
-            setTimeout(function() { hideAddSkillModal(); loadSkills(); }, 1200);
+            if (data.skills) _allSkills = data.skills;
+            setTimeout(function() { hideAddSkillModal(); loadSkills(); }, 900);
         } else {
             if (statusEl) { statusEl.style.color = 'var(--destructive)'; statusEl.textContent = data.message || '上传失败'; }
         }
@@ -178,14 +213,6 @@ async function refreshSkills() {
     }
 }
 
-function aiOptimizeOutline() {
-    if (!currentBookId) { alert('请先选择一本教材'); return; }
-    var title = typeof getCurrentBookTitle === 'function' ? getCurrentBookTitle() : ((currentBookData && currentBookData.title) || '当前教材');
-    navigateToChat('请优化《' + title + '》教材大纲');
-}
-
-function reviewOutline() {
-    if (!currentBookId) { alert('请先选择一本教材'); return; }
-    var title = typeof getCurrentBookTitle === 'function' ? getCurrentBookTitle() : ((currentBookData && currentBookData.title) || '当前教材');
-    navigateToChat('请审查《' + title + '》教材大纲');
+function escapeJsString(value) {
+    return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '');
 }
