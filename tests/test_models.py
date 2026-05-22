@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from agent.textbook.models import (
     TextbookConfig, OutlineNode, Chapter, Exercise,
     ChartReq, ImageReq, ReviewResult, DimensionResult, Issue,
+    WritingSpec,
 )
 
 
@@ -43,6 +44,31 @@ def test_textbook_config_serialization():
     restored2 = TextbookConfig.from_dict(d)
     assert restored2.title == config.title
     assert restored2.id == config.id
+
+
+def test_textbook_config_generates_audience_specific_writing_spec():
+    config = TextbookConfig(
+        title="工程实训教材",
+        target_audience="高职学生",
+        level="基础",
+        style="应用实训",
+    )
+
+    spec = config.ensure_writing_spec()
+
+    assert spec.learning_orientation == "应用型/实训型"
+    assert spec.content_ratio.code == 5
+    assert "任务场景" in spec.chapter_structure
+    assert spec.visual_policy.min_assets_per_chapter == 2
+
+
+def test_writing_spec_round_trips_from_dict():
+    spec = WritingSpec.default_for("研究生", "高级", "理论")
+    restored = WritingSpec.from_dict(spec.to_dict())
+
+    assert restored.learning_orientation == "理论研究型"
+    assert restored.content_ratio.theory == 45
+    assert restored.visual_policy.preferred_types == spec.visual_policy.preferred_types
 
 
 def test_outline_node_tree():

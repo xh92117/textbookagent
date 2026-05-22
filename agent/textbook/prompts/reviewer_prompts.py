@@ -9,6 +9,7 @@ REVIEWER_OUTLINE_SYSTEM_PROMPT = """你是教材大纲审查智能体。只审�
 6. 前置依赖正确性
 7. 术语一致性
 8. 实践、案例、练习和图表规划
+9. 教材级 WritingSpec 符合度，包括受众、定位、内容比例、章节结构和视觉策略
 
 ## 禁止事项
 - 不要输出 Markdown 解释，只输出 JSON。
@@ -41,6 +42,10 @@ REVIEWER_CHAPTER_SYSTEM_PROMPT = """你是教材章节审查智能体。只审�
 18. Markdown 格式
 19. 本章小结完整性
 20. 与前后章节衔接
+21. 教材级 WritingSpec 符合度
+22. 内容比例符合度（理论、案例、流程、实践、代码）
+23. 语言风格符合度（避免过度比喻、自造概念、频繁双引号和口号化表达）
+24. 有效字数达标情况
 
 ## 禁止事项
 - 不要输出 Markdown 解释，只输出 JSON。
@@ -62,6 +67,12 @@ REVIEWER_USER_PROMPT_TEMPLATE = """请审查以下{mode}内容。
 ## 大纲/上下文参考
 {outline_context}
 
+## 教材级 WritingSpec
+{writing_spec}
+
+## 内容统计
+{content_metrics}
+
 ## 输出要求
 严格输出一个 JSON 对象，不要 Markdown 代码块，不要额外解释。字段如下：
 {{
@@ -75,4 +86,6 @@ REVIEWER_USER_PROMPT_TEMPLATE = """请审查以下{mode}内容。
   ]
 }}
 
-评分标准：score >= 80 通过，60-79 需要修改，<60 不通过。请按 {dimension_count} 个维度审查。"""
+评分标准：score >= 80 通过，60-79 需要修改，<60 不通过。请按 {dimension_count} 个维度审查。
+
+如果内容明显不符合 WritingSpec（例如受众错位、代码比例明显超出、应用型教材写成纯理论、理论型教材写成浅表案例集），即使语言通顺也必须扣分并给出 warning 或 critical。"""

@@ -160,6 +160,16 @@
                                         <div class="detail-label">例题数量</div>
                                         <input type="number" id="prefExampleCount" value="3" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-sans);">
                                     </div>
+                                    <div class="detail-section">
+                                        <div class="detail-label">教材定位</div>
+                                        <select id="prefLearningOrientation" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-sans);background:var(--card);">
+                                            <option>应用型</option>
+                                            <option>应用型/实训型</option>
+                                            <option>理论研究型</option>
+                                            <option>项目开发型</option>
+                                            <option>考证辅导型</option>
+                                        </select>
+                                    </div>
                                 </div>
                                 <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px;">
                                     <h3 style="font-size:14px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px;">
@@ -191,6 +201,24 @@
                                             <span>启用自动优化</span>
                                         </label>
                                     </div>
+                                </div>
+                            </div>
+                            <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px;margin-bottom:20px;">
+                                <h3 style="font-size:14px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px;">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--secondary)" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M4 4.5A2.5 2.5 0 016.5 2H20v20H6.5A2.5 2.5 0 014 19.5z"/></svg>
+                                    全局写作规格
+                                </h3>
+                                <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:14px;">
+                                    <div><div class="detail-label">理论%</div><input type="number" id="prefRatioTheory" min="0" max="100" value="25" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--card);color:var(--fg);"></div>
+                                    <div><div class="detail-label">案例%</div><input type="number" id="prefRatioCase" min="0" max="100" value="25" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--card);color:var(--fg);"></div>
+                                    <div><div class="detail-label">流程%</div><input type="number" id="prefRatioProcedure" min="0" max="100" value="20" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--card);color:var(--fg);"></div>
+                                    <div><div class="detail-label">实践%</div><input type="number" id="prefRatioPractice" min="0" max="100" value="20" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--card);color:var(--fg);"></div>
+                                    <div><div class="detail-label">代码%</div><input type="number" id="prefRatioCode" min="0" max="100" value="10" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--card);color:var(--fg);"></div>
+                                    <div><div class="detail-label">每章视觉资产</div><input type="number" id="prefMinVisualAssets" min="0" max="10" value="1" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--card);color:var(--fg);"></div>
+                                </div>
+                                <div class="detail-section" style="margin-bottom:0;">
+                                    <div class="detail-label">其他备注</div>
+                                    <textarea id="prefAdditionalNotes" rows="4" placeholder="例如：更重工程应用、减少代码、每章增加岗位任务、避免过度比喻等。这些备注会写入本教材的全局 WritingSpec。" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-sans);background:var(--card);color:var(--fg);resize:vertical;"></textarea>
                                 </div>
                             </div>
                             <button class="btn-primary" style="width:100%;justify-content:center;padding:12px;font-size:14px;" onclick="saveBookPreferences()">保存教材偏好</button>

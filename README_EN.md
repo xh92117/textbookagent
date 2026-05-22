@@ -1,5 +1,9 @@
 # TextBookAgent
 
+<p align="right">
+  <strong>English</strong> | <a href="README.md">中文</a>
+</p>
+
 TextBookAgent is an agentic textbook authoring system for textbooks, lecture notes, course materials, and professional knowledge documents. It combines large language models, textbook production pipelines, knowledge retrieval, Agent Skills, memory, visual asset generation, and Word export into a local-first authoring workspace.
 
 The project is not intended to be a general-purpose chatbot. Its main goal is to help users create a textbook: organize source materials, generate an outline, write chapters, review quality, revise content, polish style, and export the final document.

@@ -1,5 +1,6 @@
 import json
 from .base import TextbookBaseAgent
+from ..metrics import measure_content
 from ..prompts.reviewer_prompts import (
     REVIEWER_OUTLINE_SYSTEM_PROMPT, REVIEWER_CHAPTER_SYSTEM_PROMPT,
     REVIEWER_USER_PROMPT_TEMPLATE,
@@ -22,7 +23,10 @@ class ReviewerAgent(TextbookBaseAgent):
     def _build_user_prompt(self, input_data: dict, context: dict = None) -> str:
         mode = getattr(self, '_review_mode', 'chapter')
         mode_label = '大纲' if mode == 'outline' else '章节'
-        dimension_count = '8' if mode == 'outline' else '20'
+        dimension_count = '9' if mode == 'outline' else '24'
+        metrics = input_data.get('content_metrics')
+        if not metrics:
+            metrics = measure_content(input_data.get('content', '')).to_dict()
         return REVIEWER_USER_PROMPT_TEMPLATE.format(
             mode=mode,
             mode_label=mode_label,
@@ -31,6 +35,8 @@ class ReviewerAgent(TextbookBaseAgent):
             content=input_data.get('content', ''),
             outline_context=input_data.get('outline_context', ''),
             dimension_count=dimension_count,
+            writing_spec=input_data.get('writing_spec', ''),
+            content_metrics=json.dumps(metrics, ensure_ascii=False, indent=2),
         )
 
     def _parse_output(self, llm_output: str, input_data: dict) -> dict:

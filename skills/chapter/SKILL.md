@@ -17,17 +17,18 @@ allowed-tools:
 
 # Chapter Writing
 
-Write textbook chapter content based on the outline and context, including concept definitions, principle explanations, code examples, chart requirement annotations, chapter summaries, and tiered exercises. Follows anti-AI-tone rules strictly.
+Write textbook chapter content based on the outline, context, and project-level WritingSpec. The WritingSpec defines audience, learning orientation, content ratio, chapter structure, visual policy, language policy, and word-count policy. Follows anti-AI-tone rules strictly.
 
 ## 核心指令
 
 1. **上下文准备**: 读取大纲、前章摘要、术语表，构建写作上下文。
-2. **章节结构**: 按标准结构编写——导语→正文(分节)→小结→习题。
+2. **章节结构**: 优先服从 WritingSpec.chapter_structure。不要把某一本教材、某一种受众或某一种学科当作默认模板。
 3. **图表需求识别**: 正文中需要图表时，使用标记：
    - `[图表: 折线图，展示XXX趋势]` → 可用代码生成的数据图表
    - `[插图: XXX示意图]` → 需要AI生成的插图
 4. **去AI味铁律**: 严格遵守去AI味规则，禁止使用"值得注意的是""综上所述"等AI常用语。
-5. **习题设计**: 按认知层次设计4类习题——选择题(记忆/理解)、填空题(理解/应用)、简答题(分析/评价)、应用题(应用/创造)。
+5. **内容比例**: 按 WritingSpec.content_ratio 控制理论、案例、流程、实践和代码比例；如果 WritingSpec 限制代码比例，代码只作为必要工具示例。
+6. **习题设计**: 按 WritingSpec 和认知层次设计习题；题型可以随教材定位变化。
 6. **保存章节**: 写入章节文件，更新章节摘要。
 
 状态管理：编写过程中维护 `chapter_XXX.md` 和更新 `chapter_summaries.md`。
@@ -75,11 +76,11 @@ Report the following upon completion:
 
 ## Constraints
 
-- Word count must match the outline requirement (default 5000 words)
+- Word count must follow WritingSpec.word_count_policy; do not treat raw character count, token count, JSON, Markdown syntax, code blocks, or visual markers as正文有效字数.
 - Anti-AI-tone language is mandatory (see anti_ai_rules.md)
 - Terminology must be consistent with the terminology table
-- Code examples must be runnable
-- Exercises must cover all 4 types (choice, fill-in, short answer, application)
+- Code examples must be runnable when used, but code volume must follow WritingSpec.
+- Exercises must match the textbook audience and learning orientation.
 - Chart markers must use standard format: `[图表: ...]` or `[插图: ...]`
 
 ## Required Enrichment Pass

@@ -23,6 +23,7 @@ class ReviserAgent(TextbookBaseAgent):
             score=input_data.get('score', 0),
             issues=issues_str,
             mode=input_data.get('mode', 'spot-fix'),
+            writing_spec=input_data.get('writing_spec', ''),
         )
 
     def _parse_output(self, llm_output: str, input_data: dict) -> dict:

@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List
+from ..metrics import measure_content
 
 
 @dataclass
@@ -37,14 +38,23 @@ class ChapterQualityGate:
         review_score: int = 0,
         evidence_chars: int = 0,
         visual_asset_count: int = 0,
+        target_words: int = 0,
+        word_tolerance: float = 0.15,
+        min_visual_assets: int = 0,
     ) -> ChapterQualityReport:
         content = content or ""
+        metrics = measure_content(content)
+        effective_words = metrics.effective_word_count
+        lower_bound = int(target_words * (1 - word_tolerance)) if target_words else 0
+        upper_bound = int(target_words * (1 + word_tolerance)) if target_words else 0
         checks = {
             "has_heading": bool(self.HEADING_RE.search(content)),
             "has_objective": bool(self.OBJECTIVE_RE.search(content)),
             "has_exercise": bool(self.EXERCISE_RE.search(content)),
             "has_evidence": evidence_chars > 80,
             "review_passed": int(review_score or 0) >= 80,
+            "word_count_in_range": not target_words or (lower_bound <= effective_words <= upper_bound),
+            "visual_asset_count_met": visual_asset_count >= int(min_visual_assets or 0),
         }
         promised_visuals = self.VISUAL_PROMISE_RE.findall(content)
         has_inline_image = bool(self.MARKDOWN_IMAGE_RE.search(content))
@@ -67,6 +77,20 @@ class ChapterQualityGate:
         if not checks["visuals_resolved"]:
             penalties += 12
             issues.append({"level": "warning", "code": "unresolved_visual", "message": "章节承诺了图示/图表，但未发现已插入的图片或图表资产。"})
+        if not checks["word_count_in_range"]:
+            penalties += 10
+            if effective_words < lower_bound:
+                message = f"章节有效字数不足：目标约 {target_words}，当前约 {effective_words}。"
+            else:
+                message = f"章节有效字数超出：目标约 {target_words}，当前约 {effective_words}。"
+            issues.append({"level": "warning", "code": "word_count_out_of_range", "message": message})
+        if not checks["visual_asset_count_met"]:
+            penalties += 8
+            issues.append({
+                "level": "warning",
+                "code": "visual_asset_count_not_met",
+                "message": f"章节视觉资产数量不足：要求至少 {min_visual_assets} 个，当前 {visual_asset_count} 个。",
+            })
 
         base = int(review_score or 82)
         score = max(0, min(100, base - penalties))

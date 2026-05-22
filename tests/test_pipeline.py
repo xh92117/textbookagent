@@ -151,6 +151,23 @@ def test_chapter_quality_gate_passes_with_evidence_and_asset():
     assert report.checks["visuals_resolved"]
 
 
+def test_chapter_quality_gate_uses_effective_word_count_and_visual_policy():
+    gate = ChapterQualityGate()
+    report = gate.evaluate(
+        "# 第一章 智能体基础\n\n学习目标：理解智能体。\n\n## 案例分析\n内容太短。\n\n练习：解释智能体闭环。",
+        review_score=90,
+        evidence_chars=500,
+        visual_asset_count=0,
+        target_words=1000,
+        min_visual_assets=1,
+    )
+
+    codes = {issue["code"] for issue in report.issues}
+    assert "word_count_out_of_range" in codes
+    assert "visual_asset_count_not_met" in codes
+    assert report.score < 90
+
+
 def test_runner_loads_llm_wiki_chunk_metadata():
     with tempfile.TemporaryDirectory() as tmp:
         memory_manager = TextbookMemoryManager(tmp)

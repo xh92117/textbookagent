@@ -18,6 +18,7 @@ class OutlinerAgent(TextbookBaseAgent):
             total_chapters=input_data.get('total_chapters', 10),
             chapter_word_count=input_data.get('chapter_word_count', 5000),
             style=input_data.get('style', '学术'),
+            writing_spec=input_data.get('writing_spec', ''),
             curriculum_standard=input_data.get('curriculum_standard', ''),
         )
 

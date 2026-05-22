@@ -23,7 +23,7 @@ One-click end-to-end textbook creation through a 7-phase pipeline: outline → o
 
 ## 核心指令
 
-1. **需求确认**: 从用户输入提取教材完整信息（标题、学科、受众、等级、章数等），整理成参数表格展示给用户确认。如果用户未提供某些参数，根据教材标题和学科合理推断默认值，但**必须先展示参数表格让用户确认后再启动管线**。
+1. **需求确认**: 从用户输入提取教材完整信息（标题、学科、受众、等级、章数等），同时生成教材级 WritingSpec（受众、学习取向、内容比例、章节结构、视觉策略、语言策略、字数口径），整理成参数表格展示给用户确认。如果用户未提供某些参数，根据教材标题和学科合理推断默认值，但**必须先展示参数表格让用户确认后再启动管线**。
 2. **管线启动**: 用户确认参数后，使用 `start_pipeline` 工具启动7阶段管线。管线在后台自动执行，无需手动运行脚本。
 3. **进度汇报**: 管线启动后告知用户管线已启动，右侧面板可查看实时进度。
 4. **最终输出**: 管线完成后生成Word文档 + 完整状态快照。
@@ -46,6 +46,8 @@ One-click end-to-end textbook creation through a 7-phase pipeline: outline → o
   | 章节数 | 10 |
   | 每章字数 | 5000 |
   | 写作风格 | 学术+实务 |
+  | 教材定位 | 从受众和用户需求推断 |
+  | 内容比例 | 理论/案例/流程/实践/代码 |
 
   2. 等待用户确认后，调用 `start_pipeline` 工具
   3. 告知用户管线已启动，可在右侧面板查看进度
@@ -64,6 +66,8 @@ One-click end-to-end textbook creation through a 7-phase pipeline: outline → o
   | 章节数 | 10 | 默认 |
   | 每章字数 | 5000 | 默认 |
   | 写作风格 | 学术+实务 | 默认 |
+  | 教材定位 | 应用型/实训型 | 从标题和受众推断 |
+  | 内容比例 | 按 WritingSpec 自动生成 | 从教材定位推断 |
 
   2. 告知用户："以上是我根据您的需求拟定的教材参数，如需调整请告知，确认后我将启动生成管线。"
   3. 用户确认后调用 `start_pipeline` 工具启动管线
@@ -100,4 +104,5 @@ Before starting or while composing chapters:
    - a compact Web Evidence Pack
    - chart opportunities for sandbox generation
    - illustration opportunities for imagegen generation
-4. Chapters should contain `[图表: ...]` and `[插图: ...]` markers when visuals would improve explanation. The backend pipeline will convert those markers into generated assets when possible.
+4. Chapters should contain `[图表: ...]` and `[插图: ...]` markers according to WritingSpec.visual_policy. The backend pipeline will convert those markers into generated assets when possible.
+5. Do not hard-code one textbook style as the global default. Different users and textbook types must produce different WritingSpec values.

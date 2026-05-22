@@ -1,5 +1,6 @@
 from .base import TextbookBaseAgent
 from ..prompts.writer_prompts import WRITER_SYSTEM_PROMPT, WRITER_USER_PROMPT_TEMPLATE
+from ..metrics import measure_content
 
 import json
 import re
@@ -32,6 +33,7 @@ class WriterAgent(TextbookBaseAgent):
             target_words=input_data.get('target_words', 5000),
             context=input_data.get('context', ''),
             terminology=input_data.get('terminology', ''),
+            writing_spec=input_data.get('writing_spec', ''),
         )
 
     def _parse_output(self, llm_output: str, input_data: dict) -> dict:
@@ -78,13 +80,15 @@ class WriterAgent(TextbookBaseAgent):
                 img_reqs.append({'description': desc, 'image_type': 'illustration'})
                 seen_images.add(desc)
 
+        metrics = measure_content(content)
         return {
             'content': content,
             'chapter_number': input_data.get('chapter_number', 0),
             'chapter_title': input_data.get('chapter_title', ''),
             'chart_requirements': chart_reqs,
             'image_requirements': img_reqs,
-            'word_count': len(content),
+            'word_count': metrics.effective_word_count,
+            'metrics': metrics.to_dict(),
         }
 
     def _parse_visual_assets(self, llm_output: str) -> list:

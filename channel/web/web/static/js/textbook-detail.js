@@ -13,12 +13,21 @@ function loadBookPreferences() {
 }
 
 function fillPreferencesForm(prefs) {
+    const ratio = prefs.content_ratio || (prefs.writing_spec && prefs.writing_spec.content_ratio) || {};
     const fields = {
         'prefChapterWordCount': prefs.chapter_word_count,
         'prefStyle': prefs.style,
         'prefExampleCount': prefs.example_count,
         'prefModel': prefs.model,
-        'prefReviewStrictness': prefs.review_strictness
+        'prefReviewStrictness': prefs.review_strictness,
+        'prefLearningOrientation': prefs.learning_orientation || (prefs.writing_spec && prefs.writing_spec.learning_orientation),
+        'prefRatioTheory': ratio.theory,
+        'prefRatioCase': ratio.case,
+        'prefRatioProcedure': ratio.procedure,
+        'prefRatioPractice': ratio.practice,
+        'prefRatioCode': ratio.code,
+        'prefMinVisualAssets': prefs.min_visual_assets || (prefs.writing_spec && prefs.writing_spec.visual_policy && prefs.writing_spec.visual_policy.min_assets_per_chapter),
+        'prefAdditionalNotes': prefs.additional_notes || (prefs.writing_spec && prefs.writing_spec.additional_notes)
     };
     Object.entries(fields).forEach(([id, value]) => {
         const el = document.getElementById(id);
@@ -30,13 +39,24 @@ function fillPreferencesForm(prefs) {
 
 function saveBookPreferences() {
     if (!currentBookId) return;
+    const contentRatio = {
+        theory: parseInt(document.getElementById('prefRatioTheory')?.value || '25'),
+        case: parseInt(document.getElementById('prefRatioCase')?.value || '25'),
+        procedure: parseInt(document.getElementById('prefRatioProcedure')?.value || '20'),
+        practice: parseInt(document.getElementById('prefRatioPractice')?.value || '20'),
+        code: parseInt(document.getElementById('prefRatioCode')?.value || '10')
+    };
     const prefs = {
         chapter_word_count: parseInt(document.getElementById('prefChapterWordCount')?.value || '5000'),
         style: document.getElementById('prefStyle')?.value || '学术',
         example_count: parseInt(document.getElementById('prefExampleCount')?.value || '5'),
         model: document.getElementById('prefModel')?.value || '',
         review_strictness: document.getElementById('prefReviewStrictness')?.value || '标准',
-        auto_optimize: document.getElementById('prefAutoOptimize')?.checked ? '启用' : '禁用'
+        auto_optimize: document.getElementById('prefAutoOptimize')?.checked ? '启用' : '禁用',
+        learning_orientation: document.getElementById('prefLearningOrientation')?.value || '应用型',
+        content_ratio: contentRatio,
+        min_visual_assets: parseInt(document.getElementById('prefMinVisualAssets')?.value || '1'),
+        additional_notes: document.getElementById('prefAdditionalNotes')?.value || ''
     };
     fetch(`/api/textbook/${currentBookId}/preferences`, {
         method: 'PUT',
@@ -45,7 +65,10 @@ function saveBookPreferences() {
     })
     .then(r => r.json())
     .then(data => {
-        if (data.status === 'success') showToast('教材偏好已保存');
+        if (data.status === 'success') {
+            showToast('教材偏好已保存，并已纳入本教材全局 WritingSpec');
+            loadTextbooks();
+        }
         else showToast('保存失败: ' + (data.message || ''), 'error');
     })
     .catch(err => showToast('保存失败: ' + err, 'error'));

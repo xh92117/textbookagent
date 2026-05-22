@@ -17,6 +17,7 @@ from ..agents.polisher import PolisherAgent
 from ..state.manager import TextbookMemoryManager
 from ..state.truth_files import TruthFileManager
 from ..models.textbook import TextbookConfig
+from ..metrics import measure_content
 from .scheduler import ChapterScheduler
 from ..sandbox.chart_generator import ChartGenerator
 from ..sandbox.executor import SandboxExecutor
@@ -219,6 +220,8 @@ class PipelineRunner:
         for agent in self._all_agents:
             agent.set_cancel_event(self._cancel_event)
         book_id = book_config.id
+        writing_spec = book_config.ensure_writing_spec()
+        writing_spec_prompt = writing_spec.to_prompt()
         research_evidence = self._load_research_evidence(book_id, requirement)
 
         start_phase = resume_from if resume_from else 'outline'
@@ -257,6 +260,7 @@ class PipelineRunner:
                 'total_chapters': book_config.total_chapters,
                 'chapter_word_count': book_config.chapter_word_count,
                 'style': book_config.style,
+                'writing_spec': writing_spec_prompt,
                 'curriculum_standard': "\n\n".join(
                     part for part in [book_config.curriculum_standard, research_evidence] if part
                 ),
@@ -300,6 +304,7 @@ class PipelineRunner:
                 'item_label': '大纲',
                 'content': outline_text,
                 'outline_context': '',
+                'writing_spec': writing_spec_prompt,
             })
             review_result = self._ensure_agent_result(review_result, "ReviewerAgent", "review_outline")
             results['review_outline'] = review_result
@@ -442,14 +447,16 @@ class PipelineRunner:
                 'target_words': book_config.chapter_word_count,
                 'context': context_package,
                 'terminology': terminology,
+                'writing_spec': writing_spec_prompt,
             })
             write_result = self._ensure_agent_result(write_result, "WriterAgent", "write_chapter")
-            PipelineCheckpointStore.mark(actions, "write_chapter", "completed", f"{len(write_result.get('content', ''))} chars")
+            draft_metrics = write_result.get("metrics") or measure_content(write_result.get('content', '')).to_dict()
+            PipelineCheckpointStore.mark(actions, "write_chapter", "completed", f"{draft_metrics.get('effective_word_count', 0)} effective words")
             if checkpoint_store:
                 checkpoint_store.save(i, actions, {"stage": "write_chapter"})
             update_book_status(i, "write_chapter", "running", {
                 "pipeline_id": self.pipeline_id,
-                "draft_chars": len(write_result.get('content', '')),
+                "draft_metrics": draft_metrics,
             })
 
             chart_reqs = write_result.get('chart_requirements', [])
@@ -533,6 +540,8 @@ class PipelineRunner:
                 'item_label': f'第{i}章',
                 'content': write_result.get('content', ''),
                 'outline_context': outline_text,
+                'writing_spec': writing_spec_prompt,
+                'content_metrics': measure_content(write_result.get('content', '')).to_dict(),
             })
             chapter_review = self._ensure_agent_result(chapter_review, "ReviewerAgent", "review_chapter")
             deterministic_quality = quality_gate.evaluate(
@@ -540,6 +549,9 @@ class PipelineRunner:
                 review_score=chapter_review.get('score', 0),
                 evidence_chars=len(wiki_context) + len(research_evidence),
                 visual_asset_count=len(chart_files),
+                target_words=book_config.chapter_word_count,
+                word_tolerance=writing_spec.word_count_policy.tolerance,
+                min_visual_assets=writing_spec.visual_policy.min_assets_per_chapter,
             )
             chapter_review["deterministic_quality"] = deterministic_quality.__dict__
             chapter_review["score"] = min(chapter_review.get("score", 0) or 0, deterministic_quality.score)
@@ -571,6 +583,7 @@ class PipelineRunner:
                     'issues': chapter_review.get('issues', []),
                     'mode': 'spot-fix',
                     'chapter_number': i,
+                    'writing_spec': writing_spec_prompt,
                 })
                 revise_result = self._ensure_agent_result(revise_result, "ReviserAgent", "revise_chapter")
                 content = revise_result.get('revised_content', content)
@@ -592,6 +605,7 @@ class PipelineRunner:
                 polish_result = await self.polisher.run({
                     'content': content,
                     'style': book_config.style,
+                    'writing_spec': writing_spec_prompt,
                     'chapter_number': i,
                 })
                 polish_result = self._ensure_agent_result(polish_result, "PolisherAgent", "polish_chapter")
@@ -602,9 +616,10 @@ class PipelineRunner:
                 PipelineCheckpointStore.mark(actions, "polish_chapter", "skipped", "review quality gate passed")
             if checkpoint_store:
                 checkpoint_store.save(i, actions, {"stage": "polish_chapter"})
+            final_metrics = measure_content(final_content)
             update_book_status(i, "polish_chapter", "running", {
                 "pipeline_id": self.pipeline_id,
-                "final_chars": len(final_content),
+                "final_metrics": final_metrics.to_dict(),
             })
 
             if await self._check_pause_cancel('revise', {}):
@@ -621,7 +636,8 @@ class PipelineRunner:
                         'item_label': f'第{i}章 持久化',
                     })
                     persistence.save_chapter(i, final_content, metadata={
-                        'word_count': len(final_content),
+                        'word_count': final_metrics.effective_word_count,
+                        'metrics': final_metrics.to_dict(),
                         'review_score': chapter_review.get('score', 0),
                         'quality': chapter_review.get('deterministic_quality', {}),
                         'visual_decisions': visual_decisions,
@@ -632,17 +648,18 @@ class PipelineRunner:
                 mgr.update_progress(i, total_chapters)
                 PipelineCheckpointStore.mark(actions, "persist_chapter", "completed", "chapter saved")
                 if checkpoint_store:
-                    checkpoint_store.save(i, actions, {"stage": "persist_chapter", "word_count": len(final_content)})
+                    checkpoint_store.save(i, actions, {"stage": "persist_chapter", "word_count": final_metrics.effective_word_count})
                 update_book_status(i, "persist_chapter", "running", {
                     "pipeline_id": self.pipeline_id,
-                    "word_count": len(final_content),
+                    "word_count": final_metrics.effective_word_count,
+                    "metrics": final_metrics.to_dict(),
                     "review_score": chapter_review.get('score', 0),
                 })
 
             scheduler.mark_completed(i)
             completed_chapters.append({
                 'chapter_number': i,
-                'word_count': len(final_content),
+                'word_count': final_metrics.effective_word_count,
                 'review_score': chapter_review.get('score', 0),
             })
 

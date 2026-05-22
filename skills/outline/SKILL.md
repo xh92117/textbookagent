@@ -20,7 +20,7 @@ Generate structured textbook outlines using OKR recursive decomposition, from bo
 
 ## 核心指令
 
-1. **需求分析**: 从用户输入中提取教材主题、目标读者、难度等级、课标依据、总章数等关键信息。信息不足时主动追问。
+1. **需求分析**: 从用户输入中提取教材主题、目标读者、难度等级、课标依据、总章数等关键信息，并生成或更新教材级 WritingSpec。信息不足时主动追问。
 2. **课标搜索**: 使用 `multi-search-engine` skill，通过 `web_fetch` 搜索相关课程标准或教学大纲，确保大纲符合课标要求。
 3. **OKR递归分解**:
    - 教材级目标(O) → 关键结果(KR)
@@ -31,6 +31,7 @@ Generate structured textbook outlines using OKR recursive decomposition, from bo
 5. **前置依赖梳理**: 明确章节间的前置知识依赖关系，避免循环依赖。
 6. **术语表初始化**: 提取核心术语，建立统一术语表。
 7. **保存大纲**: 将大纲写入教材工作空间。
+8. **规格约束**: 大纲必须服从 WritingSpec 的学习取向、内容比例、章节结构、视觉策略和字数口径。
 
 状态管理：大纲编制过程中维护 `outline.md` 和 `terminology.md` 两个真相文件。
 
@@ -82,10 +83,11 @@ Report the following upon completion:
 ## Constraints
 
 - Outline hierarchy must not exceed 4 levels (Part → Chapter → Section → Key Point)
-- Each chapter should contain 3-8 sections
+- Each chapter should contain 3-8 sections, unless WritingSpec.chapter_structure requires a different stable teaching layout
 - Cognitive level distribution must satisfy: Remember ≤ 20%, Understand+Apply ≥ 40%, Analyze+Evaluate ≥ 25%, Create ≥ 5%
 - Circular dependencies between chapters are prohibited
 - Terminology must be consistent throughout — no synonym duplication
+- Outline must state how chapters reflect WritingSpec, so writer/reviewer agents can inherit the same contract
 
 ## Required Search Pass
 

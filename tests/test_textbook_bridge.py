@@ -113,6 +113,39 @@ def test_update_textbook():
         assert updated.updated_at != ""
 
 
+def test_update_preferences_updates_global_writing_spec():
+    with tempfile.TemporaryDirectory() as tmp:
+        bridge = _make_bridge(tmp)
+        created = bridge.create_textbook(_make_config(target_audience="高职学生", style="应用实训"))
+
+        result = bridge.update_preferences(created.id, {
+            "chapter_word_count": 8000,
+            "style": "工程实践风格",
+            "learning_orientation": "应用型/实训型",
+            "content_ratio": {
+                "theory": 10,
+                "case": 35,
+                "procedure": 25,
+                "practice": 25,
+                "code": 5,
+            },
+            "min_visual_assets": 2,
+            "additional_notes": "减少大段代码，增加岗位任务。",
+            "auto_optimize": "启用",
+        })
+
+        config = bridge.get_textbook(created.id)
+        prefs = bridge.get_preferences(created.id)
+
+        assert result["preferences"]["auto_optimize"] is True
+        assert config.chapter_word_count == 8000
+        assert config.writing_spec.learning_orientation == "应用型/实训型"
+        assert config.writing_spec.content_ratio.case == 35
+        assert config.writing_spec.visual_policy.min_assets_per_chapter == 2
+        assert config.writing_spec.additional_notes == "减少大段代码，增加岗位任务。"
+        assert prefs["writing_spec"]["additional_notes"] == "减少大段代码，增加岗位任务。"
+
+
 def test_update_textbook_not_found():
     with tempfile.TemporaryDirectory() as tmp:
         bridge = _make_bridge(tmp)

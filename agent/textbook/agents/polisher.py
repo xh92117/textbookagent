@@ -13,6 +13,7 @@ class PolisherAgent(TextbookBaseAgent):
         return POLISHER_USER_PROMPT_TEMPLATE.format(
             content=input_data.get('content', ''),
             style=input_data.get('style', '学术'),
+            writing_spec=input_data.get('writing_spec', ''),
         )
 
     def _parse_output(self, llm_output: str, input_data: dict) -> dict:

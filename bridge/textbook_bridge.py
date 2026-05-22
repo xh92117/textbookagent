@@ -10,7 +10,7 @@ import inspect
 from queue import Queue
 from typing import Optional, List
 
-from agent.textbook.models.textbook import TextbookConfig
+from agent.textbook.models.textbook import TextbookConfig, WritingSpec, ContentRatio, VisualPolicy, StylePolicy, WordCountPolicy
 from agent.textbook.state.manager import TextbookMemoryManager
 from agent.textbook.state.truth_files import TruthFileManager
 from agent.textbook.pipeline.runner import PipelineRunner
@@ -1033,9 +1033,8 @@ JSON 格式：
         return ReviewResult().to_dict()
 
     def update_preferences(self, book_id: str, preferences: dict) -> dict:
+        preferences = dict(preferences or {})
         pref_path = os.path.join(self._book_dir(book_id), "preferences.json")
-        with open(pref_path, "w", encoding="utf-8") as f:
-            json.dump(preferences, f, ensure_ascii=False, indent=2)
         config = self.get_textbook(book_id)
         if config is not None:
             pref_mapping = {
@@ -1052,10 +1051,59 @@ JSON 格式：
                 val = preferences["auto_optimize"]
                 if isinstance(val, str):
                     preferences["auto_optimize"] = val == "启用"
+            config.writing_spec = self._preferences_to_writing_spec(config, preferences)
+            preferences["writing_spec"] = config.writing_spec.to_dict()
             config.updated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
             self._save_config(config)
             self.textbooks[book_id] = config
-        return {"preferences": preferences}
+        os.makedirs(os.path.dirname(pref_path), exist_ok=True)
+        with open(pref_path, "w", encoding="utf-8") as f:
+            json.dump(preferences, f, ensure_ascii=False, indent=2)
+        return {"preferences": preferences, "writing_spec": preferences.get("writing_spec", {})}
+
+    def _preferences_to_writing_spec(self, config: TextbookConfig, preferences: dict) -> WritingSpec:
+        spec_data = preferences.get("writing_spec") if isinstance(preferences.get("writing_spec"), dict) else {}
+        if spec_data:
+            spec = WritingSpec.from_dict(spec_data)
+        else:
+            spec = config.ensure_writing_spec()
+
+        orientation = preferences.get("learning_orientation") or spec.learning_orientation
+        spec.learning_orientation = orientation
+        spec.audience = preferences.get("audience") or config.target_audience or spec.audience
+        spec.difficulty = preferences.get("difficulty") or config.level or spec.difficulty
+
+        ratio = preferences.get("content_ratio") if isinstance(preferences.get("content_ratio"), dict) else {}
+        spec.content_ratio = ContentRatio(
+            theory=int(ratio.get("theory", getattr(spec.content_ratio, "theory", 25)) or 0),
+            case=int(ratio.get("case", getattr(spec.content_ratio, "case", 25)) or 0),
+            procedure=int(ratio.get("procedure", getattr(spec.content_ratio, "procedure", 20)) or 0),
+            practice=int(ratio.get("practice", getattr(spec.content_ratio, "practice", 20)) or 0),
+            code=int(ratio.get("code", getattr(spec.content_ratio, "code", 10)) or 0),
+        )
+
+        min_assets = preferences.get("min_visual_assets")
+        if min_assets is None and isinstance(preferences.get("visual_policy"), dict):
+            min_assets = preferences["visual_policy"].get("min_assets_per_chapter")
+        spec.visual_policy = VisualPolicy(
+            min_assets_per_chapter=max(0, int(min_assets if min_assets is not None else spec.visual_policy.min_assets_per_chapter)),
+            preferred_types=list(getattr(spec.visual_policy, "preferred_types", []) or ["流程图", "结构图", "对比表", "场景图"]),
+        )
+
+        style = preferences.get("style") or config.style or spec.style_policy.tone
+        avoid = getattr(spec.style_policy, "avoid", []) or ["过度比喻", "自造概念", "频繁双引号", "口号化表达"]
+        spec.style_policy = StylePolicy(
+            tone=style,
+            avoid=avoid,
+            citation_style=getattr(spec.style_policy, "citation_style", "简洁来源说明"),
+        )
+        spec.word_count_policy = WordCountPolicy(
+            metric=getattr(spec.word_count_policy, "metric", "正文有效中文字符数"),
+            exclude=list(getattr(spec.word_count_policy, "exclude", []) or ["JSON", "Markdown标记", "代码块", "图表标记"]),
+            tolerance=float(getattr(spec.word_count_policy, "tolerance", 0.15) or 0.15),
+        )
+        spec.additional_notes = preferences.get("additional_notes", getattr(spec, "additional_notes", "") or "")
+        return spec
 
     def _chapter_review_digest(self, content: str, max_chars: int = 1800) -> str:
         """Build a bounded chapter digest for full-book review prompts."""
@@ -1081,17 +1129,30 @@ JSON 格式：
 
     def get_preferences(self, book_id: str) -> dict:
         pref_path = os.path.join(self._book_dir(book_id), "preferences.json")
-        if os.path.exists(pref_path):
-            with open(pref_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+        config = self.get_textbook(book_id)
+        spec = config.ensure_writing_spec() if config else WritingSpec()
         default_preferences = {
-            "chapter_word_count": 5000,
-            "style": "学术",
+            "chapter_word_count": config.chapter_word_count if config else 5000,
+            "style": config.style if config else "学术",
             "example_count": 3,
             "model": "",
             "review_strictness": "normal",
             "auto_optimize": False,
+            "learning_orientation": spec.learning_orientation,
+            "content_ratio": spec.content_ratio.__dict__,
+            "min_visual_assets": spec.visual_policy.min_assets_per_chapter,
+            "additional_notes": getattr(spec, "additional_notes", ""),
+            "writing_spec": spec.to_dict(),
         }
+        if os.path.exists(pref_path):
+            with open(pref_path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            default_preferences.update(saved)
+            default_preferences["writing_spec"] = spec.to_dict()
+            default_preferences["learning_orientation"] = spec.learning_orientation
+            default_preferences["content_ratio"] = spec.content_ratio.__dict__
+            default_preferences["min_visual_assets"] = spec.visual_policy.min_assets_per_chapter
+            default_preferences["additional_notes"] = getattr(spec, "additional_notes", default_preferences.get("additional_notes", ""))
         return default_preferences
 
     def save_chat_message(self, session_id: str, role: str, content: str, tool_calls: list = None) -> dict:
