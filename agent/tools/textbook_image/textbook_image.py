@@ -15,7 +15,8 @@ class TextbookImageTool(BaseTool):
         "Generate or fallback-create a textbook image asset in the canonical "
         "textbooks/<book_id>/assets/images directory. Use this instead of bash "
         "or write when the chapter needs a figure, illustration, diagram, or "
-        "local placeholder after the remote image API fails."
+        "local placeholder after the remote image API fails. If no image asset "
+        "can be created, return prompt_note_markdown for insertion into the chapter."
     )
 
     params: dict = {
@@ -111,23 +112,40 @@ class TextbookImageTool(BaseTool):
             if result.get("status") != "success" or not os.path.exists(os.path.join(image_dir, filename)):
                 source = "local_fallback"
                 prompt = result.get("prompt") or engineer.generate_prompt(request)
-                fallback = self._create_placeholder(
-                    os.path.join(image_dir, filename),
-                    title=title or self._default_title(chapter_num, figure_num),
-                    description=description,
-                )
+                remote_error = result.get("error", "")
+                try:
+                    fallback = self._create_placeholder(
+                        os.path.join(image_dir, filename),
+                        title=title or self._default_title(chapter_num, figure_num),
+                        description=description,
+                    )
+                except Exception as fallback_error:
+                    note = self._prompt_note_markdown(
+                        title=title or self._default_title(chapter_num, figure_num),
+                        description=description,
+                        prompt=prompt,
+                        error=f"remote: {remote_error}; local fallback: {fallback_error}",
+                    )
+                    return ToolResult.success({
+                        "book_id": book_id,
+                        "chapter_num": chapter_num,
+                        "figure_num": figure_num,
+                        "title": title,
+                        "status": "prompt_only",
+                        "source": "prompt_note",
+                        "prompt": prompt,
+                        "prompt_note_markdown": note,
+                        "remote_error": remote_error,
+                        "message": "Image generation failed. Insert prompt_note_markdown into the chapter as a visible note instead of writing a prompt file.",
+                    })
                 result = {
                     "status": "success",
                     "prompt": prompt,
                     "image_path": fallback,
                     "filename": os.path.basename(fallback),
                     "source": source,
-                    "remote_error": result.get("error", ""),
+                    "remote_error": remote_error,
                 }
-
-            prompt_path = os.path.join(image_dir, os.path.splitext(filename)[0] + ".prompt.txt")
-            with open(prompt_path, "w", encoding="utf-8") as f:
-                f.write(result.get("prompt", ""))
 
             rel_path = f"assets/images/{os.path.basename(result.get('filename') or filename)}"
             payload = {
@@ -139,9 +157,9 @@ class TextbookImageTool(BaseTool):
                 "source": result.get("source") or source,
                 "path": result.get("image_path") or os.path.join(image_dir, filename),
                 "relative_path": rel_path,
-                "prompt_path": prompt_path,
                 "markdown": f"![{title or description}]({rel_path})",
                 "remote_error": result.get("remote_error", ""),
+                "prompt": result.get("prompt", ""),
                 "message": "Textbook image asset is ready. Insert the markdown into the chapter where the figure is referenced.",
             }
             return ToolResult.success(payload)
@@ -226,6 +244,19 @@ class TextbookImageTool(BaseTool):
             with open(svg_path, "w", encoding="utf-8") as f:
                 f.write(svg)
             return svg_path
+
+    @staticmethod
+    def _prompt_note_markdown(title: str, description: str, prompt: str, error: str = "") -> str:
+        safe_title = title or "待生成插图"
+        parts = [
+            f"> **插图生成备注：{safe_title}**",
+            f"> 当前环境未能生成图片资产，后续可根据下方提示词重新生成并替换本备注。",
+            f"> 插图需求：{description}",
+            f"> 生成提示词：{prompt}",
+        ]
+        if error:
+            parts.append(f"> 失败原因：{error}")
+        return "\n".join(parts)
 
     @staticmethod
     def _font(size: int):

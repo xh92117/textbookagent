@@ -222,6 +222,7 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
         "- 写入中文教材文件时，优先使用 write 或 edit 工具；追加内容用 edit 且 oldText 为空。不要用 bash 调用 PowerShell Add-Content/Set-Content/Out-File 写中文文件，避免 Windows 编码破坏。",
         "- 单次工具参数保持短小。大段章节内容必须按小节或更小块分批写入，每块建议不超过 6000 字符；JSON 参数解析失败后，应缩小块大小并继续，不要改用 shell 拼接长字符串。",
         "- 编写、续写、替换或检查教材章节时，优先使用 textbook_chapter 工具。它会自动定位教材ID目录、按UTF-8保存、更新章节元数据和状态，避免手写路径或用shell拼接文件。",
+        "- 教材章节写完后如只需标记完成，必须调用 textbook_chapter action=mark_completed；不要用 write_chapter 传 placeholder、空内容或短文本来更新状态，否则会覆盖原文。",
         "- 教材任务必须遵守状态板：已完成的大纲/审查/已写章节不得重新生成；如果状态显示正在写某章，只能继续该章的下一小节、校验或保存，除非用户明确要求回退。",
         "",
     ]

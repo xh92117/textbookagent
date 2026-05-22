@@ -1,7 +1,7 @@
 import json
 import os
 import re
-import json
+import time
 from typing import Any, Dict, Tuple
 
 from agent.tools.base_tool import BaseTool, ToolResult
@@ -14,7 +14,8 @@ class TextbookChapterTool(BaseTool):
         "writing, appending, replacing, or validating textbook chapter Markdown. It resolves "
         "the canonical book_id/textbooks/<id>/chapters path, preserves chapter metadata, and "
         "updates the textbook status board. Actions: read, write_chapter, append_section, "
-        "replace_section, validate_encoding, status."
+        "replace_section, mark_completed, validate_encoding, status. To mark an existing "
+        "chapter complete, use mark_completed; never call write_chapter with placeholder content."
     )
 
     params: dict = {
@@ -22,7 +23,7 @@ class TextbookChapterTool(BaseTool):
         "properties": {
             "action": {
                 "type": "string",
-                "description": "One of: read, write_chapter, append_section, replace_section, validate_encoding, status"
+                "description": "One of: read, write_chapter, append_section, replace_section, mark_completed, validate_encoding, status"
             },
             "book_id": {
                 "type": "string",
@@ -50,6 +51,10 @@ class TextbookChapterTool(BaseTool):
 
     MAX_CHUNK_CHARS = 12000
     WARN_CHUNK_CHARS = 12000
+    MIN_COMPLETED_CHARS = 1000
+    DANGEROUS_OVERWRITE_EXISTING_CHARS = 1000
+    DANGEROUS_OVERWRITE_RATIO = 0.25
+    PLACEHOLDER_VALUES = {"placeholder", "todo", "tbd", "待生成", "待补充", "占位符"}
     MOJIBAKE_MARKERS = ("锛", "绗", "鏂", "鍦", "涓", "瀹", "鎴", "鐨", "鏄")
 
     def __init__(self, config: dict = None):
@@ -81,6 +86,8 @@ class TextbookChapterTool(BaseTool):
                 return ToolResult.success(self._status_payload(mgr, book_id, chapter_num))
             if action == "validate_encoding":
                 return ToolResult.success(self._validate(mgr, book_id, chapter_num))
+            if action == "mark_completed":
+                return self._mark_completed(mgr, book_id, chapter_num)
             if action in ("write_chapter", "append_section", "replace_section"):
                 content = args.get("content", "")
                 if not isinstance(content, str):
@@ -110,10 +117,29 @@ class TextbookChapterTool(BaseTool):
         })
 
     def _write_chapter(self, mgr, book_id: str, chapter_num: int, content: str, completed: bool) -> ToolResult:
+        existing = mgr.read_chapter(chapter_num)
+        safety_error = self._overwrite_safety_error(existing, content, completed)
+        if safety_error:
+            return ToolResult.fail(safety_error)
+        backup_path = self._backup_existing_chapter(mgr, chapter_num, existing, content)
         mgr.write_chapter(chapter_num, content)
         self._write_metadata(mgr, chapter_num, content, completed)
         self._update_status(mgr, book_id, chapter_num, "persist_chapter" if completed else "write_chapter")
-        return ToolResult.success(self._result_payload(mgr, book_id, chapter_num, "written", content, completed, source_chars=len(content)))
+        payload = self._result_payload(mgr, book_id, chapter_num, "written", content, completed, source_chars=len(content))
+        if backup_path:
+            payload["backup_path"] = backup_path
+        return ToolResult.success(payload)
+
+    def _mark_completed(self, mgr, book_id: str, chapter_num: int) -> ToolResult:
+        content = mgr.read_chapter(chapter_num)
+        if len(content.strip()) < self.MIN_COMPLETED_CHARS:
+            return ToolResult.fail(
+                "Refusing to mark chapter completed because the existing chapter is too short. "
+                "Write or append the chapter content first, then call mark_completed."
+            )
+        self._write_metadata(mgr, chapter_num, content, True)
+        self._update_status(mgr, book_id, chapter_num, "persist_chapter")
+        return ToolResult.success(self._result_payload(mgr, book_id, chapter_num, "completed", content, True))
 
     def _append_section(self, mgr, book_id: str, chapter_num: int, heading: str, content: str, completed: bool) -> ToolResult:
         existing = mgr.read_chapter(chapter_num)
@@ -217,6 +243,49 @@ class TextbookChapterTool(BaseTool):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
+
+    def _backup_existing_chapter(self, mgr, chapter_num: int, existing: str, new_content: str) -> str:
+        if not existing.strip() or existing == new_content:
+            return ""
+        backup_dir = os.path.join(mgr.book_dir, "state", "chapter_backups")
+        os.makedirs(backup_dir, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        backup_path = os.path.join(backup_dir, f"chapter_{chapter_num:03d}_{stamp}.md")
+        with open(backup_path, "w", encoding="utf-8") as f:
+            f.write(existing)
+        return backup_path
+
+    @classmethod
+    def _overwrite_safety_error(cls, existing: str, content: str, completed: bool) -> str:
+        normalized = (content or "").strip()
+        lowered = normalized.lower()
+        if not normalized:
+            return (
+                "Refusing to write empty chapter content. Use append_section/replace_section for edits, "
+                "or mark_completed to only update completion status."
+            )
+        if lowered in cls.PLACEHOLDER_VALUES:
+            return (
+                "Refusing to overwrite chapter with placeholder content. "
+                "Use mark_completed to update status without changing the chapter body."
+            )
+        existing_len = len((existing or "").strip())
+        content_len = len(normalized)
+        if completed and content_len < cls.MIN_COMPLETED_CHARS:
+            return (
+                "Refusing to mark a very short write_chapter payload as completed. "
+                "Use mark_completed for existing content, or provide the full chapter body."
+            )
+        if (
+            existing_len >= cls.DANGEROUS_OVERWRITE_EXISTING_CHARS
+            and content_len < existing_len * cls.DANGEROUS_OVERWRITE_RATIO
+        ):
+            return (
+                f"Refusing dangerous full-chapter overwrite: existing chapter has {existing_len} chars, "
+                f"new content has {content_len} chars. Use replace_section/append_section for partial edits, "
+                "or provide a complete chapter body."
+            )
+        return ""
 
     def _update_status(self, mgr, book_id: str, chapter_num: int, phase: str) -> None:
         total = 0
