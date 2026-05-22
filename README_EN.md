@@ -121,6 +121,40 @@ Supported configuration styles include DeepSeek, OpenAI-compatible APIs, custom 
 - Memory query API.
 - Long-session compression and context-budget control.
 
+#### Memory Persistence Rules
+
+The memory system now uses one system-level storage location by default:
+
+```text
+{system_workspace}/system/memory/
+```
+
+Textbook workspaces are reserved for textbook files, knowledge bases, exports, and project assets. They are no longer used as the agent memory store. Legacy files such as `workspace/MEMORY.md` or `workspace/memory/*.md` are copied into `system/memory/imported/` on startup, with a migration report written to:
+
+```text
+system/memory/migrations/memory_migration_report.json
+```
+
+Automatic memory saving:
+
+- Conversation state, long-running process state, error records, and user profile data are written automatically under `system/memory/`.
+- When an agent uses `write` or `edit` for `MEMORY.md`, `memory/YYYY-MM-DD.md`, or `memory/processes/...`, the path is routed to `system/memory/`.
+- Long-session compression and Deep Dream memory distillation update `system/memory/MEMORY.md` and daily memory files.
+
+Manual memory saving:
+
+- Tell the agent “remember this”, “always follow this rule”, or “do not do this again” to store long-term preferences, rules, and important conclusions in `MEMORY.md`.
+- Daily progress, temporary context, and stage conclusions can be stored in `memory/YYYY-MM-DD.md`.
+- Saved memory can be inspected from the web console memory page or through the memory API.
+- Do not store API keys, tokens, passwords, or other sensitive secrets in memory.
+
+Automatic workspace profile updates:
+
+- `AGENT.md`, `USER.md`, and `RULE.md` are workspace profile files for agent operating style, stable user profile, and workspace rules.
+- When the user explicitly says “write this to USER.md / AGENT.md / RULE.md”, “make this a workspace rule”, “you should always...”, or “call me...”, the system appends the durable instruction to the matching profile file.
+- Before each automatic update, the previous file is backed up under `.workspace_profile_versions/`, and `profile_update_log.jsonl` records the time, source, and reason.
+- Preferences that belong to one specific textbook are not written to these global profile files. They should be saved from the textbook detail page and synchronized to that textbook's `WritingSpec`.
+
 ### MCP and Tool Extensions
 
 - Built-in tools include read, write, edit, bash, web_fetch, web_search, browser, vision, knowledge_query, knowledge_capture, and pipeline tools.

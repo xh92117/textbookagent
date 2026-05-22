@@ -121,6 +121,40 @@ TextBookAgent 是一个面向教材、讲义、课程资料和专业知识内容
 - 记忆查询 API。
 - 长会话压缩与上下文预算控制。
 
+#### 记忆保存规则
+
+记忆系统已经统一为系统级存储，默认目录为：
+
+```text
+{system_workspace}/system/memory/
+```
+
+教材工作区只保存教材、知识库、导出文件和项目资料，不再作为智能体记忆目录使用。旧版本中可能存在的 `工作区/MEMORY.md` 或 `工作区/memory/*.md` 会在启动时复制到 `system/memory/imported/`，并生成迁移报告：
+
+```text
+system/memory/migrations/memory_migration_report.json
+```
+
+自动保存记忆：
+
+- 会话过程、长任务过程、错误记录、用户画像等由后端自动写入 `system/memory/`。
+- 当智能体使用 `write` 或 `edit` 写入 `MEMORY.md`、`memory/YYYY-MM-DD.md`、`memory/processes/...` 时，路径会自动解析到 `system/memory/`。
+- 长会话压缩和 Deep Dream 记忆蒸馏会更新 `system/memory/MEMORY.md` 与每日记忆文件。
+
+手动保存记忆：
+
+- 对智能体说“记住这个”“以后都按这个规则”“不要再这样做”等，智能体会把长期偏好、规则或重要结论写入 `MEMORY.md`。
+- 当天进展、阶段性结论、临时上下文可写入 `memory/YYYY-MM-DD.md`。
+- 可通过 Web 控制台记忆页面或记忆 API 查询已保存内容。
+- 不要把 API key、token、密码等敏感信息写入记忆。
+
+工作区画像文件的自动更新：
+
+- `AGENT.md`、`USER.md`、`RULE.md` 属于工作区画像文件，用于描述智能体工作方式、用户静态画像和工作区规则。
+- 用户明确说“写入 USER.md / AGENT.md / RULE.md”“作为工作区规则”“以后你应该……”“我的称呼是……”时，系统会自动追加到对应画像文件。
+- 每次自动更新前会在 `.workspace_profile_versions/` 中备份旧文件，并在 `profile_update_log.jsonl` 记录更新时间、来源和原因。
+- 与单本教材相关的偏好不会写入这些全局画像文件，应保存在教材详情页的“教材偏好”中，并同步到该教材的 `WritingSpec`。
+
 ### MCP 与工具扩展
 
 - 支持内置 read、write、edit、bash、web_fetch、web_search、browser、vision、knowledge_query、knowledge_capture、pipeline 等工具。

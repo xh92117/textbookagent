@@ -54,10 +54,9 @@ def ensure_workspace(workspace_dir: str, create_templates: bool = True) -> Works
     # 定义文件路径
     user_path = os.path.join(workspace_dir, DEFAULT_USER_FILENAME)
     rule_path = os.path.join(workspace_dir, DEFAULT_RULE_FILENAME)
-    memory_path = os.path.join(workspace_dir, DEFAULT_MEMORY_FILENAME)  # MEMORY.md 在根目录
-    memory_dir = os.path.join(workspace_dir, "memory")  # 每日记忆子目录
-    
-    # 创建memory子目录
+    from common.app_paths import memory_dir as system_memory_dir
+    memory_dir = system_memory_dir()
+    memory_path = os.path.join(memory_dir, DEFAULT_MEMORY_FILENAME)
     os.makedirs(memory_dir, exist_ok=True)
 
     # 创建skills子目录 (for workspace-level skills installed by agent)
@@ -79,7 +78,6 @@ def ensure_workspace(workspace_dir: str, create_templates: bool = True) -> Works
         _create_template_if_missing(agent_path, _get_agent_template())
         _create_template_if_missing(user_path, _get_user_template())
         _create_template_if_missing(rule_path, _get_rule_template())
-        _create_template_if_missing(memory_path, _get_memory_template())
         if knowledge_enabled:
             _create_template_if_missing(
                 os.path.join(knowledge_dir, "index.md"),
@@ -336,6 +334,13 @@ def _get_rule_template() -> str:
     return """# RULE.md - 工作空间规则
 
 这个文件夹是你的家。好好对待它。
+
+## 记忆路径统一规则
+
+- 智能体长期记忆、每日记忆、过程记忆、会话记忆统一保存在系统目录 `system/memory/`。
+- 当用户要求“记住”某件事时，写入 `MEMORY.md` 或 `memory/YYYY-MM-DD.md`；这些路径会被工具自动解析到 `system/memory/`。
+- 教材工作区不再创建或维护 `memory/` 目录；工作区只保存教材、知识库、导出文件和项目资料。
+- `AGENT.md`、`USER.md`、`RULE.md` 是工作区画像文件，可以作为项目上下文加载，但不要把它们当作日常记忆日志。
 
 ## 工作空间目录结构
 

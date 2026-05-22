@@ -5,6 +5,7 @@ Edit files through exact text replacement
 
 import os
 from typing import Dict, Any
+from pathlib import Path
 
 from agent.tools.base_tool import BaseTool, ToolResult
 from common.utils import expand_path
@@ -64,7 +65,10 @@ class Edit(BaseTool):
             return ToolResult.fail("Error: path parameter is required")
         
         # Resolve path
-        absolute_path = self._resolve_path(path)
+        try:
+            absolute_path = self._resolve_path(path)
+        except ValueError as e:
+            return ToolResult.fail(f"Error: {str(e)}")
         
         # Check if file exists
         if not os.path.exists(absolute_path):
@@ -155,7 +159,7 @@ class Edit(BaseTool):
             }
             
             # Notify memory manager if file is in memory directory
-            if self.memory_manager and "memory/" in path:
+            if self.memory_manager and self._is_memory_path(path):
                 try:
                     self.memory_manager.mark_dirty()
                 except Exception as e:
@@ -182,4 +186,22 @@ class Edit(BaseTool):
         path = expand_path(path)
         if os.path.isabs(path):
             return path
+        if self.memory_manager and self._is_memory_path(path):
+            return str(self._memory_file_path(path))
         return os.path.abspath(os.path.join(self.cwd, path))
+
+    @staticmethod
+    def _is_memory_path(path: str) -> bool:
+        normalized = path.replace("\\", "/").lstrip("./")
+        return normalized == "MEMORY.md" or normalized.startswith("memory/")
+
+    def _memory_file_path(self, path: str):
+        normalized = path.replace("\\", "/").lstrip("./")
+        if normalized == "MEMORY.md":
+            relative = "MEMORY.md"
+        else:
+            relative = normalized[len("memory/"):]
+        if not relative or any(part in ("", ".", "..") for part in Path(relative).parts):
+            raise ValueError("Invalid memory path")
+        memory_dir = self.memory_manager.config.get_memory_dir()
+        return memory_dir / relative

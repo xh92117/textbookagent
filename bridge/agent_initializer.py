@@ -323,6 +323,11 @@ class AgentInitializer:
                 MemoryBootstrap(system_dir(), project_workspace=workspace_root).ensure_layout()
             except Exception as e:
                 logger.debug(f"[AgentInitializer] Memory bootstrap layout skipped: {e}")
+            try:
+                from agent.memory.migration import migrate_legacy_memory_files
+                migrate_legacy_memory_files(system_dir(), workspace_root)
+            except Exception as e:
+                logger.debug(f"[AgentInitializer] Legacy memory migration skipped: {e}")
             memory_manager = MemoryManager(memory_config, embedding_provider=embedding_provider)
             
             # Sync memory

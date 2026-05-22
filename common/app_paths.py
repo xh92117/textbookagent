@@ -106,6 +106,10 @@ def chat_history_dir() -> str:
     return os.path.join(system_dir(), "chat_history")
 
 
+def memory_dir() -> str:
+    return os.path.join(system_dir(), "memory")
+
+
 def ensure_active_workspace() -> str:
     ws = active_workspace()
     for name in ("textbooks", "knowledge", "exports", "assets", "tmp"):

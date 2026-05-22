@@ -82,17 +82,18 @@ class MemoryGetTool(BaseTool):
             workspace_dir = self.memory_manager.config.get_workspace()
             
             # Auto-prepend memory/ if not present and not absolute path.
-            # Exceptions: workspace-root profile files plus knowledge/textbooks.
+            # MEMORY.md is the system memory root file. Project profile files
+            # remain available from the project workspace.
             normalized_path = path.replace('\\', '/')
             is_absolute = bool(Path(path).drive) or normalized_path.startswith('/')
             root_prefixes = ('memory/', 'knowledge/', 'textbooks/')
-            workspace_root_files = {'AGENT.md', 'USER.md', 'RULE.md', 'MEMORY.md', 'BOOTSTRAP.md'}
-            if not normalized_path.startswith(root_prefixes) and not is_absolute and path not in workspace_root_files:
+            project_root_files = {'AGENT.md', 'USER.md', 'RULE.md', 'BOOTSTRAP.md'}
+            if not normalized_path.startswith(root_prefixes) and not is_absolute and path not in project_root_files:
                 path = f'memory/{path}'
             
             base_dir = workspace_dir
             if (
-                (normalized_path.startswith(('knowledge/', 'textbooks/')) or path in workspace_root_files)
+                (normalized_path.startswith(('knowledge/', 'textbooks/')) or path in project_root_files)
                 and hasattr(self.memory_manager.config, "get_project_workspace")
             ):
                 base_dir = self.memory_manager.config.get_project_workspace()

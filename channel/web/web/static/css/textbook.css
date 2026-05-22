@@ -4503,6 +4503,109 @@ label.toggle-switch {
     background: #F4F4F5;
 }
 
+[data-theme="light"] #view-chat .chat-messages {
+    background: #F4F4F5;
+    color: #09090B;
+}
+
+[data-theme="light"] #view-chat .chat-msg,
+[data-theme="light"] #view-chat .chat-bubble,
+[data-theme="light"] #view-chat .chat-msg.assistant .chat-bubble {
+    color: #09090B;
+}
+
+[data-theme="light"] #view-chat .chat-bubble h1,
+[data-theme="light"] #view-chat .chat-bubble h2,
+[data-theme="light"] #view-chat .chat-bubble h3,
+[data-theme="light"] #view-chat .chat-bubble h4,
+[data-theme="light"] #view-chat .chat-bubble strong,
+[data-theme="light"] #view-chat .chat-bubble p,
+[data-theme="light"] #view-chat .chat-bubble li {
+    color: #09090B;
+}
+
+[data-theme="light"] #view-chat .chat-bubble a {
+    color: #047857;
+}
+
+[data-theme="light"] #view-chat .chat-bubble code {
+    background: #ECFDF5;
+    border-color: #BBF7D0;
+    color: #065F46;
+}
+
+[data-theme="light"] #view-chat .chat-bubble pre {
+    background: #FFFFFF;
+    border-color: rgba(0, 0, 0, 0.08);
+    color: #09090B;
+}
+
+[data-theme="light"] #view-chat .chat-action-btn {
+    color: #52525B;
+}
+
+[data-theme="light"] #view-chat .chat-action-btn:hover {
+    background: #ECFDF5;
+    border-color: #BBF7D0;
+    color: #065F46;
+}
+
+[data-theme="light"] #view-chat .agent-reasoning,
+[data-theme="light"] #view-chat .agent-tool-calls,
+[data-theme="light"] #view-chat .agent-process-panel,
+[data-theme="light"] #view-chat .agent-section,
+[data-theme="light"] #view-chat .agent-work-card,
+[data-theme="light"] #view-chat .run-event-row {
+    background: #FFFFFF;
+    border-color: rgba(0, 0, 0, 0.08);
+    color: #09090B;
+}
+
+[data-theme="light"] #view-chat .agent-section > summary,
+[data-theme="light"] #view-chat .thinking-node-title,
+[data-theme="light"] #view-chat .run-event-title,
+[data-theme="light"] #view-chat .work-title,
+[data-theme="light"] #view-chat .tool-call-name {
+    color: #09090B;
+}
+
+[data-theme="light"] #view-chat .agent-section > summary em,
+[data-theme="light"] #view-chat .terminal-muted,
+[data-theme="light"] #view-chat .thinking-meta-row,
+[data-theme="light"] #view-chat .thinking-node-detail,
+[data-theme="light"] #view-chat .run-event-meta,
+[data-theme="light"] #view-chat .work-subtitle,
+[data-theme="light"] #view-chat .work-status-text,
+[data-theme="light"] #view-chat .work-detail > summary,
+[data-theme="light"] #view-chat .work-detail-static-label,
+[data-theme="light"] #view-chat .work-detail pre,
+[data-theme="light"] #view-chat .tool-call-args,
+[data-theme="light"] #view-chat .tool-call-result pre,
+[data-theme="light"] #view-chat .tool-call-status {
+    color: #52525B;
+}
+
+[data-theme="light"] #view-chat .agent-section,
+[data-theme="light"] #view-chat .agent-work-card,
+[data-theme="light"] #view-chat .run-event-row {
+    box-shadow: 0 1px 2px rgba(9, 9, 11, 0.04);
+}
+
+[data-theme="light"] #view-chat .thinking-label {
+    background: #ECFDF5;
+    border-color: #BBF7D0;
+    color: #047857;
+}
+
+[data-theme="light"] #view-chat .terminal-step-lead {
+    color: #047857;
+}
+
+[data-theme="light"] #view-chat .work-detail,
+[data-theme="light"] #view-chat .tool-call-result {
+    border-top-color: rgba(0, 0, 0, 0.08);
+}
+
 .chat-terminal-title {
     background: color-mix(in srgb, var(--card) 66%, transparent);
     border-bottom: 1px solid var(--border);

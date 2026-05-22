@@ -278,14 +278,17 @@ class MemoryManager:
         workspace_dir = self.config.get_workspace()
         self.storage.delete_windows_style_paths()
         
-        # Scan MEMORY.md (workspace root)
-        memory_file = Path(workspace_dir) / "MEMORY.md"
+        # Scan system MEMORY.md. Project-level MEMORY.md is indexed below as a
+        # workspace profile, not as the agent's durable memory store.
+        memory_file = memory_dir / "MEMORY.md"
         if memory_file.exists():
             await self._sync_file(memory_file, "memory", "shared", None)
         
         # Scan memory directory (including daily summaries)
         if memory_dir.exists():
             for file_path in memory_dir.rglob("*.md"):
+                if file_path == memory_file:
+                    continue
                 # Skip hidden directories (e.g. .dreams/)
                 if any(part.startswith('.') for part in file_path.relative_to(workspace_dir).parts):
                     continue

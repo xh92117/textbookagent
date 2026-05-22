@@ -51,7 +51,10 @@ class Write(BaseTool):
             return ToolResult.fail("Error: path parameter is required")
         
         # Resolve path
-        absolute_path = self._resolve_path(path)
+        try:
+            absolute_path = self._resolve_path(path)
+        except ValueError as e:
+            return ToolResult.fail(f"Error: {str(e)}")
         
         try:
             # Create parent directory (if needed)
@@ -67,7 +70,7 @@ class Write(BaseTool):
             bytes_written = len(content.encode('utf-8'))
             
             # Auto-sync to memory database if this is a memory file
-            if self.memory_manager and 'memory/' in path:
+            if self.memory_manager and self._is_memory_path(path):
                 self.memory_manager.mark_dirty()
             
             result = {
@@ -94,4 +97,22 @@ class Write(BaseTool):
         path = expand_path(path)
         if os.path.isabs(path):
             return path
+        if self.memory_manager and self._is_memory_path(path):
+            return str(self._memory_file_path(path))
         return os.path.abspath(os.path.join(self.cwd, path))
+
+    @staticmethod
+    def _is_memory_path(path: str) -> bool:
+        normalized = path.replace("\\", "/").lstrip("./")
+        return normalized == "MEMORY.md" or normalized.startswith("memory/")
+
+    def _memory_file_path(self, path: str) -> Path:
+        normalized = path.replace("\\", "/").lstrip("./")
+        if normalized == "MEMORY.md":
+            relative = "MEMORY.md"
+        else:
+            relative = normalized[len("memory/"):]
+        if not relative or any(part in ("", ".", "..") for part in Path(relative).parts):
+            raise ValueError("Invalid memory path")
+        memory_dir = self.memory_manager.config.get_memory_dir()
+        return memory_dir / relative

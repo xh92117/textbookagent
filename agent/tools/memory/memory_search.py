@@ -115,7 +115,8 @@ class MemorySearchTool(BaseTool):
                 return ToolResult.success(
                     f"No memories found for '{query}'. "
                     f"This is normal if no memories have been stored yet. "
-                    f"You can store new memories by writing to MEMORY.md or memory/YYYY-MM-DD.md files."
+                    f"You can store new memories by writing to MEMORY.md or memory/YYYY-MM-DD.md; "
+                    f"these paths are routed to the system memory directory."
                 )
             
             # Format results

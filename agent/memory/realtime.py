@@ -23,10 +23,12 @@ class RealtimeMemoryRecorder:
     def __init__(
         self,
         workspace_root: str,
+        project_workspace: Optional[str] = None,
         max_session_events: int = 80,
         compact_keep_events: int = 30,
     ):
         self.workspace_root = Path(workspace_root)
+        self.project_workspace = Path(project_workspace) if project_workspace else None
         self.memory_dir = self.workspace_root / "memory"
         self.session_dir = self.memory_dir / "sessions"
         self.process_dir = self.memory_dir / "processes"
@@ -117,6 +119,7 @@ class RealtimeMemoryRecorder:
             profile_events.append({"role": "assistant", "content": final_response})
         if profile_events:
             self._update_user_profile(profile_events, payload.get("session_id", ""))
+            self._update_workspace_profile(profile_events, payload.get("session_id", ""))
 
     def distill_user_profile(
         self,
@@ -248,6 +251,7 @@ class RealtimeMemoryRecorder:
                 f.write(json.dumps(payload, ensure_ascii=False) + "\n")
         self._write_recent_state(session_id, safe_id)
         self._update_user_profile(events, session_id)
+        self._update_workspace_profile(events, session_id)
         self._compact_session_if_needed(safe_id)
 
     def _write_recent_state(self, session_id: str, safe_id: str) -> None:
@@ -331,6 +335,15 @@ class RealtimeMemoryRecorder:
         profile["updated_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         profile_path.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
         self._write_user_profile_md(profile)
+
+    def _update_workspace_profile(self, events: List[Dict[str, Any]], session_id: str) -> None:
+        if not self.project_workspace:
+            return
+        try:
+            from agent.memory.workspace_profile_updater import WorkspaceProfileUpdater
+            WorkspaceProfileUpdater(self.project_workspace).update_from_events(events, session_id=session_id)
+        except Exception:
+            return
 
     def _call_llm_profile_update(self, llm_model: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
         from agent.protocol.models import LLMRequest

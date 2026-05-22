@@ -1,4 +1,5 @@
 import inspect
+import json
 
 from channel.web.web.routes import get_urls
 import channel.web.web.web_channel as web_channel
@@ -59,3 +60,36 @@ def test_web_channel_refuses_public_unauthenticated_console(monkeypatch):
         assert "unauthenticated public web console" in str(exc)
     else:
         raise AssertionError("startup should reject public unauthenticated console")
+
+
+def test_config_handler_can_switch_active_chat_model(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "ai_chat_models": [
+            {"id": "m1", "name": "Model 1", "provider": "deepseek", "model": "deepseek-chat"},
+            {"id": "m2", "name": "Model 2", "provider": "deepseek", "model": "deepseek-reasoner"},
+        ],
+        "active_chat_model_id": "m1",
+    }, ensure_ascii=False), encoding="utf-8-sig")
+    local_config = {
+        "ai_chat_models": [
+            {"id": "m1", "name": "Model 1", "provider": "deepseek", "model": "deepseek-chat"},
+            {"id": "m2", "name": "Model 2", "provider": "deepseek", "model": "deepseek-reasoner"},
+        ],
+        "active_chat_model_id": "m1",
+    }
+
+    monkeypatch.setattr(handlers_config, "require_auth", lambda: None)
+    monkeypatch.setattr(handlers_config, "conf", lambda: local_config)
+    monkeypatch.setattr(handlers_config, "get_config_path", lambda: str(config_path))
+    monkeypatch.setattr(handlers_config.web, "data", lambda: json.dumps({"updates": {"active_chat_model_id": "m2"}}).encode("utf-8"))
+    monkeypatch.setattr(handlers_config.web, "header", lambda *args, **kwargs: None)
+
+    response = json.loads(handlers_config.ConfigHandler().POST())
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert response["status"] == "success"
+    assert response["applied"]["active_chat_model_id"] == "m2"
+    assert response["applied"]["model"] == "deepseek-reasoner"
+    assert saved["active_chat_model_id"] == "m2"
+    assert saved["model"] == "deepseek-reasoner"

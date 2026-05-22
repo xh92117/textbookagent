@@ -2,12 +2,16 @@ import asyncio
 import json
 
 from agent.memory import MemoryConfig, MemoryManager
+from agent.memory.migration import migrate_legacy_memory_files
 from agent.tools.memory.memory_get import MemoryGetTool
 from agent.tools.memory.memory_search import MemorySearchTool
+from agent.tools.write.write import Write
 
 
 def test_memory_get_reads_workspace_root_and_textbook_files(tmp_path):
-    (tmp_path / "MEMORY.md").write_text("# Memory\nremember textbook workflow", encoding="utf-8")
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    (memory_dir / "MEMORY.md").write_text("# Memory\nremember textbook workflow", encoding="utf-8")
     status_path = tmp_path / "textbooks" / "tb_demo" / "state" / "status.json"
     status_path.parent.mkdir(parents=True)
     status_path.write_text(json.dumps({"title": "土木工程教材", "status": "idle"}, ensure_ascii=False), encoding="utf-8")
@@ -67,7 +71,8 @@ def test_memory_sync_indexes_project_profile_files(tmp_path):
 
 
 def test_memory_search_tool_works_inside_running_event_loop(tmp_path):
-    memory_file = tmp_path / "MEMORY.md"
+    memory_file = tmp_path / "memory" / "MEMORY.md"
+    memory_file.parent.mkdir()
     memory_file.write_text("长期记忆：土木工程智能体需要读取状态文件。", encoding="utf-8")
 
     async def run():
@@ -81,3 +86,39 @@ def test_memory_search_tool_works_inside_running_event_loop(tmp_path):
     result = asyncio.run(run())
     assert result.status == "success"
     assert "MEMORY.md" in result.result
+
+
+def test_write_routes_memory_paths_to_system_memory(tmp_path):
+    system_root = tmp_path / "system"
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    manager = MemoryManager(
+        MemoryConfig(workspace_root=str(system_root), project_workspace_root=str(project_root)),
+        embedding_provider=None,
+    )
+    tool = Write({"cwd": str(project_root), "memory_manager": manager})
+
+    result = tool.execute({"path": "memory/2026-05-22.md", "content": "daily memory"})
+
+    assert result.status == "success"
+    assert (system_root / "memory" / "2026-05-22.md").read_text(encoding="utf-8") == "daily memory"
+    assert not (project_root / "memory" / "2026-05-22.md").exists()
+    manager.close()
+
+
+def test_legacy_workspace_memory_is_copied_to_system_memory(tmp_path):
+    system_root = tmp_path / "system"
+    project_root = tmp_path / "project"
+    legacy_daily = project_root / "memory" / "2026-05-22.md"
+    legacy_daily.parent.mkdir(parents=True)
+    legacy_daily.write_text("legacy daily", encoding="utf-8")
+    project_root.mkdir(exist_ok=True)
+    (project_root / "MEMORY.md").write_text("legacy main", encoding="utf-8")
+
+    report = migrate_legacy_memory_files(system_root, project_root)
+
+    imported_root = system_root / "memory" / "imported" / "project"
+    assert (imported_root / "MEMORY.md").read_text(encoding="utf-8") == "legacy main"
+    assert (imported_root / "memory" / "2026-05-22.md").read_text(encoding="utf-8") == "legacy daily"
+    assert (system_root / "memory" / "migrations" / "memory_migration_report.json").exists()
+    assert len(report["copied"]) == 2

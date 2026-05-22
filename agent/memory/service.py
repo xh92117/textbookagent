@@ -5,7 +5,7 @@ Provides a unified interface for listing and reading memory files,
 callable from the cloud client (LinkAI) or a future web console.
 
 Memory file layout (under workspace_root):
-    MEMORY.md               -> type: global
+    memory/MEMORY.md        -> type: global
     memory/2026-02-20.md    -> type: daily
 """
 
@@ -57,10 +57,10 @@ class MemoryService:
         }
 
     def _list_memory_files(self) -> List[dict]:
-        """MEMORY.md + memory/*.md (newest first)."""
+        """memory/MEMORY.md + memory/*.md (newest first)."""
         files: List[dict] = []
 
-        global_path = os.path.join(self.workspace_root, "MEMORY.md")
+        global_path = os.path.join(self.memory_dir, "MEMORY.md")
         if os.path.isfile(global_path):
             files.append(self._file_info(global_path, "MEMORY.md", "global"))
 
@@ -68,6 +68,8 @@ class MemoryService:
             daily_files = []
             for name in os.listdir(self.memory_dir):
                 full = os.path.join(self.memory_dir, name)
+                if name == "MEMORY.md":
+                    continue
                 if os.path.isfile(full) and name.endswith(".md"):
                     daily_files.append((name, full))
             daily_files.sort(key=lambda x: x[0], reverse=True)
@@ -163,14 +165,14 @@ class MemoryService:
         """
         Safely resolve a filename to its absolute path within the allowed directory.
 
-        - ``MEMORY.md`` → ``{workspace_root}/MEMORY.md``
+        - ``MEMORY.md`` → ``{workspace_root}/memory/MEMORY.md``
         - ``2026-02-20.md`` (memory) → ``{workspace_root}/memory/2026-02-20.md``
         - ``2026-02-20.md`` (dream) → ``{workspace_root}/memory/dreams/2026-02-20.md``
 
         Raises ValueError if the resolved path escapes the allowed directory.
         """
         if filename == "MEMORY.md":
-            base_dir = self.workspace_root
+            base_dir = self.memory_dir
         elif category == "dream":
             base_dir = os.path.join(self.memory_dir, "dreams")
         else:

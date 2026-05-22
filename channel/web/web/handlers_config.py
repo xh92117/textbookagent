@@ -1,6 +1,7 @@
 """Configuration API handlers for the web channel."""
 
 import json
+import os
 import uuid
 from collections import OrderedDict
 
@@ -469,7 +470,7 @@ class ConfigHandler:
 
             config_path = get_config_path()
             if os.path.exists(config_path):
-                with open(config_path, "r", encoding="utf-8") as f:
+                with open(config_path, "r", encoding="utf-8-sig") as f:
                     file_cfg = json.load(f)
             else:
                 file_cfg = {}

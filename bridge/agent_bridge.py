@@ -465,8 +465,11 @@ class AgentBridge:
             process_recorder = None
             try:
                 from agent.memory import RealtimeMemoryRecorder
-                from common.app_paths import system_dir
-                process_recorder = RealtimeMemoryRecorder(system_dir())
+                from common.app_paths import active_workspace, system_dir
+                process_recorder = RealtimeMemoryRecorder(
+                    system_dir(),
+                    project_workspace=getattr(agent, "workspace_dir", None) or active_workspace(),
+                )
                 process_recorder.start_process(session_id or "default", process_id, query, channel_type=(context.get("channel_type") or "") if context else "")
             except Exception as mem_err:
                 logger.debug(f"[AgentBridge] realtime process memory start skipped: {mem_err}")
