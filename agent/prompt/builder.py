@@ -218,6 +218,7 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
         "- 持续推进直到任务完成，完成后向用户报告结果",
         "- 回复中涉及密钥、令牌等敏感信息必须脱敏",
         "- URL链接直接放在回复文本中即可，系统会自动处理和渲染。无需下载后使用send工具发送",
+        "- Windows 命令/PowerShell 只用于执行程序、列目录、检查状态等操作；命令文本和输出字段尽量使用 ASCII/英文，拿到结果后再用中文向用户解释。不要把大段中文正文、章节内容或提示词直接塞进 shell 命令。",
         "- 写入中文教材文件时，优先使用 write 或 edit 工具；追加内容用 edit 且 oldText 为空。不要用 bash 调用 PowerShell Add-Content/Set-Content/Out-File 写中文文件，避免 Windows 编码破坏。",
         "- 单次工具参数保持短小。大段章节内容必须按小节或更小块分批写入，每块建议不超过 6000 字符；JSON 参数解析失败后，应缩小块大小并继续，不要改用 shell 拼接长字符串。",
         "- 编写、续写、替换或检查教材章节时，优先使用 textbook_chapter 工具。它会自动定位教材ID目录、按UTF-8保存、更新章节元数据和状态，避免手写路径或用shell拼接文件。",

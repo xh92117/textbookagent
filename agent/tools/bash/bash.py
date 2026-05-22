@@ -2,6 +2,7 @@
 Bash tool - Execute bash commands
 """
 
+import base64
 import os
 import re
 import sys
@@ -24,6 +25,8 @@ class Bash(BaseTool):
     description: str = f"""Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last {DEFAULT_MAX_LINES} lines or {DEFAULT_MAX_BYTES // 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file.
 {'''
 PLATFORM: Windows (cmd.exe). Do NOT use Unix-only commands like grep, head, tail, sed, awk.
+Prefer ASCII/English command text and stable machine-readable output. Summarize results to the user in Chinese.
+If PowerShell is invoked, the tool normalizes PowerShell's output pipeline to UTF-8. Do not use PowerShell to write Chinese prose files.
 ''' if _IS_WIN else ''}
 ENVIRONMENT: All API keys from env_config are auto-injected. Use $VAR_NAME directly.
 
@@ -123,8 +126,7 @@ SAFETY:
             if self._IS_WIN:
                 env["PYTHONIOENCODING"] = "utf-8"
                 command = self._convert_env_vars_for_windows(command, dotenv_vars)
-                if command and not command.strip().lower().startswith("chcp"):
-                    command = f"chcp 65001 >nul 2>&1 && {command}"
+                command = self._prepare_windows_command(command)
 
             result = subprocess.run(
                 command,
@@ -385,6 +387,61 @@ SAFETY:
         if any(cmdlet in lowered for cmdlet in risky_cmdlets):
             return True
         return bool(re.search(r">\s*['\"]?[a-z]:\\", lowered))
+
+    @classmethod
+    def _prepare_windows_command(cls, command: str) -> str:
+        """
+        Prepare Windows commands for stable UTF-8 output.
+
+        The bash tool is backed by cmd.exe on Windows. For normal cmd commands we
+        switch the code page to UTF-8. For explicit PowerShell invocations we also
+        force PowerShell's output pipeline encoding and use -EncodedCommand to avoid
+        quote/locale corruption before subprocess sees the command.
+        """
+        stripped = (command or "").strip()
+        if not stripped or stripped.lower().startswith("chcp"):
+            return stripped
+
+        powershell = cls._parse_powershell_invocation(stripped)
+        if powershell:
+            exe, script = powershell
+            prelude = (
+                "try{[Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false)}catch{};"
+                "$OutputEncoding=[System.Text.UTF8Encoding]::new($false);"
+            )
+            encoded = base64.b64encode(f"{prelude}\n{script}".encode("utf-16le")).decode("ascii")
+            return f"chcp 65001 >nul 2>&1 && {exe} -NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}"
+
+        return f"chcp 65001 >nul 2>&1 && {stripped}"
+
+    @classmethod
+    def _parse_powershell_invocation(cls, command: str) -> tuple[str, str] | None:
+        tokens = cls._rough_tokens(command)
+        if not tokens:
+            return None
+        exe = tokens[0].strip("'\"")
+        if not re.fullmatch(r"(?i)(?:powershell|powershell\.exe|pwsh|pwsh\.exe)", exe):
+            return None
+
+        for idx, token in enumerate(tokens[1:], start=1):
+            lowered = token.lower()
+            if lowered in {"-command", "-c", "/command", "/c"} and idx + 1 < len(tokens):
+                script = " ".join(tokens[idx + 1:]).strip()
+                return exe, cls._strip_outer_quotes(script)
+
+        # Treat the remaining tokens as the script only when the invocation did
+        # not consist solely of switches (for example, not `powershell -File x.ps1`).
+        remaining = [token for token in tokens[1:] if token and not token.startswith("-")]
+        if remaining:
+            return exe, cls._strip_outer_quotes(" ".join(tokens[1:]).strip())
+        return None
+
+    @staticmethod
+    def _strip_outer_quotes(value: str) -> str:
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            return value[1:-1]
+        return value
 
     @staticmethod
     def _convert_env_vars_for_windows(command: str, dotenv_vars: dict) -> str:

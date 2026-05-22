@@ -1,5 +1,6 @@
 # encoding:utf-8
 
+import base64
 import time
 
 import pytest
@@ -186,6 +187,31 @@ def test_bash_rejects_powershell_add_content_for_utf8_safety():
 
     assert result.status == "error"
     assert "Encoding safety guard" in str(result.result)
+
+
+def test_bash_wraps_windows_powershell_with_utf8_encoded_command(monkeypatch):
+    monkeypatch.setattr(Bash, "_IS_WIN", True)
+
+    prepared = Bash._prepare_windows_command(
+        'powershell -Command "Get-ChildItem | Select-Object Name"'
+    )
+
+    assert prepared.startswith("chcp 65001")
+    assert "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand " in prepared
+    encoded = prepared.rsplit(" ", 1)[-1]
+    script = base64.b64decode(encoded).decode("utf-16le")
+    assert "[Console]::InputEncoding" in script
+    assert "$OutputEncoding" in script
+    assert "[System.Text.UTF8Encoding]" in script
+    assert "Get-ChildItem | Select-Object Name" in script
+
+
+def test_bash_keeps_regular_windows_command_under_utf8_codepage(monkeypatch):
+    monkeypatch.setattr(Bash, "_IS_WIN", True)
+
+    prepared = Bash._prepare_windows_command("dir")
+
+    assert prepared == "chcp 65001 >nul 2>&1 && dir"
 
 
 def test_bash_rejects_remote_script_execution():
