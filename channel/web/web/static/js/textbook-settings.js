@@ -479,6 +479,12 @@ function loadTextbookDetail() {
     }
     loadOutlineForEditor();
     loadBookPreferences();
+    var activeTab = document.querySelector('.tab.active');
+    var tabName = activeTab ? activeTab.getAttribute('data-tab') : '';
+    if (tabName === 'chapter-preview') {
+        loadChapterTree();
+        if (currentChapterNum) loadChapterContent(currentChapterNum, null);
+    }
 }
 
 function switchTab(el, tabName) {
@@ -488,7 +494,10 @@ function switchTab(el, tabName) {
     const pane = document.getElementById('tab-' + tabName);
     if (pane) pane.classList.add('active');
     if (tabName === 'outline-edit') loadOutlineForEditor();
-    if (tabName === 'chapter-preview') loadChapterTree();
+    if (tabName === 'chapter-preview') {
+        loadChapterTree();
+        if (currentChapterNum) loadChapterContent(currentChapterNum, null);
+    }
     if (tabName === 'export') { }
     if (tabName === 'preferences') loadBookPreferences();
 }

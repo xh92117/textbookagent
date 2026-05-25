@@ -374,6 +374,8 @@ function startChatSSE(requestId, externalAssistantEl, externalBubbleEl, userMess
                 streamClosed = true;
                 if (window.refreshActiveChatStream) window.refreshActiveChatStream = null;
                 eventSource.close();
+                if (typeof refreshBookDetail === 'function') refreshBookDetail();
+                if (typeof loadTextbooks === 'function') loadTextbooks();
             } else if (d.type === 'error') {
                 addThinking('执行出错', d.message || '未知错误', 'error');
                 flushOutput(true);

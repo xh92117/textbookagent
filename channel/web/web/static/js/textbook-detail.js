@@ -105,6 +105,12 @@ function showSimpleModal(title, contentHtml) {
 
 var currentChapterNum = null;
 var chapterEditMode = false;
+var chapterPreviewRefreshSeq = 0;
+
+function nextChapterPreviewUrl(num) {
+    chapterPreviewRefreshSeq += 1;
+    return '/api/textbook/' + currentBookId + '/chapters/' + num + '?_=' + Date.now() + '-' + chapterPreviewRefreshSeq;
+}
 
 function parseChapterOrdinal(raw) {
     raw = String(raw || '').trim();
@@ -248,7 +254,7 @@ function _scrollToSection(sectionTitle) {
 
 function loadChapterContent(num, scrollToSection) {
     if (!currentBookId) return;
-    fetch('/api/textbook/' + currentBookId + '/chapters/' + num)
+    fetch(nextChapterPreviewUrl(num), {cache: 'no-store'})
         .then(function(r) { return r.json(); })
         .then(function(data) {
             var area = document.getElementById('chapterContentArea');
