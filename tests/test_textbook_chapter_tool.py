@@ -1,3 +1,6 @@
+import json
+import os
+
 from agent.textbook.models.textbook import TextbookConfig
 from agent.tools.textbook_chapter.textbook_chapter import TextbookChapterTool
 from bridge.textbook_bridge import TextbookBridge
@@ -196,3 +199,133 @@ def test_textbook_chapter_requires_explicit_overwrite_for_existing_long_chapter(
     })
     assert allowed.status == "success"
     assert bridge.get_chapter(book.id, 3) == rewritten
+
+
+def test_textbook_chapter_rewrite_replaces_existing_and_updates_index(tmp_path, monkeypatch):
+    bridge = _bridge(tmp_path)
+    book = _book(bridge)
+    monkeypatch.setattr("bridge.textbook_bridge.get_bridge", lambda: bridge)
+
+    tool = TextbookChapterTool()
+    old_content = (
+        "# 第3章 原章节\n\n"
+        "## 3.1 旧内容\n\n"
+        + ("旧段落。\n" * 260)
+        + "\n## 本章小结\n\n旧小结。\n\n## 3.4 残留尾巴\n\n不应保留。\n"
+    )
+    assert tool.execute({
+        "action": "write_chapter",
+        "book_id": book.id,
+        "chapter_num": 3,
+        "content": old_content,
+    }).status == "success"
+
+    new_content = (
+        "# 第3章 智能体开发实践\n\n"
+        "## 3.1 应用场景识别\n\n"
+        + ("围绕岗位任务分析智能体能承担的资料整理、检查和辅助决策工作。\n" * 35)
+        + "\n### 3.1.1 场景边界\n\n"
+        + ("说明输入、输出、责任人和验收标准。\n" * 35)
+        + "\n## 3.2 工作流设计\n\n"
+        + ("把任务拆成资料收集、规则检查、结果复核三个步骤。\n" * 35)
+        + "\n## 本章小结\n\n"
+        + ("本章强调面向应用的设计流程。\n" * 25)
+        + "\n## 习题\n\n1. 设计一个施工记录整理智能体。\n"
+    )
+
+    rewritten = tool.execute({
+        "action": "rewrite_chapter",
+        "book_id": book.id,
+        "chapter_num": 3,
+        "content": new_content,
+        "completed": True,
+    })
+    assert rewritten.status == "success"
+    assert rewritten.result["action"] == "rewritten"
+    assert rewritten.result["structure"]["fatal_issues"] == []
+    assert os.path.exists(rewritten.result["backup_path"])
+    chapter = bridge.get_chapter(book.id, 3)
+    assert "残留尾巴" not in chapter
+    assert "应用场景识别" in chapter
+
+    index_path = os.path.join(bridge.get_book_dir(book.id), "state", "chapter_index.json")
+    with open(index_path, "r", encoding="utf-8") as f:
+        index = json.load(f)
+    entry = index["chapters"]["3"]
+    assert entry["status"] == "ok"
+    assert entry["last_operation"] == "rewrite_chapter"
+    assert entry["content_hash"] == rewritten.result["content_hash"]
+
+
+def test_textbook_chapter_validate_structure_detects_tail_and_duplicate_headings(tmp_path, monkeypatch):
+    bridge = _bridge(tmp_path)
+    book = _book(bridge)
+    monkeypatch.setattr("bridge.textbook_bridge.get_bridge", lambda: bridge)
+
+    tool = TextbookChapterTool()
+    malformed = (
+        "# \u7b2c3\u7ae0 \u7ed3\u6784\u6c61\u67d3\n\n"
+        "## 3.1 \u6b63\u5e38\u5c0f\u8282\n\n"
+        + ("\u5185\u5bb9\u3002\n" * 260)
+        + "\n## \u672c\u7ae0\u5c0f\u7ed3\n\n\u5c0f\u7ed3\u3002\n\n"
+        "## \u4e60\u9898\n\n\u7ec3\u4e60\u3002\n\n"
+        "## 3.4 \u6b8b\u7559\u5c3e\u5df4\n\n\u6c61\u67d3\u5185\u5bb9\u3002\n\n"
+        "## 3.4 \u6b8b\u7559\u5c3e\u5df4\n\n\u91cd\u590d\u5185\u5bb9\u3002\n\n"
+        "### 3.5.1 \u9519\u4f4d\u4e09\u7ea7\u6807\u9898\n\n\u9519\u4f4d\u5185\u5bb9\u3002\n"
+    )
+    assert tool.execute({
+        "action": "write_chapter",
+        "book_id": book.id,
+        "chapter_num": 3,
+        "content": malformed,
+    }).status == "success"
+
+    report = tool.execute({
+        "action": "validate_structure",
+        "book_id": book.id,
+        "chapter_num": 3,
+    })
+    assert report.status == "success"
+    assert report.result["ok"] is False
+    assert any("duplicate heading" in issue for issue in report.result["fatal_issues"])
+    assert any("after summary/exercises" in issue for issue in report.result["fatal_issues"])
+
+    completed = tool.execute({
+        "action": "mark_completed",
+        "book_id": book.id,
+        "chapter_num": 3,
+    })
+    assert completed.status == "error"
+    assert completed.result["structure"]["fatal_issues"]
+
+
+def test_textbook_chapter_validate_structure_ignores_fenced_code_comments(tmp_path, monkeypatch):
+    bridge = _bridge(tmp_path)
+    book = _book(bridge)
+    monkeypatch.setattr("bridge.textbook_bridge.get_bridge", lambda: bridge)
+
+    tool = TextbookChapterTool()
+    content = (
+        "# 第2章 环境搭建\n\n"
+        "## 2.1 Python 环境\n\n"
+        + ("通过安装、检查和运行示例完成环境搭建。\n" * 80)
+        + "\n```python\n# 这只是代码注释\nprint('hello')\n# 这不是标题\n```\n\n"
+        "## 本章小结\n\n"
+        + ("代码块中的井号注释不能污染标题结构。\n" * 35)
+    )
+    assert tool.execute({
+        "action": "write_chapter",
+        "book_id": book.id,
+        "chapter_num": 2,
+        "content": content,
+    }).status == "success"
+
+    report = tool.execute({
+        "action": "validate_structure",
+        "book_id": book.id,
+        "chapter_num": 2,
+    })
+    assert report.status == "success"
+    assert report.result["fatal_issues"] == []
+    heading_text = "\n".join(h["text"] for h in report.result["headings"])
+    assert "这只是代码注释" not in heading_text

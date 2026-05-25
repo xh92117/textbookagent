@@ -1,6 +1,8 @@
 # encoding:utf-8
 
 import base64
+import json
+import os
 import time
 
 import pytest
@@ -12,6 +14,7 @@ from bridge.agent_bridge import AgentLLMModel
 from bridge.textbook_bridge import _LightweightLLM
 from agent.protocol.agent_stream import AgentStreamExecutor
 from agent.protocol.models import LLMModel
+from agent.textbook.models.textbook import TextbookConfig
 from agent.tools.bash.bash import Bash
 
 
@@ -77,7 +80,7 @@ def test_agent_executor_max_steps_summary_uses_local_excerpt():
     executor.messages = [
         {
             "role": "assistant",
-            "content": [{"type": "text", "text": "已经写入第二章 2.1-2.3 节。"}],
+            "content": [{"type": "text", "text": "already wrote chapter 2 sections 2.1-2.3"}],
         }
     ]
 
@@ -255,6 +258,88 @@ def test_parse_error_recovery_hint_prefers_textbook_chapter():
     hint = AgentStreamExecutor._tool_parse_recovery_hint("edit")
     assert "textbook_chapter" in hint
     assert "Do not use bash or PowerShell" in hint
+
+
+def test_failure_fold_groups_repeated_tool_failures():
+    executor = object.__new__(AgentStreamExecutor)
+    executor.tool_failure_details = []
+    args = {"book_id": "tb_alpha", "chapter_num": 3, "action": "write_chapter"}
+
+    executor._record_tool_failure_detail(
+        "textbook_chapter",
+        args,
+        "Refusing dangerous full-chapter overwrite of existing chapter.",
+    )
+    executor._record_tool_failure_detail(
+        "textbook_chapter",
+        args,
+        "Refusing dangerous full-chapter overwrite of existing chapter.",
+    )
+
+    folded = executor._failure_fold_context()
+    assert "Failure Fold" in folded
+    assert "short_full_overwrite_refused repeated 2 times" in folded
+    assert "rewrite_chapter" in folded
+
+
+def test_runtime_board_includes_active_chapter_state_index(tmp_path, monkeypatch):
+    bridge = textbook_bridge.TextbookBridge(data_dir=str(tmp_path))
+    book = bridge.create_textbook(TextbookConfig(
+        title="Book",
+        subject="Civil",
+        target_audience="Student",
+        level="Intro",
+        total_chapters=3,
+    ))
+    state_dir = os.path.join(bridge.get_book_dir(book.id), "state")
+    os.makedirs(state_dir, exist_ok=True)
+    with open(os.path.join(state_dir, "chapter_index.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            "version": "chapter-index-v1",
+            "chapters": {
+                "3": {
+                    "book_id": book.id,
+                    "chapter_num": 3,
+                    "title": "Chapter 3",
+                    "status": "needs_fix",
+                    "content_hash": "abc123",
+                    "chars": 2048,
+                    "headings": ["# Chapter 3", "## 3.1 Intro"],
+                    "fatal_issues": ["main section appears after summary/exercises"],
+                    "warnings": [],
+                    "last_operation": "validate_structure",
+                    "last_issue": "main section appears after summary/exercises",
+                    "updated_at": "2026-05-25T12:00:00",
+                }
+            },
+        }, f)
+    monkeypatch.setattr("bridge.textbook_bridge.get_bridge", lambda: bridge)
+
+    executor = object.__new__(AgentStreamExecutor)
+    executor.tool_route = None
+    executor.short_term_memory = None
+    executor.agent = None
+    executor.model = None
+    executor.tool_failure_details = []
+    executor.messages = [{
+        "role": "user",
+        "content": [{"type": "text", "text": f"edit {book.id} with \"chapter_num\": 3"}],
+    }]
+
+    board = executor._build_runtime_context_board([], reason="test")
+    assert "Chapter State Index" in board
+    assert "needs_fix" in board
+    assert "abc123" in board
+
+
+def test_active_textbook_target_falls_back_to_number_near_book_id():
+    executor = object.__new__(AgentStreamExecutor)
+    executor.messages = [{
+        "role": "user",
+        "content": [{"type": "text", "text": "please revise tb_alpha 3 before export"}],
+    }]
+
+    assert executor._active_textbook_target() == {"book_id": "tb_alpha", "chapter_num": 3}
 
 
 def test_knowledge_stream_guard_returns_partial_sse_when_done_is_missing(monkeypatch):

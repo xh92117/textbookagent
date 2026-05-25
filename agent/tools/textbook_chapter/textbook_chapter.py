@@ -2,7 +2,8 @@ import json
 import os
 import re
 import time
-from typing import Any, Dict, Tuple
+from datetime import datetime
+from typing import Any, Dict, List, Tuple
 
 from agent.tools.base_tool import BaseTool, ToolResult
 
@@ -13,8 +14,8 @@ class TextbookChapterTool(BaseTool):
         "UTF-8 safe textbook chapter tool. Use this instead of write/edit/bash when reading, "
         "writing, appending, replacing, or validating textbook chapter Markdown. It resolves "
         "the canonical book_id/textbooks/<id>/chapters path, preserves chapter metadata, and "
-        "updates the textbook status board. Actions: read, write_chapter, append_section, "
-        "replace_section, mark_completed, validate_encoding, status. To mark an existing "
+        "updates the textbook status board. Actions: read, write_chapter, rewrite_chapter, append_section, "
+        "replace_section, mark_completed, validate_encoding, validate_structure, status. To mark an existing "
         "chapter complete, use mark_completed; never call write_chapter with placeholder content."
     )
 
@@ -23,7 +24,7 @@ class TextbookChapterTool(BaseTool):
         "properties": {
             "action": {
                 "type": "string",
-                "description": "One of: read, write_chapter, append_section, replace_section, mark_completed, validate_encoding, status"
+                "description": "One of: read, write_chapter, rewrite_chapter, append_section, replace_section, mark_completed, validate_encoding, validate_structure, status"
             },
             "book_id": {
                 "type": "string",
@@ -90,12 +91,25 @@ class TextbookChapterTool(BaseTool):
                 return ToolResult.success(self._status_payload(mgr, book_id, chapter_num))
             if action == "validate_encoding":
                 return ToolResult.success(self._validate(mgr, book_id, chapter_num))
+            if action == "validate_structure":
+                content = mgr.read_chapter(chapter_num)
+                report = self._validate_structure(content, chapter_num)
+                self._update_chapter_index(mgr, book_id, chapter_num, "validate_structure", report=report)
+                return ToolResult.success(report)
             if action == "mark_completed":
                 return self._mark_completed(mgr, book_id, chapter_num)
-            if action in ("write_chapter", "append_section", "replace_section"):
+            if action in ("write_chapter", "rewrite_chapter", "append_section", "replace_section"):
                 content = args.get("content", "")
                 if not isinstance(content, str):
                     return ToolResult.fail("content must be a string")
+                if action == "rewrite_chapter":
+                    return self._rewrite_chapter(
+                        mgr,
+                        book_id,
+                        chapter_num,
+                        content,
+                        bool(args.get("completed", False)),
+                    )
                 if action == "write_chapter":
                     return self._write_chapter(
                         mgr,
@@ -136,7 +150,37 @@ class TextbookChapterTool(BaseTool):
         mgr.write_chapter(chapter_num, content)
         self._write_metadata(mgr, chapter_num, content, completed)
         self._update_status(mgr, book_id, chapter_num, "persist_chapter" if completed else "write_chapter")
+        report = self._update_chapter_index(mgr, book_id, chapter_num, "write_chapter")
         payload = self._result_payload(mgr, book_id, chapter_num, "written", content, completed, source_chars=len(content))
+        payload["structure"] = report
+        if backup_path:
+            payload["backup_path"] = backup_path
+        return ToolResult.success(payload)
+
+    def _rewrite_chapter(self, mgr, book_id: str, chapter_num: int, content: str, completed: bool) -> ToolResult:
+        normalized = (content or "").strip()
+        if len(normalized) < self.MIN_COMPLETED_CHARS:
+            return ToolResult.fail(
+                "Refusing rewrite_chapter because the new chapter body is too short. "
+                "Provide a complete chapter body, including chapter title, main sections, summary, and exercises if applicable."
+            )
+        report = self._validate_structure(normalized, chapter_num)
+        fatal = report.get("fatal_issues", [])
+        if fatal:
+            return ToolResult.fail({
+                "message": "Refusing rewrite_chapter because the new chapter structure is invalid.",
+                "fatal_issues": fatal,
+                "warnings": report.get("warnings", []),
+            })
+        existing = mgr.read_chapter(chapter_num)
+        backup_path = self._backup_existing_chapter(mgr, chapter_num, existing, normalized)
+        mgr.write_chapter(chapter_num, normalized + "\n")
+        saved = mgr.read_chapter(chapter_num)
+        self._write_metadata(mgr, chapter_num, saved, completed)
+        self._update_status(mgr, book_id, chapter_num, "persist_chapter" if completed else "rewrite_chapter")
+        report = self._update_chapter_index(mgr, book_id, chapter_num, "rewrite_chapter", report=report)
+        payload = self._result_payload(mgr, book_id, chapter_num, "rewritten", saved, completed, source_chars=len(content))
+        payload["structure"] = report
         if backup_path:
             payload["backup_path"] = backup_path
         return ToolResult.success(payload)
@@ -148,9 +192,20 @@ class TextbookChapterTool(BaseTool):
                 "Refusing to mark chapter completed because the existing chapter is too short. "
                 "Write or append the chapter content first, then call mark_completed."
             )
+        report = self._validate_structure(content, chapter_num)
+        if report.get("fatal_issues"):
+            return ToolResult.fail({
+                "message": "Refusing to mark chapter completed because structure validation failed.",
+                "fatal_issues": report.get("fatal_issues", []),
+                "warnings": report.get("warnings", []),
+                "structure": report,
+            })
         self._write_metadata(mgr, chapter_num, content, True)
         self._update_status(mgr, book_id, chapter_num, "persist_chapter")
-        return ToolResult.success(self._result_payload(mgr, book_id, chapter_num, "completed", content, True))
+        report = self._update_chapter_index(mgr, book_id, chapter_num, "mark_completed", report=report)
+        payload = self._result_payload(mgr, book_id, chapter_num, "completed", content, True)
+        payload["structure"] = report
+        return ToolResult.success(payload)
 
     def _append_section(self, mgr, book_id: str, chapter_num: int, heading: str, content: str, completed: bool) -> ToolResult:
         existing = mgr.read_chapter(chapter_num)
@@ -164,7 +219,10 @@ class TextbookChapterTool(BaseTool):
         mgr.write_chapter(chapter_num, combined)
         self._write_metadata(mgr, chapter_num, combined, completed)
         self._update_status(mgr, book_id, chapter_num, "persist_chapter" if completed else "write_chapter")
-        return ToolResult.success(self._result_payload(mgr, book_id, chapter_num, action, combined, completed, heading, source_chars=len(content)))
+        report = self._update_chapter_index(mgr, book_id, chapter_num, "append_section")
+        payload = self._result_payload(mgr, book_id, chapter_num, action, combined, completed, heading, source_chars=len(content))
+        payload["structure"] = report
+        return ToolResult.success(payload)
 
     def _replace_section(self, mgr, book_id: str, chapter_num: int, heading: str, content: str, completed: bool) -> ToolResult:
         existing = mgr.read_chapter(chapter_num)
@@ -176,7 +234,10 @@ class TextbookChapterTool(BaseTool):
         mgr.write_chapter(chapter_num, updated)
         self._write_metadata(mgr, chapter_num, updated, completed)
         self._update_status(mgr, book_id, chapter_num, "persist_chapter" if completed else "write_chapter")
-        return ToolResult.success(self._result_payload(mgr, book_id, chapter_num, "replaced", updated, completed, heading, source_chars=len(content)))
+        report = self._update_chapter_index(mgr, book_id, chapter_num, "replace_section")
+        payload = self._result_payload(mgr, book_id, chapter_num, "replaced", updated, completed, heading, source_chars=len(content))
+        payload["structure"] = report
+        return ToolResult.success(payload)
 
     def _validate(self, mgr, book_id: str, chapter_num: int) -> Dict[str, Any]:
         path = mgr._chapter_path(chapter_num)
@@ -222,6 +283,7 @@ class TextbookChapterTool(BaseTool):
             "heading": heading,
             "path": mgr._chapter_path(chapter_num),
             "chars": len(content),
+            "content_hash": mgr.content_hash(content),
             "completed": completed,
             "encoding": self._validate_text(content),
             "message": "Chapter content saved through canonical UTF-8 textbook_chapter tool.",
@@ -241,6 +303,7 @@ class TextbookChapterTool(BaseTool):
             "chapter_metadata": mgr.get_chapter_metadata(chapter_num),
             "chapter_chars": len(mgr.read_chapter(chapter_num)),
             "chapter_path": mgr._chapter_path(chapter_num),
+            "chapter_index": self._chapter_index_entry(mgr, chapter_num),
         }
 
     def _write_metadata(self, mgr, chapter_num: int, content: str, completed: bool) -> None:
@@ -319,6 +382,177 @@ class TextbookChapterTool(BaseTool):
             run_status="running",
             extra={"chapter_tool": self.name},
         )
+
+    def _update_chapter_index(
+        self,
+        mgr,
+        book_id: str,
+        chapter_num: int,
+        operation: str,
+        report: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
+        content = mgr.read_chapter(chapter_num)
+        report = report or self._validate_structure(content, chapter_num)
+        headings = report.get("headings", [])
+        index = self._load_chapter_index(mgr)
+        entry = {
+            "book_id": book_id,
+            "chapter_num": chapter_num,
+            "title": self._chapter_title_from_headings(headings),
+            "status": "needs_fix" if report.get("fatal_issues") else "ok",
+            "content_hash": mgr.content_hash(content),
+            "chars": len(content),
+            "headings": [h.get("text", "") for h in headings],
+            "duplicate_headings": report.get("duplicate_headings", []),
+            "fatal_issues": report.get("fatal_issues", []),
+            "warnings": report.get("warnings", []),
+            "last_operation": operation,
+            "last_issue": "; ".join(report.get("fatal_issues", [])[:3]),
+            "updated_at": datetime.now().isoformat(),
+        }
+        chapters = index.setdefault("chapters", {})
+        chapters[str(chapter_num)] = entry
+        index["version"] = "chapter-index-v1"
+        index["updated_at"] = entry["updated_at"]
+        path = self._chapter_index_path(mgr)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(index, f, ensure_ascii=False, indent=2)
+        return report
+
+    def _chapter_index_entry(self, mgr, chapter_num: int) -> Dict[str, Any]:
+        return self._load_chapter_index(mgr).get("chapters", {}).get(str(chapter_num), {})
+
+    @staticmethod
+    def _chapter_index_path(mgr) -> str:
+        return os.path.join(mgr.book_dir, "state", "chapter_index.json")
+
+    def _load_chapter_index(self, mgr) -> Dict[str, Any]:
+        path = self._chapter_index_path(mgr)
+        if not os.path.exists(path):
+            return {"version": "chapter-index-v1", "chapters": {}}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                data.setdefault("chapters", {})
+                return data
+        except Exception:
+            pass
+        return {"version": "chapter-index-v1", "chapters": {}}
+
+    @staticmethod
+    def _chapter_title_from_headings(headings: List[Dict[str, Any]]) -> str:
+        for heading in headings:
+            if heading.get("level") == 1:
+                return heading.get("text", "").lstrip("#").strip()
+        return headings[0].get("text", "").strip() if headings else ""
+
+    @classmethod
+    def _validate_structure(cls, content: str, chapter_num: int = 0) -> Dict[str, Any]:
+        headings = cls._extract_markdown_headings(content)
+        fatal: List[str] = []
+        warnings: List[str] = []
+        duplicate_headings: List[str] = []
+        seen: Dict[str, int] = {}
+        for heading in headings:
+            text = heading["text"]
+            seen[text] = seen.get(text, 0) + 1
+        for text, count in sorted(seen.items()):
+            if count > 1 and cls._is_structural_heading(text):
+                duplicate_headings.append(text)
+                fatal.append(f"duplicate heading: {text} ({count} times)")
+
+        terminal_seen = False
+        terminal_line = 0
+        current_h2_prefix = ""
+        expected_chapter_prefix = f"{chapter_num}." if chapter_num else ""
+        for heading in headings:
+            text = heading["text"]
+            level = int(heading["level"])
+            line = int(heading["line"])
+            if level == 2:
+                if terminal_seen and cls._is_numbered_chapter_section(text, chapter_num):
+                    fatal.append(f"main section appears after summary/exercises at line {line}: {text}")
+                if cls._is_terminal_heading(text):
+                    terminal_seen = True
+                    terminal_line = terminal_line or line
+                current_h2_prefix = cls._section_prefix(text, level=2)
+                if expected_chapter_prefix and current_h2_prefix and not current_h2_prefix.startswith(expected_chapter_prefix):
+                    warnings.append(f"heading may not belong to chapter {chapter_num}: line {line} {text}")
+            elif level == 3:
+                prefix = cls._section_prefix(text, level=3)
+                if prefix and current_h2_prefix and not prefix.startswith(current_h2_prefix + "."):
+                    fatal.append(
+                        f"subsection numbering mismatch at line {line}: {text} under {current_h2_prefix or 'unknown section'}"
+                    )
+            elif level == 1 and line > 1:
+                warnings.append(f"additional level-1 heading at line {line}: {text}")
+
+        return {
+            "ok": not fatal,
+            "chapter_num": chapter_num,
+            "chars": len(content or ""),
+            "line_count": len((content or "").splitlines()),
+            "heading_count": len(headings),
+            "headings": headings,
+            "duplicate_headings": duplicate_headings,
+            "fatal_issues": fatal,
+            "warnings": warnings,
+            "terminal_line": terminal_line,
+        }
+
+    @staticmethod
+    def _extract_markdown_headings(content: str) -> List[Dict[str, Any]]:
+        headings: List[Dict[str, Any]] = []
+        in_fence = False
+        for idx, line in enumerate((content or "").splitlines(), start=1):
+            stripped = line.strip()
+            if stripped.startswith("```") or stripped.startswith("~~~"):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            match = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
+            if not match:
+                continue
+            text = f"{match.group(1)} {match.group(2).strip()}"
+            headings.append({
+                "line": idx,
+                "level": len(match.group(1)),
+                "text": text,
+            })
+        return headings
+
+    @staticmethod
+    def _is_terminal_heading(text: str) -> bool:
+        stripped = text.strip()
+        terminal_terms = (
+            "\u672c\u7ae0\u5c0f\u7ed3",
+            "\u5c0f\u7ed3",
+            "\u4e60\u9898",
+            "\u7ec3\u4e60",
+            "\u601d\u8003\u9898",
+            "\u5b9e\u8df5\u9898",
+        )
+        return any(re.match(rf"^##\s*{term}(?:\s|$)", stripped) for term in terminal_terms)
+
+    @staticmethod
+    def _is_numbered_chapter_section(text: str, chapter_num: int = 0) -> bool:
+        if chapter_num:
+            return bool(re.match(rf"^##\s*{chapter_num}\.\d+\b", text.strip()))
+        return bool(re.match(r"^##\s*\d+\.\d+\b", text.strip()))
+
+    @classmethod
+    def _is_structural_heading(cls, text: str) -> bool:
+        stripped = text.strip()
+        return stripped.startswith("## ") or cls._is_terminal_heading(stripped)
+
+    @staticmethod
+    def _section_prefix(text: str, level: int) -> str:
+        hashes = "#" * level
+        match = re.match(rf"^{re.escape(hashes)}\s*(\d+(?:\.\d+)*)\b", text.strip())
+        return match.group(1) if match else ""
 
     @classmethod
     def _normalize_section(cls, heading: str, content: str) -> str:

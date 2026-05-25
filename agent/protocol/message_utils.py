@@ -854,7 +854,13 @@ def compact_current_tool_result_content(
     if tool_name == "textbook_chapter":
         return _compact_jsonish_result(
             content,
-            keep_keys=("status", "message", "path", "file_path", "chapter_path", "chapter_num", "book_id", "word_count", "chars", "content_hash"),
+            keep_keys=(
+                "status", "message", "path", "file_path", "chapter_path",
+                "chapter_num", "book_id", "word_count", "chars", "content_hash",
+                "action", "heading", "completed", "backup_path", "structure",
+                "chapter_index", "chapter_metadata", "fatal_issues", "warnings",
+                "duplicate_headings", "heading_count", "line_count", "ok",
+            ),
             header="[current textbook_chapter result compacted]",
             max_chars=max_chars,
         )

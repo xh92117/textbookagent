@@ -4,6 +4,8 @@ Agent Stream Execution Module - Multi-turn reasoning based on tool-call
 Provides streaming output, event system, and complete tool-call loop
 """
 import json
+import os
+import re
 import time
 import queue
 import threading
@@ -105,6 +107,7 @@ class AgentStreamExecutor:
         
         # Tool failure tracking for retry protection
         self.tool_failure_history = []  # List of (tool_name, args_hash, success) tuples
+        self.tool_failure_details = []  # Compact failure records for Runtime Context Board
         
         # Track files to send (populated by read tool)
         self.files_to_send = []  # List of file metadata dicts
@@ -354,6 +357,69 @@ class AgentStreamExecutor:
         # Keep only last 50 records to avoid memory bloat
         if len(self.tool_failure_history) > 50:
             self.tool_failure_history = self.tool_failure_history[-50:]
+
+    def _record_tool_failure_detail(self, tool_name: str, args: dict, error: Any) -> None:
+        args = args or {}
+        target = self._failure_target(tool_name, args)
+        failure_type = self._failure_type(error)
+        record = {
+            "tool": tool_name,
+            "target": target,
+            "failure_type": failure_type,
+            "summary": str(error or "")[:300],
+            "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        self.tool_failure_details.append(record)
+        if len(self.tool_failure_details) > 80:
+            self.tool_failure_details = self.tool_failure_details[-80:]
+
+    @staticmethod
+    def _failure_target(tool_name: str, args: dict) -> str:
+        if tool_name == "textbook_chapter":
+            return f"book={args.get('book_id', '')}/chapter={args.get('chapter_num', '')}/action={args.get('action', '')}"
+        return str(args.get("path") or args.get("file_path") or args.get("url") or args.get("query") or "")
+
+    @staticmethod
+    def _failure_type(error: Any) -> str:
+        text = str(error or "").lower()
+        if "dangerous full-chapter overwrite" in text:
+            return "short_full_overwrite_refused"
+        if "failed to parse tool arguments" in text or "invalid json" in text or "unterminated string" in text:
+            return "tool_args_parse_error"
+        if "not found" in text:
+            return "not_found"
+        if "required" in text:
+            return "missing_required_arg"
+        return text[:80] or "unknown_failure"
+
+    def _failure_fold_context(self) -> str:
+        if not self.tool_failure_details:
+            return ""
+        grouped = {}
+        for item in self.tool_failure_details:
+            key = (item.get("tool", ""), item.get("target", ""), item.get("failure_type", ""))
+            grouped.setdefault(key, []).append(item)
+        lines = []
+        for (tool, target, failure_type), items in grouped.items():
+            if len(items) < 2:
+                continue
+            advice = self._failure_fold_advice(tool, failure_type)
+            lines.append(
+                f"- {tool} {failure_type} repeated {len(items)} times on {target}. {advice}"
+            )
+        if not lines:
+            return ""
+        return "\n".join(["Failure Fold:", *lines[-8:]])
+
+    @staticmethod
+    def _failure_fold_advice(tool: str, failure_type: str) -> str:
+        if tool == "textbook_chapter" and failure_type == "short_full_overwrite_refused":
+            return "Do not retry short write_chapter overwrite; use rewrite_chapter with a complete body or validate_structure first."
+        if failure_type == "tool_args_parse_error":
+            return "Use smaller tool arguments and split long content into shorter valid JSON calls."
+        if failure_type == "missing_required_arg":
+            return "Fix required arguments before retrying."
+        return "Choose a different method instead of repeating the same failing path."
 
     @staticmethod
     def _tool_same_args_repeat_limit() -> int:
@@ -1422,6 +1488,7 @@ class AgentStreamExecutor:
                 "execution_time": 0
             }
             self._record_tool_result(tool_name, arguments, False)
+            self._record_tool_failure_detail(tool_name, arguments, result["result"])
             self._capture_tool_error_memory(
                 tool_name,
                 result["result"],
@@ -1450,6 +1517,7 @@ class AgentStreamExecutor:
                     "result": f"{stop_reason}\n\n当前方法行不通，请尝试完全不同的方法或向用户询问更多信息。",
                     "execution_time": 0
                 }
+            self._record_tool_failure_detail(tool_name, arguments, result["result"])
             self._capture_tool_error_memory(
                 tool_name,
                 result["result"],
@@ -1489,6 +1557,7 @@ class AgentStreamExecutor:
             success = result.status == "success"
             self._record_tool_result(tool_name, arguments, success)
             if not success:
+                self._record_tool_failure_detail(tool_name, arguments, result.result)
                 self._capture_tool_error_memory(
                     tool_name,
                     result.result,
@@ -1524,6 +1593,7 @@ class AgentStreamExecutor:
                 "execution_time": 0
             }
             self._record_tool_result(tool_name, arguments, False)
+            self._record_tool_failure_detail(tool_name, arguments, str(e))
             self._capture_tool_error_memory(
                 tool_name,
                 str(e),
@@ -2175,6 +2245,14 @@ class AgentStreamExecutor:
         if route_prompt:
             sections.append(("Tool Route", self._strip_known_board(route_prompt)))
 
+        chapter_state = self._chapter_state_context()
+        if chapter_state:
+            sections.append(("Chapter State Index", chapter_state))
+
+        failure_fold = self._failure_fold_context()
+        if failure_fold:
+            sections.append(("Failure Fold", failure_fold))
+
         pool = self._get_short_term_memory()
         if pool:
             try:
@@ -2276,6 +2354,78 @@ class AgentStreamExecutor:
         if "\n\n---\n\n" in after:
             return (before + after.split("\n\n---\n\n", 1)[1]).strip()
         return before.strip()
+
+    def _chapter_state_context(self) -> str:
+        """Return the compact per-chapter state for the active textbook task."""
+        target = self._active_textbook_target()
+        book_id = target.get("book_id")
+        chapter_num = target.get("chapter_num")
+        if not book_id or not chapter_num:
+            return ""
+        try:
+            from bridge.textbook_bridge import get_bridge
+            bridge = get_bridge()
+            book_dir = bridge.get_book_dir(book_id)
+            path = os.path.join(book_dir, "state", "chapter_index.json")
+            if not os.path.exists(path):
+                return (
+                    f"Chapter State Index: book={book_id} chapter={chapter_num}. "
+                    "No chapter_index.json exists yet; use textbook_chapter status/validate_structure before editing."
+                )
+            with open(path, "r", encoding="utf-8") as f:
+                index = json.load(f)
+            entry = (index.get("chapters") or {}).get(str(chapter_num)) or {}
+            if not entry:
+                return (
+                    f"Chapter State Index: book={book_id} chapter={chapter_num}. "
+                    "No entry for this chapter yet; use textbook_chapter status/validate_structure before editing."
+                )
+            compact = {
+                "book_id": entry.get("book_id", book_id),
+                "chapter_num": entry.get("chapter_num", chapter_num),
+                "title": entry.get("title", ""),
+                "status": entry.get("status", ""),
+                "content_hash": entry.get("content_hash", ""),
+                "chars": entry.get("chars", 0),
+                "headings": (entry.get("headings") or [])[:30],
+                "fatal_issues": entry.get("fatal_issues") or [],
+                "warnings": entry.get("warnings") or [],
+                "last_operation": entry.get("last_operation", ""),
+                "last_issue": entry.get("last_issue", ""),
+                "updated_at": entry.get("updated_at", ""),
+            }
+            return json.dumps(compact, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            logger.debug(f"[RuntimeContext] chapter state skipped: {exc}")
+            return ""
+
+    def _active_textbook_target(self) -> Dict[str, Any]:
+        """Infer the current textbook/chapter target from recent messages."""
+        book_id = ""
+        chapter_num = 0
+        for msg in reversed(self.messages[-20:]):
+            try:
+                blob = json.dumps(msg, ensure_ascii=False)
+            except Exception:
+                blob = str(msg)
+            if not book_id:
+                match = re.search(r"\b((?:tb|textbook)_[A-Za-z0-9_]+)\b", blob)
+                if match:
+                    book_id = match.group(1)
+            if not chapter_num:
+                match = re.search(r'\\?"chapter_num\\?"\s*:\s*(\d+)', blob)
+                if not match:
+                    match = re.search(r"第\s*(\d+)\s*章", blob)
+                if not match:
+                    match = re.search(r"\b(?:chapter|chap|ch)\s*[:#-]?\s*(\d+)\b", blob, re.IGNORECASE)
+                if not match and book_id:
+                    tail = blob[blob.find(book_id) + len(book_id): blob.find(book_id) + len(book_id) + 120]
+                    match = re.search(r"\b(\d{1,3})\b", tail)
+                if match:
+                    chapter_num = int(match.group(1))
+            if book_id and chapter_num:
+                break
+        return {"book_id": book_id, "chapter_num": chapter_num}
 
     def _clear_session_db(self):
         """
