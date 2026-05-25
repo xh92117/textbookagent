@@ -36,6 +36,7 @@ class TruthFileManager:
         'status': 'state/status.json',
         'outline_review_state': 'state/outline_review.json',
         'research_evidence': 'state/research_evidence.md',
+        'harness': 'harness.md',
     }
 
     def __init__(self, book_dir: str):

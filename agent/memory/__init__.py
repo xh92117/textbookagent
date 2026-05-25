@@ -14,6 +14,7 @@ from agent.memory.work_state import WorkStateManager
 from agent.memory.realtime import RealtimeMemoryRecorder
 from agent.memory.query_service import MemoryQueryService
 from agent.memory.bootstrap import MemoryBootstrap
+from agent.memory.short_term import ShortTermMemoryPool
 from agent.memory.error_memory import ErrorMemoryRecorder
 from agent.memory.error_capture import (
     build_error_memory_context,
@@ -36,6 +37,7 @@ __all__ = [
     'RealtimeMemoryRecorder',
     'MemoryQueryService',
     'MemoryBootstrap',
+    'ShortTermMemoryPool',
     'ErrorMemoryRecorder',
     'build_error_memory_context',
     'is_user_correction',

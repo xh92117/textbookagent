@@ -788,6 +788,111 @@ def summarize_tool_result_content(content: str, tool_name: str = "", tool_args: 
         return content[:500] + f"\n... [原文{len(content)}字符已压缩]"
 
 
+def compact_current_tool_result_content(
+    content: str,
+    tool_name: str = "",
+    tool_args: dict = None,
+    status: str = "",
+    max_chars: int = 16000,
+) -> str:
+    """Compact a just-produced tool result before it enters model context.
+
+    The UI can still receive the full tool output through streaming events; this
+    only reduces the tool_result block stored in the LLM message history.
+    """
+    if not isinstance(content, str):
+        content = str(content)
+    if not content:
+        return content
+    tool_args = tool_args or {}
+    max_chars = max(2000, int(max_chars or 16000))
+
+    if len(content) <= max_chars and tool_name not in {"read", "file_read", "web_fetch"}:
+        return content
+
+    if tool_name in ("read", "file_read"):
+        path = tool_args.get("path") or tool_args.get("file_path") or ""
+        lines = content.splitlines()
+        headings = []
+        for idx, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                headings.append(f"L{idx}: {stripped[:160]}")
+            if len(headings) >= 30:
+                break
+        head = "\n".join(lines[:40])
+        tail = "\n".join(lines[-20:]) if len(lines) > 60 else ""
+        parts = [
+            "[current read result compacted]",
+            f"tool: {tool_name}",
+            f"path: {path}",
+            f"status: {status}",
+            f"original_chars: {len(content)}",
+            f"line_count: {len(lines)}",
+        ]
+        if headings:
+            parts.extend(["headings:", *[f"- {h}" for h in headings]])
+        parts.extend(["head excerpt:", head[:6000]])
+        if tail:
+            parts.extend(["tail excerpt:", tail[:3000]])
+        return "\n".join(parts)[:max_chars]
+
+    if tool_name == "web_fetch":
+        title = _extract_title_from_tool_result(content)
+        url = tool_args.get("url", "")
+        summary = summarize_tool_result_content(content, tool_name, tool_args)
+        parts = [
+            "[current web_fetch result compacted]",
+            f"url: {url}",
+            f"title: {title}",
+            f"status: {status}",
+            f"original_chars: {len(content)}",
+            summary,
+        ]
+        return "\n".join(part for part in parts if part)[:max_chars]
+
+    if tool_name == "textbook_chapter":
+        return _compact_jsonish_result(
+            content,
+            keep_keys=("status", "message", "path", "file_path", "chapter_path", "chapter_num", "book_id", "word_count", "chars", "content_hash"),
+            header="[current textbook_chapter result compacted]",
+            max_chars=max_chars,
+        )
+
+    if tool_name in ("bash", "shell", "command"):
+        lines = content.splitlines()
+        if len(content) <= max_chars and len(lines) <= 120:
+            return content
+        kept = lines[:80] + [f"... [output compacted: {len(lines)} lines, {len(content)} chars] ..."] + lines[-40:]
+        return "\n".join(kept)[:max_chars]
+
+    if len(content) <= max_chars:
+        return content
+    head = content[: max_chars // 2]
+    tail = content[-max_chars // 4 :]
+    return (
+        f"[current tool result compacted: {tool_name}, status={status}, "
+        f"original_chars={len(content)}]\n"
+        f"{head}\n\n... [middle omitted] ...\n\n{tail}"
+    )[:max_chars]
+
+
+def _compact_jsonish_result(content: str, keep_keys: tuple, header: str, max_chars: int) -> str:
+    try:
+        data = json.loads(content)
+    except Exception:
+        data = None
+    if isinstance(data, dict):
+        compact = {key: data.get(key) for key in keep_keys if key in data}
+        for key, value in data.items():
+            if key not in compact and isinstance(value, (int, float, bool)):
+                compact[key] = value
+        return header + "\n" + json.dumps(compact, ensure_ascii=False, indent=2)
+    if len(content) <= max_chars:
+        return content
+    return header + "\n" + content[:max_chars - len(header) - 20]
+
+
 def progressive_compress_messages(messages: list, current_turn: int) -> list:
     """
     Apply progressive compression to message history based on age.

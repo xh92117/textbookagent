@@ -27,6 +27,7 @@ from .context_builder import ContextPackageBuilder
 from .orchestrator import ChapterOrchestrator, PipelineCheckpointStore
 from .quality_gate import ChapterQualityGate
 from .visual_asset_router import VisualAssetRouter
+from .book_harness import BookHarness
 
 
 class PipelineRunner:
@@ -223,6 +224,11 @@ class PipelineRunner:
         writing_spec = book_config.ensure_writing_spec()
         writing_spec_prompt = writing_spec.to_prompt()
         research_evidence = self._load_research_evidence(book_id, requirement)
+        book_dir = os.path.join(self.memory_manager.workspace_dir, book_id) if self.memory_manager else ''
+        book_harness = BookHarness(book_dir) if book_dir else None
+        book_harness_text = book_harness.ensure(book_config, writing_spec) if book_harness else ""
+        book_harness_prompt = book_harness.compact_prompt_section() if book_harness and book_harness_text else ""
+        generation_contract = "\n\n".join(part for part in [writing_spec_prompt, book_harness_prompt] if part)
 
         start_phase = resume_from if resume_from else 'outline'
         phase_index = self.PHASES.index(start_phase) if start_phase in self.PHASES else 0
@@ -260,7 +266,7 @@ class PipelineRunner:
                 'total_chapters': book_config.total_chapters,
                 'chapter_word_count': book_config.chapter_word_count,
                 'style': book_config.style,
-                'writing_spec': writing_spec_prompt,
+                'writing_spec': generation_contract,
                 'curriculum_standard': "\n\n".join(
                     part for part in [book_config.curriculum_standard, research_evidence] if part
                 ),
@@ -304,7 +310,7 @@ class PipelineRunner:
                 'item_label': '大纲',
                 'content': outline_text,
                 'outline_context': '',
-                'writing_spec': writing_spec_prompt,
+                'writing_spec': generation_contract,
             })
             review_result = self._ensure_agent_result(review_result, "ReviewerAgent", "review_outline")
             results['review_outline'] = review_result
@@ -319,7 +325,6 @@ class PipelineRunner:
             self._emit('phase_complete', {'phase': 'review_outline', 'result_summary': '大纲审查已跳过'})
 
         scheduler = ChapterScheduler(total_chapters)
-        book_dir = os.path.join(self.memory_manager.workspace_dir, book_id) if self.memory_manager else ''
         workspace_root = getattr(self.memory_manager, "workspace_root", self.memory_manager.workspace_dir) if self.memory_manager else os.path.dirname(os.path.dirname(book_dir))
         persistence = ChapterPersistence(book_dir) if book_dir else None
         context_builder = ContextPackageBuilder(self.memory_manager)
@@ -415,6 +420,7 @@ class PipelineRunner:
                 research_evidence=research_evidence,
                 wiki_context=wiki_context,
                 terminology=terminology,
+                book_harness=book_harness_prompt,
             )
             PipelineCheckpointStore.mark(actions, "build_context", "completed", f"{len(context_package)} chars")
             if checkpoint_store:
@@ -447,7 +453,7 @@ class PipelineRunner:
                 'target_words': book_config.chapter_word_count,
                 'context': context_package,
                 'terminology': terminology,
-                'writing_spec': writing_spec_prompt,
+                'writing_spec': generation_contract,
             })
             write_result = self._ensure_agent_result(write_result, "WriterAgent", "write_chapter")
             draft_metrics = write_result.get("metrics") or measure_content(write_result.get('content', '')).to_dict()
@@ -540,7 +546,7 @@ class PipelineRunner:
                 'item_label': f'第{i}章',
                 'content': write_result.get('content', ''),
                 'outline_context': outline_text,
-                'writing_spec': writing_spec_prompt,
+                'writing_spec': generation_contract,
                 'content_metrics': measure_content(write_result.get('content', '')).to_dict(),
             })
             chapter_review = self._ensure_agent_result(chapter_review, "ReviewerAgent", "review_chapter")
@@ -583,7 +589,7 @@ class PipelineRunner:
                     'issues': chapter_review.get('issues', []),
                     'mode': 'spot-fix',
                     'chapter_number': i,
-                    'writing_spec': writing_spec_prompt,
+                    'writing_spec': generation_contract,
                 })
                 revise_result = self._ensure_agent_result(revise_result, "ReviserAgent", "revise_chapter")
                 content = revise_result.get('revised_content', content)
@@ -605,7 +611,7 @@ class PipelineRunner:
                 polish_result = await self.polisher.run({
                     'content': content,
                     'style': book_config.style,
-                    'writing_spec': writing_spec_prompt,
+                    'writing_spec': generation_contract,
                     'chapter_number': i,
                 })
                 polish_result = self._ensure_agent_result(polish_result, "PolisherAgent", "polish_chapter")

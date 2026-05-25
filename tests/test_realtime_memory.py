@@ -1,6 +1,7 @@
 import json
 
 from agent.memory.realtime import RealtimeMemoryRecorder
+from agent.memory.short_term import ShortTermMemoryPool
 
 
 def test_process_memory_records_state_and_profile(tmp_path):
@@ -50,3 +51,31 @@ def test_legacy_session_memory_compacts_long_session(tmp_path):
     assert summary_path.exists()
     assert "Auto Compact" in summary_path.read_text(encoding="utf-8")
     assert len(raw_path.read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_short_term_memory_pool_records_and_compacts_prompt(tmp_path):
+    pool = ShortTermMemoryPool(str(tmp_path), "session/demo", max_events=20, keep_events=2)
+    pool.record_user_goal("请继续编写 tb_demo 第2章，并避免覆盖已有章节。")
+    pool.record_tool_start("textbook_chapter", {
+        "action": "append_section",
+        "book_id": "tb_demo",
+        "chapter_num": 2,
+    })
+    pool.record_tool_end("textbook_chapter", {
+        "action": "append_section",
+        "book_id": "tb_demo",
+        "chapter_num": 2,
+    }, "success", {"chapter_path": "textbooks/tb_demo/chapters/chapter_002.md"})
+    for idx in range(24):
+        pool.record_tool_end("read", {"path": f"file_{idx}.md"}, "success", f"# file {idx}")
+
+    prompt = pool.compact_prompt()
+    path = tmp_path / "memory" / "short_term" / "session_demo.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    assert data["active_book_id"] == "tb_demo"
+    assert data["active_chapter"] == "2"
+    assert data["summary"]
+    assert len(data["events"]) <= 20
+    assert "Short-term working memory" in prompt
+    assert "file_23.md" in prompt

@@ -30,6 +30,7 @@ class ContextPackageBuilder:
         "knowledge": 3600,
         "research": 2200,
         "terminology": 1200,
+        "book_harness": 2800,
     }
 
     def __init__(self, memory_manager=None, budgets: Dict[str, int] = None):
@@ -44,8 +45,11 @@ class ContextPackageBuilder:
         research_evidence: str = "",
         wiki_context: str = "",
         terminology=None,
+        book_harness: str = "",
     ) -> str:
         parts = []
+        if book_harness:
+            parts.append(self._clip(book_harness, "book_harness"))
         outline_skeleton = self._outline_skeleton(outline_text)
         current_outline = self._current_chapter_outline(outline_text, chapter_number)
         if outline_skeleton:

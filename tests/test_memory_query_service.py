@@ -3,6 +3,9 @@ import json
 from agent.memory.conversation_store import ConversationStore
 from agent.memory.query_service import MemoryQueryService
 from agent.memory.realtime import RealtimeMemoryRecorder
+from agent.memory.manager import MemoryManager
+from agent.memory.config import MemoryConfig
+from agent.memory.storage import SearchResult
 
 
 def test_memory_query_service_combines_profile_process_and_history(tmp_path):
@@ -76,3 +79,35 @@ def test_process_profile_llm_distillation_merges_patch(tmp_path):
     profile = json.loads((tmp_path / "memory" / "user_profile.json").read_text(encoding="utf-8"))
     assert "prefers concise progress updates" in profile["preferences"]
     assert "uses process-level memory" in profile["facts"]
+
+
+def test_memory_manager_classifies_reranks_and_compresses_results(tmp_path):
+    manager = MemoryManager(config=MemoryConfig(workspace_root=str(tmp_path)))
+    try:
+        textbook = SearchResult(
+            path="textbooks/tb_demo/harness.md",
+            start_line=1,
+            end_line=10,
+            score=0.5,
+            snippet="教材 Harness " + ("很长内容 " * 100),
+            source="textbook",
+            metadata=MemoryManager._classify_memory("textbooks/tb_demo/harness.md", "textbook"),
+        )
+        generic = SearchResult(
+            path="memory/2026-05-25.md",
+            start_line=1,
+            end_line=3,
+            score=0.5,
+            snippet="普通记忆",
+            source="memory",
+            metadata=MemoryManager._classify_memory("memory/2026-05-25.md", "memory"),
+        )
+
+        ranked = manager._rerank_results("tb_demo 教材 harness", [generic, textbook])
+        compressed = manager._compress_search_result(ranked[0])
+
+        assert ranked[0].path == "textbooks/tb_demo/harness.md"
+        assert ranked[0].metadata["memory_layer"] == "textbook"
+        assert len(compressed.snippet) <= 323
+    finally:
+        manager.close()

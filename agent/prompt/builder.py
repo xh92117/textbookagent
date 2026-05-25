@@ -120,6 +120,7 @@ def build_agent_system_prompt(
     # 1. 工具系统（最重要，放在最前面）
     if tools:
         sections.extend(_build_tooling_section(tools, language))
+        sections.extend(_build_harness_tool_policy_section(language))
     
     # 2. 技能系统（紧跟工具，因为需要用 read 工具）
     if skill_manager:
@@ -149,6 +150,18 @@ def build_agent_system_prompt(
         sections.extend(_build_runtime_section(runtime_info, language))
     
     return "\n".join(sections)
+
+
+def _build_harness_tool_policy_section(language: str) -> List[str]:
+    """Inject compact Harness tool policy from system/harness/tool_policy.json."""
+    try:
+        from agent.harness import format_tool_policy_for_prompt
+
+        section = format_tool_policy_for_prompt()
+        return [section, ""] if section else []
+    except Exception as e:
+        logger.debug(f"[PromptBuilder] Harness tool policy skipped: {e}")
+        return []
 
 
 def _build_identity_section(base_persona: Optional[str], language: str) -> List[str]:

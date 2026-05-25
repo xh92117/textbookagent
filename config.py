@@ -244,6 +244,17 @@ available_setting = {
     "agent_context_reserve_tokens": 0,  # 显式覆盖输出/工具增长预留tokens；0表示自动计算
     "agent_context_compress_ratio": 0.92,  # 达到可用上下文比例后才压缩历史工具结果
     "agent_context_midrun_trim_ratio": 0.97,  # 运行中达到该比例才触发压缩，避免频繁compact
+    "agent_context_anxiety_guard_enabled": True,
+    "agent_context_anxiety_threshold": 0.7,
+    "short_term_memory_enabled": True,
+    "short_term_memory_max_events": 200,
+    "short_term_memory_keep_events": 50,
+    "short_term_memory_retention_days": 14,
+    "short_term_memory_max_files": 30,
+    "agent_current_tool_result_context_chars": 16000,
+    "agent_tool_routing_enabled": True,
+    "agent_tool_same_args_repeat_limit": 2,
+    "agent_tool_failure_repeat_limit": 2,
     "agent_max_steps": 20,  # Agent妯″紡涓嬪崟娆¤繍琛屾渶澶у喅绛栨鏁?
     "agent_stream_idle_timeout_seconds": 180,  # Close a stalled model stream after this many seconds without chunks; 0 disables
     "enable_thinking": False,  # Enable deep-thinking mode for thinking-capable models

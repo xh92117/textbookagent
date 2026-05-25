@@ -14,9 +14,11 @@ from agent.protocol.message_utils import (
     sanitize_claude_messages,
     compress_turn_to_text_only,
     build_context_state_board,
+    compact_current_tool_result_content,
 )
 from agent.tools.base_tool import BaseTool, ToolResult
 from common.log import logger
+from agent.harness import ContextAnxietyGuard
 
 
 # Maximum number of characters of model "reasoning / thinking" content to persist
@@ -106,6 +108,8 @@ class AgentStreamExecutor:
         
         # Track files to send (populated by read tool)
         self.files_to_send = []  # List of file metadata dicts
+        self.short_term_memory = None
+        self.tool_route = None
 
     def _emit_event(self, event_type: str, data: dict = None):
         """Emit event"""
@@ -303,7 +307,8 @@ class AgentStreamExecutor:
                 break  # Different tool or args, stop counting
         
         # Stop at 5 consecutive calls with same args (whether success or failure)
-        if same_args_calls >= 5:
+        same_args_limit = self._tool_same_args_repeat_limit()
+        if same_args_calls >= same_args_limit:
             return True, f"工具 '{tool_name}' 使用相同参数已被调用 {same_args_calls} 次，停止执行以防止无限循环。如果需要查看配置，结果已在之前的调用中返回。", False
         
         # Count consecutive failures for same tool + args
@@ -317,7 +322,8 @@ class AgentStreamExecutor:
             else:
                 break  # Different tool or args, stop counting
         
-        if same_args_failures >= 3:
+        failure_limit = self._tool_failure_repeat_limit()
+        if same_args_failures >= failure_limit:
             return True, f"工具 '{tool_name}' 使用相同参数连续失败 {same_args_failures} 次，停止执行以防止无限循环", False
         
         # Count consecutive failures for same tool (any args)
@@ -349,6 +355,22 @@ class AgentStreamExecutor:
         if len(self.tool_failure_history) > 50:
             self.tool_failure_history = self.tool_failure_history[-50:]
 
+    @staticmethod
+    def _tool_same_args_repeat_limit() -> int:
+        try:
+            from config import conf
+            return max(1, int(conf().get("agent_tool_same_args_repeat_limit", 2) or 2))
+        except Exception:
+            return 2
+
+    @staticmethod
+    def _tool_failure_repeat_limit() -> int:
+        try:
+            from config import conf
+            return max(1, int(conf().get("agent_tool_failure_repeat_limit", 2) or 2))
+        except Exception:
+            return 2
+
     def run_stream(self, user_message: str) -> str:
         """
         Execute streaming reasoning loop
@@ -375,6 +397,13 @@ class AgentStreamExecutor:
                 }
             ]
         })
+
+        self._record_short_term_user_goal(user_message)
+        self._apply_tool_routing(user_message)
+        self._inject_tool_routing_board()
+        self._inject_short_term_memory_board()
+
+        self._maybe_save_context_checkpoint(user_message)
 
         # Trim context ONCE before the agent loop starts, not during tool steps.
         # This ensures tool_use/tool_result chains created during the current run
@@ -565,14 +594,19 @@ class AgentStreamExecutor:
                             # Fallback to full JSON
                             result_content = json.dumps(result, ensure_ascii=False)
 
-                        # Truncate excessively large tool results for the current turn
-                        # Historical turns will be further truncated in _trim_messages()
-                        MAX_CURRENT_TURN_RESULT_CHARS = 50000
-                        if len(result_content) > MAX_CURRENT_TURN_RESULT_CHARS:
-                            truncated_len = len(result_content)
-                            result_content = result_content[:MAX_CURRENT_TURN_RESULT_CHARS] + \
-                                f"\n\n[Output truncated: {truncated_len} chars total, showing first {MAX_CURRENT_TURN_RESULT_CHARS} chars]"
-                            logger.info(f"📎 Truncated tool result for '{tool_call['name']}': {truncated_len} -> {MAX_CURRENT_TURN_RESULT_CHARS} chars")
+                        compacted_content = compact_current_tool_result_content(
+                            result_content,
+                            tool_name=tool_call["name"],
+                            tool_args=tool_call.get("arguments") or {},
+                            status=result.get("status", ""),
+                            max_chars=self._current_tool_result_context_limit(),
+                        )
+                        if compacted_content != result_content:
+                            logger.info(
+                                f"📎 Compacted tool result for '{tool_call['name']}': "
+                                f"{len(result_content)} -> {len(compacted_content)} chars"
+                            )
+                            result_content = compacted_content
 
                         tool_result_block = {
                             "type": "tool_result",
@@ -703,10 +737,196 @@ class AgentStreamExecutor:
 
         finally:
             final_response = final_response.strip() if final_response else final_response
+            self._record_short_term_final_response(final_response)
             logger.info(f"[Agent] 🏁 完成 ({turn}轮)")
             self._emit_event("agent_end", {"final_response": final_response})
 
         return final_response
+
+    def _maybe_save_context_checkpoint(self, user_message: str = ""):
+        """Save a Harness checkpoint before compression when context pressure is high."""
+        try:
+            from config import conf
+
+            if not conf().get("agent_context_anxiety_guard_enabled", True):
+                return
+            threshold = float(conf().get("agent_context_anxiety_threshold", 0.70) or 0.70)
+            ContextAnxietyGuard(threshold=threshold).maybe_checkpoint(self, user_message=user_message)
+        except Exception as exc:
+            logger.debug(f"[Harness] Context anxiety guard skipped: {exc}")
+
+    def _get_short_term_memory(self):
+        if self.short_term_memory is not None:
+            return self.short_term_memory
+        try:
+            from config import conf
+            if not conf().get("short_term_memory_enabled", True):
+                return None
+            from common.app_paths import system_dir
+            from agent.memory import ShortTermMemoryPool
+
+            session_id = (
+                getattr(self.model, "session_id", "")
+                or getattr(self.agent, "_current_session_id", "")
+                or "default"
+            )
+            self.short_term_memory = ShortTermMemoryPool(
+                system_dir(),
+                session_id=session_id,
+                max_events=int(conf().get("short_term_memory_max_events", 200) or 200),
+                keep_events=int(conf().get("short_term_memory_keep_events", 50) or 50),
+                retention_days=int(conf().get("short_term_memory_retention_days", 14) or 14),
+                max_files=int(conf().get("short_term_memory_max_files", 30) or 30),
+            )
+            return self.short_term_memory
+        except Exception as exc:
+            logger.debug(f"[ShortTermMemory] unavailable: {exc}")
+            return None
+
+    def _record_short_term_user_goal(self, user_message: str) -> None:
+        pool = self._get_short_term_memory()
+        if not pool:
+            return
+        try:
+            pool.record_user_goal(
+                user_message,
+                channel_type=getattr(self.model, "channel_type", "") or "",
+            )
+        except Exception as exc:
+            logger.debug(f"[ShortTermMemory] user goal skipped: {exc}")
+
+    def _record_short_term_tool_start(self, tool_name: str, arguments: Dict[str, Any]) -> None:
+        pool = self._get_short_term_memory()
+        if not pool:
+            return
+        try:
+            pool.record_tool_start(tool_name, arguments or {})
+        except Exception as exc:
+            logger.debug(f"[ShortTermMemory] tool start skipped: {exc}")
+
+    def _record_short_term_tool_end(self, tool_name: str, arguments: Dict[str, Any], status: str, result: Any) -> None:
+        pool = self._get_short_term_memory()
+        if not pool:
+            return
+        try:
+            pool.record_tool_end(tool_name, arguments or {}, status or "", result)
+        except Exception as exc:
+            logger.debug(f"[ShortTermMemory] tool end skipped: {exc}")
+
+    def _record_short_term_final_response(self, response: str) -> None:
+        pool = self._get_short_term_memory()
+        if not pool:
+            return
+        try:
+            pool.record_final_response(response or "")
+        except Exception as exc:
+            logger.debug(f"[ShortTermMemory] final response skipped: {exc}")
+
+    def _inject_short_term_memory_board(self) -> None:
+        pool = self._get_short_term_memory()
+        if not pool:
+            return
+        try:
+            board = pool.compact_prompt()
+            if not board:
+                return
+            marker = "[System: Short-term working memory]"
+            for msg in self.messages:
+                content = msg.get("content", [])
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = block.get("text", "")
+                        if marker in text:
+                            block["text"] = self._strip_short_term_memory_board(text)
+            for msg in reversed(self.messages):
+                if msg.get("role") != "user":
+                    continue
+                content = msg.get("content", [])
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        original = (block.get("text") or "").strip()
+                        block["text"] = f"{board}\n\n---\n\n{original}"
+                        return
+        except Exception as exc:
+            logger.debug(f"[ShortTermMemory] inject skipped: {exc}")
+
+    @staticmethod
+    def _strip_short_term_memory_board(text: str) -> str:
+        marker = "[System: Short-term working memory]"
+        if marker not in text:
+            return text
+        parts = text.split("\n\n---\n\n", 1)
+        if len(parts) == 2 and marker in parts[0]:
+            return parts[1].strip()
+        return text
+
+    def _current_tool_result_context_limit(self) -> int:
+        try:
+            from config import conf
+            value = int(conf().get("agent_current_tool_result_context_chars", 16000) or 16000)
+            return max(2000, min(50000, value))
+        except Exception:
+            return 16000
+
+    def _apply_tool_routing(self, user_message: str) -> None:
+        try:
+            from config import conf
+            if not conf().get("agent_tool_routing_enabled", True):
+                return
+            from agent.tools.router import filter_tool_mapping, route_tools
+
+            route = route_tools(user_message, self.tools, enabled=True)
+            self.tool_route = route
+            self.tools = filter_tool_mapping(self.tools, route.allowed_tools)
+            logger.info(
+                f"[ToolRouter] task_type={route.task_type}, "
+                f"visible={route.allowed_tools}, hidden={route.omitted_tools}"
+            )
+        except Exception as exc:
+            logger.debug(f"[ToolRouter] routing skipped: {exc}")
+
+    def _inject_tool_routing_board(self) -> None:
+        route = self.tool_route
+        if not route or not route.prompt:
+            return
+        marker = "[System: Tool routing policy]"
+        try:
+            for msg in self.messages:
+                content = msg.get("content", [])
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = block.get("text", "")
+                        if marker in text:
+                            block["text"] = self._strip_tool_routing_board(text)
+            for msg in reversed(self.messages):
+                if msg.get("role") != "user":
+                    continue
+                content = msg.get("content", [])
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        original = (block.get("text") or "").strip()
+                        block["text"] = f"{route.prompt}\n\n---\n\n{original}"
+                        return
+        except Exception as exc:
+            logger.debug(f"[ToolRouter] prompt injection skipped: {exc}")
+
+    @staticmethod
+    def _strip_tool_routing_board(text: str) -> str:
+        marker = "[System: Tool routing policy]"
+        if marker not in text:
+            return text
+        parts = text.split("\n\n---\n\n", 1)
+        if len(parts) == 2 and marker in parts[0]:
+            return parts[1].strip()
+        return text
 
     def _call_llm_stream(self, retry_on_empty=True, retry_count=0, max_retries=3,
                          _overflow_retry: bool = False) -> Tuple[str, List[Dict]]:
@@ -757,6 +977,9 @@ class AgentStreamExecutor:
         try:
             from agent.tools import ToolManager
             ToolManager().sync_mcp_into_agent(self)
+            if self.tool_route:
+                from agent.tools.router import filter_tool_mapping
+                self.tools = filter_tool_mapping(self.tools, self.tool_route.allowed_tools)
         except Exception as e:
             logger.debug(f"[Agent] MCP sync skipped: {e}")
 
@@ -1227,6 +1450,7 @@ class AgentStreamExecutor:
             "tool_name": tool_name,
             "arguments": arguments
         })
+        self._record_short_term_tool_start(tool_name, arguments)
 
         try:
             tool = self.tools.get(tool_name)
@@ -1273,6 +1497,7 @@ class AgentStreamExecutor:
                 "tool_name": tool_name,
                 **result_dict
             })
+            self._record_short_term_tool_end(tool_name, arguments, result.status, result.result)
 
             self._record_work_state(tool_name, arguments, result.status, result.result)
 
@@ -1298,6 +1523,7 @@ class AgentStreamExecutor:
                 "tool_name": tool_name,
                 **error_result
             })
+            self._record_short_term_tool_end(tool_name, arguments, "error", str(e))
 
             self._record_work_state(tool_name, arguments, "error", str(e))
 

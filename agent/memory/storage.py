@@ -39,6 +39,7 @@ class SearchResult:
     snippet: str
     source: str
     user_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class MemoryStorage:
@@ -305,7 +306,8 @@ class MemoryStorage:
                 score=score,
                 snippet=self._truncate_text(row['text'], 500),
                 source=row['source'],
-                user_id=row['user_id']
+                user_id=row['user_id'],
+                metadata=json.loads(row['metadata']) if row['metadata'] else None
             )
             for score, row in results
         ]
@@ -390,7 +392,8 @@ class MemoryStorage:
                     score=self._bm25_rank_to_score(row['rank']),
                     snippet=self._truncate_text(row['text'], 500),
                     source=row['source'],
-                    user_id=row['user_id']
+                    user_id=row['user_id'],
+                    metadata=json.loads(row['metadata']) if row['metadata'] else None
                 )
                 for row in rows
             ]
@@ -451,7 +454,8 @@ class MemoryStorage:
                     score=0.5,  # Fixed score for LIKE search
                     snippet=self._truncate_text(row['text'], 500),
                     source=row['source'],
-                    user_id=row['user_id']
+                    user_id=row['user_id'],
+                    metadata=json.loads(row['metadata']) if row['metadata'] else None
                 )
                 for row in rows
             ]

@@ -10,6 +10,7 @@ from agent.textbook.pipeline.scheduler import ChapterScheduler
 from agent.textbook.pipeline.chapter_persistence import ChapterPersistence
 from agent.textbook.pipeline.runner import PipelineRunner
 from agent.textbook.pipeline.context_builder import ContextPackageBuilder
+from agent.textbook.pipeline.book_harness import BookHarness
 from agent.textbook.pipeline.orchestrator import ChapterOrchestrator, PipelineCheckpointStore
 from agent.textbook.pipeline.quality_gate import ChapterQualityGate
 from agent.textbook.models.textbook import TextbookConfig
@@ -30,6 +31,42 @@ def test_scheduler_progress():
     scheduler.mark_completed(3)
     assert scheduler.get_progress()['completed'] == 3
     assert scheduler.get_progress()['percentage'] == 60.0
+
+
+def test_book_harness_is_created_from_writing_spec(tmp_path):
+    config = TextbookConfig(
+        id="tb_harness",
+        title="测试教材",
+        subject="智能建造",
+        target_audience="高职学生",
+        level="入门",
+        total_chapters=3,
+        chapter_word_count=4000,
+    )
+    spec = config.ensure_writing_spec()
+    spec.additional_notes = "强调岗位任务和实训评价。"
+
+    harness = BookHarness(str(tmp_path / config.id))
+    content = harness.ensure(config, spec)
+
+    assert os.path.exists(harness.path)
+    assert "测试教材" in content
+    assert "强调岗位任务和实训评价" in content
+    assert "fenced code block" in content
+    assert "不允许只是把提示词放进图片" in content
+    assert len(harness.compact_prompt_section(max_chars=900)) <= 950
+
+
+def test_context_builder_includes_book_harness():
+    context = ContextPackageBuilder().build(
+        book_id="tb_demo",
+        chapter_number=1,
+        outline_text="# 第1章 测试\n- 教学目标：掌握流程",
+        book_harness="## 当前教材 Harness\n- 目标读者: 高职学生",
+    )
+
+    assert "当前教材 Harness" in context
+    assert "目标读者: 高职学生" in context
 
 
 def test_scheduler_pending():

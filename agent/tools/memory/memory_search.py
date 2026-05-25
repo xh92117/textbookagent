@@ -123,8 +123,13 @@ class MemorySearchTool(BaseTool):
             output = [f"Found {len(results)} relevant memories:\n"]
             
             for i, result in enumerate(results, 1):
+                metadata = getattr(result, "metadata", None) or {}
+                layer = metadata.get("memory_layer", result.source)
+                kind = metadata.get("path_kind", "")
+                label = f"{layer}/{kind}".strip("/")
                 output.append(f"\n{i}. {result.path} (lines {result.start_line}-{result.end_line})")
                 output.append(f"   Score: {result.score:.3f}")
+                output.append(f"   Layer: {label}")
                 output.append(f"   Snippet: {result.snippet}")
             
             return ToolResult.success("\n".join(output))

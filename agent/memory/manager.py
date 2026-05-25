@@ -188,9 +188,9 @@ class MemoryManager:
             self.config.keyword_weight
         )
         
-        # Filter by min score and limit
-        filtered = [r for r in merged if r.score >= min_score]
-        return filtered[:max_results]
+        reranked = self._rerank_results(query, merged)
+        compressed = [self._compress_search_result(r) for r in reranked if r.score >= min_score]
+        return compressed[:max_results]
     
     async def add_memory(
         self,
@@ -251,7 +251,7 @@ class MemoryManager:
                 text=chunk.text,
                 embedding=embedding,
                 hash=chunk_hash,
-                metadata=metadata
+                metadata=metadata or self._classify_memory(path, source)
             ))
         
         # Save to storage
@@ -417,7 +417,7 @@ class MemoryManager:
                 text=chunk.text,
                 embedding=embedding,
                 hash=chunk_hash,
-                metadata=None
+                metadata=self._classify_memory(rel_path, source)
             ))
         
         # Save
@@ -574,8 +574,97 @@ class MemoryManager:
                 score=combined_score,
                 snippet=result.snippet,
                 source=result.source,
-                user_id=result.user_id
+                user_id=result.user_id,
+                metadata=result.metadata,
             ))
         
         merged_results.sort(key=lambda r: r.score, reverse=True)
         return merged_results
+
+    @staticmethod
+    def _classify_memory(path: str, source: str = "") -> Dict[str, Any]:
+        normalized = (path or "").replace("\\", "/")
+        lower = normalized.lower()
+        layer = "project"
+        book_id = ""
+        if source == "workspace_profile" or lower in {"agent.md", "user.md", "rule.md", "memory.md"}:
+            layer = "project"
+        elif "user_profile" in lower or "/users/" in lower:
+            layer = "user"
+        elif source == "textbook" or "/textbooks/" in lower or lower.startswith("textbooks/"):
+            layer = "textbook"
+            parts = normalized.split("/")
+            if "textbooks" in parts:
+                idx = parts.index("textbooks")
+                if idx + 1 < len(parts):
+                    book_id = parts[idx + 1]
+        elif "errors/" in lower or source == "error":
+            layer = "error"
+        elif source == "knowledge" or lower.startswith("knowledge/"):
+            layer = "knowledge"
+        elif source == "memory":
+            layer = "memory"
+        return {
+            "memory_layer": layer,
+            "book_id": book_id,
+            "path_kind": MemoryManager._path_kind(normalized),
+        }
+
+    @staticmethod
+    def _path_kind(path: str) -> str:
+        lower = path.lower()
+        if lower.endswith("harness.md"):
+            return "harness"
+        if "/chapters/" in lower:
+            return "chapter"
+        if "/outline/" in lower:
+            return "outline"
+        if "/state/" in lower:
+            return "state"
+        if lower.endswith("user_profile.md") or lower.endswith("user_profile.json"):
+            return "user_profile"
+        if lower.endswith("rule.md"):
+            return "rule"
+        return Path(path).suffix.lower().lstrip(".") or "file"
+
+    def _rerank_results(self, query: str, results: List[SearchResult]) -> List[SearchResult]:
+        query_lower = (query or "").lower()
+        query_text = query or ""
+        for result in results:
+            metadata = result.metadata or {}
+            boost = 1.0
+            layer = metadata.get("memory_layer", "")
+            kind = metadata.get("path_kind", "")
+            if any(word in query_text for word in ("教材", "章节", "大纲", "导出", "WritingSpec", "harness")):
+                if layer == "textbook":
+                    boost += 0.35
+                if kind in ("harness", "state", "outline", "chapter"):
+                    boost += 0.20
+            if any(word in query_text for word in ("偏好", "用户", "我希望", "以后", "不要")) and layer == "user":
+                boost += 0.35
+            if any(word in query_text for word in ("错误", "失败", "修复", "bug", "报错")) and layer == "error":
+                boost += 0.35
+            book_id = metadata.get("book_id") or ""
+            if book_id and book_id.lower() in query_lower:
+                boost += 0.45
+            result.score = min(1.0, result.score * boost)
+        results.sort(key=lambda item: item.score, reverse=True)
+        return results
+
+    @staticmethod
+    def _compress_search_result(result: SearchResult, max_chars: int = 320) -> SearchResult:
+        import re
+        snippet = re.sub(r"```[\s\S]*?```", "[code block omitted]", result.snippet or "")
+        snippet = re.sub(r"\s+", " ", snippet).strip()
+        if len(snippet) > max_chars:
+            snippet = snippet[:max_chars].rstrip() + "..."
+        return SearchResult(
+            path=result.path,
+            start_line=result.start_line,
+            end_line=result.end_line,
+            score=result.score,
+            snippet=snippet,
+            source=result.source,
+            user_id=result.user_id,
+            metadata=result.metadata,
+        )
