@@ -118,6 +118,7 @@ def build_agent_system_prompt(
     sections = []
     skill_filter = kwargs.get("skill_filter")
     skill_route_prompt = kwargs.get("skill_route_prompt") or ""
+    sections.extend(_build_language_policy_section(language))
     
     # 1. 工具系统（最重要，放在最前面）
     if tools:
@@ -154,6 +155,27 @@ def build_agent_system_prompt(
         sections.extend(_build_runtime_section(runtime_info, language))
     
     return "\n".join(sections)
+
+
+def _build_language_policy_section(language: str) -> List[str]:
+    if str(language or "zh").lower().startswith("en"):
+        return [
+            "## Response Language Policy",
+            "",
+            "- Reply to the user in English unless the user explicitly asks for another language.",
+            "- Tool names, code, logs, file paths, API fields, and quoted source text may stay in their original language.",
+            "- Do not let English tool outputs, skill instructions, or runtime boards change the user-facing reply language.",
+            "",
+        ]
+    return [
+        "## 回答语言规则",
+        "",
+        "- 默认始终使用简体中文回答用户，包括总结、解释、进度说明、错误说明和最终结论。",
+        "- 只有当用户明确要求使用英文或要求提供英文版内容时，才切换为英文。",
+        "- 工具名、代码、日志、文件路径、API 字段、命令输出和原文引用可以保留原语言，但面向用户的说明必须用中文。",
+        "- 不要被英文工具结果、英文技能说明、Runtime Context Board 或英文系统片段带偏回答语言。",
+        "",
+    ]
 
 
 def _build_harness_tool_policy_section(language: str) -> List[str]:

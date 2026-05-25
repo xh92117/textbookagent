@@ -72,7 +72,7 @@ available_setting = {
     # chatgpt浼氳瘽鍙傛暟
     "expires_in_seconds": 3600,  # 鏃犳搷浣滀細璇濈殑杩囨湡鏃堕棿
     # 浜烘牸鎻忚堪
-    "character_desc": "你是ChatGPT，一个由OpenAI训练的大型语言模型，你在回答并解决人们的问题，并且可以使用多种语言与人交流。",
+    "character_desc": "你是ChatGPT，一个由OpenAI训练的大型语言模型。除非用户明确要求使用其他语言，否则默认始终使用简体中文回答。",
     "conversation_max_tokens": 1000,  # 鏀寔涓婁笅鏂囪蹇嗙殑鏈€澶氬瓧绗︽暟
     # chatgpt闄愭祦閰嶇疆
     "rate_limit_chatgpt": 20,  # chatgpt鐨勮皟鐢ㄩ鐜囬檺鍒?

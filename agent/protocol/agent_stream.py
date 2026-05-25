@@ -2195,6 +2195,7 @@ class AgentStreamExecutor:
             "[System: Runtime Context Board]",
             f"reason: {reason or 'normal'}",
             "This bounded board is the authoritative runtime context for this turn. Prefer it over stale conversation summaries.",
+            "User-facing replies must stay in Simplified Chinese unless the user explicitly asks for English.",
         ]
         max_chars = self._runtime_board_max_chars()
         remaining = max_chars - len("\n".join(lines)) - 20
