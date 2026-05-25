@@ -27,10 +27,25 @@ class SandboxExecutor:
     FORBIDDEN_CALLS = {'eval', 'exec', 'compile', '__import__', 'open', 'input'}
     FORBIDDEN_ATTRS = {'__subclasses__', '__globals__', '__code__', '__closure__'}
 
-    def __init__(self, timeout: int = 30, output_dir: str = ""):
+    def __init__(self, timeout: int = 30, output_dir: str = "", max_output_bytes: int = 2 * 1024 * 1024):
         self.timeout = timeout
         self.output_dir = output_dir or tempfile.mkdtemp(prefix="sandbox_")
+        self.max_output_bytes = max_output_bytes
         os.makedirs(self.output_dir, exist_ok=True)
+
+    @staticmethod
+    def _limit_child_resources():
+        if os.name == "nt":
+            return
+        try:
+            import resource
+            resource.setrlimit(resource.RLIMIT_CPU, (60, 60))
+            memory = 768 * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
+            files = 64 * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_FSIZE, (files, files))
+        except Exception:
+            pass
 
     def _validate_code(self, code: str) -> tuple:
         try:
@@ -87,7 +102,8 @@ class SandboxExecutor:
                 for key, value in os.environ.items()
                 if key in {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME", "USERPROFILE"}
             }
-            env['MPLCONFIGDIR'] = tempfile.mkdtemp()
+            mpl_config_dir = tempfile.mkdtemp()
+            env['MPLCONFIGDIR'] = mpl_config_dir
             env['PYTHONPATH'] = self.output_dir
             env['PYTHONIOENCODING'] = 'utf-8'
 
@@ -100,19 +116,39 @@ class SandboxExecutor:
                 timeout=timeout,
                 cwd=self.output_dir,
                 env=env,
+                preexec_fn=self._limit_child_resources if os.name != "nt" else None,
             )
             execution_time = time.time() - start_time
+            stdout = result.stdout or ""
+            stderr = result.stderr or ""
+            combined_size = len(stdout.encode("utf-8")) + len(stderr.encode("utf-8"))
+            if combined_size > self.max_output_bytes:
+                stderr += f"\nSandbox output exceeded {self.max_output_bytes} bytes"
+                return SandboxResult(
+                    success=False,
+                    stdout=stdout[: self.max_output_bytes // 2],
+                    stderr=stderr[: self.max_output_bytes // 2],
+                    exit_code=-1,
+                    execution_time=execution_time,
+                )
 
             output_files = []
             for f_name in os.listdir(self.output_dir):
                 f_path = os.path.join(self.output_dir, f_name)
                 if os.path.isfile(f_path) and f_name.endswith(('.png', '.jpg', '.svg', '.pdf', '.html')):
+                    if os.path.getsize(f_path) > 64 * 1024 * 1024:
+                        return SandboxResult(
+                            success=False,
+                            stderr=f"Output file too large: {f_name}",
+                            exit_code=-1,
+                            execution_time=execution_time,
+                        )
                     output_files.append(f_path)
 
             return SandboxResult(
                 success=result.returncode == 0,
-                stdout=result.stdout,
-                stderr=result.stderr,
+                stdout=stdout,
+                stderr=stderr,
                 exit_code=result.returncode,
                 output_files=output_files,
                 execution_time=execution_time,
@@ -134,4 +170,10 @@ class SandboxExecutor:
             try:
                 os.unlink(script_path)
             except:
+                pass
+            try:
+                if 'mpl_config_dir' in locals():
+                    import shutil
+                    shutil.rmtree(mpl_config_dir, ignore_errors=True)
+            except Exception:
                 pass

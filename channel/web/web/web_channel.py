@@ -14,6 +14,7 @@ from bridge.reply import Reply, ReplyType
 from channel.chat_channel import ChatChannel, check_prefix
 from channel.chat_message import ChatMessage
 from common.log import logger
+from common.upload_limits import UploadLimitError, get_upload_limits, validate_directory_upload, validate_file_upload
 from common.run_events import RunStateRecorder, normalize_event
 from common.singleton import singleton
 from config import conf
@@ -452,6 +453,7 @@ class WebChannel(ChatChannel):
             is_directory_upload = bool(directory_files or directory_rel_paths or relative_path or upload_id)
 
             upload_dir = _get_upload_dir()
+            limits = get_upload_limits("web_upload")
             if is_directory_upload:
                 if not upload_id:
                     return json.dumps({"status": "error", "message": "Missing upload_id for directory upload"})
@@ -459,6 +461,7 @@ class WebChannel(ChatChannel):
                     return json.dumps({"status": "error", "message": "No files uploaded"})
                 if len(directory_files) != len(directory_rel_paths):
                     return json.dumps({"status": "error", "message": "Directory upload payload mismatch"})
+                validate_directory_upload(directory_rel_paths, limits)
 
                 safe_upload_id = _sanitize_upload_id(upload_id)
                 upload_root = os.path.join(upload_dir, f"webdir_{safe_upload_id}")
@@ -477,6 +480,7 @@ class WebChannel(ChatChannel):
                         raise ValueError("Directory upload must use a single root folder")
                     os.makedirs(os.path.dirname(save_path), exist_ok=True)
                     content_bytes = _read_uploaded_file_bytes(file_obj)
+                    validate_file_upload(safe_rel_path, len(content_bytes), limits)
                     with open(save_path, "wb") as f:
                         f.write(content_bytes)
                     saved_files += 1
@@ -513,6 +517,7 @@ class WebChannel(ChatChannel):
             display_name = original_name
 
             content_bytes = _read_uploaded_file_bytes(file_obj)
+            validate_file_upload(original_name, len(content_bytes), limits)
             with open(save_path, "wb") as f:
                 f.write(content_bytes)
 
@@ -536,6 +541,9 @@ class WebChannel(ChatChannel):
                 "preview_url": preview_url,
             }, ensure_ascii=False)
 
+        except UploadLimitError as e:
+            logger.warning(f"[WebChannel] Upload rejected: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
         except Exception as e:
             logger.error(f"[WebChannel] File upload error: {e}", exc_info=True)
             return json.dumps({"status": "error", "message": str(e)})
@@ -744,7 +752,7 @@ class WebChannel(ChatChannel):
         public_hosts = {"0.0.0.0", "::", ""}
         if (
             host in public_hosts
-            and not conf().get("web_password")
+            and not (conf().get("web_password_hash") or conf().get("web_password"))
             and conf().get("web_require_password_on_public_host", True)
         ):
             raise RuntimeError(
@@ -752,7 +760,7 @@ class WebChannel(ChatChannel):
                 "Set web_password, bind web_host to 127.0.0.1, or explicitly set "
                 "web_require_password_on_public_host=false."
             )
-        if host in public_hosts and not conf().get("web_password"):
+        if host in public_hosts and not (conf().get("web_password_hash") or conf().get("web_password")):
             logger.warning("[WebChannel] Public web console is running without a password by explicit config.")
 
         # Print available channel hints.

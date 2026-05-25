@@ -26,6 +26,15 @@ class ErrorMemoryRecorder:
             "title": title or kind or "error",
             "detail": (detail or "").strip()[:4000],
             "metadata": metadata or {},
+            "temporal": {
+                "scope": "historical",
+                "authority": "error_log",
+                "observed_at": now,
+                "valid_from": now,
+                "valid_until": "",
+                "supersedes": [],
+                "superseded_by": "",
+            },
             "date": now,
         }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

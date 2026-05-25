@@ -8,9 +8,11 @@ from collections import OrderedDict
 import web
 
 from common import const
+from common.config_validation import ConfigValidationError, validate_config_update
 from common.log import logger
 from config import conf
 from channel.web.web.utils import get_config_path, require_auth, reset_workspace_dependent_singletons
+from channel.web.web.security import hash_password
 
 
 class ConfigHandler:
@@ -166,6 +168,8 @@ class ConfigHandler:
         "mineru_enable_formula", "mineru_enable_table", "mineru_enable_ocr",
         "mineru_timeout_seconds", "mineru_poll_interval_seconds",
         "enable_thinking", "web_password", "web_require_password_on_public_host",
+        "web_upload_max_file_mb", "web_upload_max_files", "web_upload_max_dir_depth", "web_upload_allowed_extensions",
+        "knowledge_upload_max_file_mb", "knowledge_upload_max_files", "knowledge_upload_max_dir_depth", "knowledge_upload_allowed_extensions",
         "log_dir", "log_file", "log_max_bytes", "log_backup_count",
         "active_workspace", "system_workspace", "workspace_split_enabled", "textbooks_storage_dir",
     }
@@ -277,7 +281,7 @@ class ConfigHandler:
                     "api_key_field": p.get("api_key_field"),
                 }
 
-            raw_pwd = local_config.get("web_password", "")
+            raw_pwd = local_config.get("web_password_hash", "") or local_config.get("web_password", "")
             masked_pwd = ("*" * len(raw_pwd)) if raw_pwd else ""
 
             chat_models = self._configured_chat_models(local_config)
@@ -362,21 +366,22 @@ class ConfigHandler:
             for key, value in updates.items():
                 if key not in self.EDITABLE_KEYS:
                     continue
-                if key in (
-                    "agent_max_context_tokens", "agent_max_context_turns",
-                    "agent_model_context_window", "agent_context_reserve_tokens",
-                    "agent_max_steps", "log_max_bytes", "log_backup_count",
-                    "mineru_timeout_seconds", "mineru_poll_interval_seconds",
-                    "knowledge_chunk_target_chars", "knowledge_chunk_max_chars", "knowledge_chunk_overlap_chars",
-                    "knowledge_secondary_graph_max_sections", "knowledge_secondary_graph_sample_chars",
-                ):
-                    value = int(value)
-                if key in (
-                    "use_linkai", "enable_thinking", "workspace_split_enabled",
-                    "web_require_password_on_public_host", "mineru_enable_formula",
-                    "mineru_enable_table", "mineru_enable_ocr", "knowledge_secondary_graph_enabled",
-                ):
-                    value = bool(value)
+                try:
+                    value = validate_config_update(key, value)
+                except ConfigValidationError as exc:
+                    return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
+                if key == "web_password":
+                    if value:
+                        local_config["web_password_hash"] = hash_password(value)
+                        local_config["web_password"] = ""
+                        applied["web_password_hash"] = local_config["web_password_hash"]
+                        applied["web_password"] = ""
+                    else:
+                        local_config["web_password_hash"] = ""
+                        local_config["web_password"] = ""
+                        applied["web_password_hash"] = ""
+                        applied["web_password"] = ""
+                    continue
                 local_config[key] = value
                 applied[key] = value
 

@@ -134,6 +134,19 @@ class TextbookConfig:
             self.updated_at = self.created_at
         if isinstance(self.writing_spec, dict):
             self.writing_spec = WritingSpec.from_dict(self.writing_spec)
+        try:
+            self.total_chapters = int(self.total_chapters or 0)
+        except (TypeError, ValueError):
+            raise ValueError("total_chapters must be an integer")
+        try:
+            self.chapter_word_count = int(self.chapter_word_count if self.chapter_word_count not in (None, "") else 5000)
+        except (TypeError, ValueError):
+            raise ValueError("chapter_word_count must be an integer")
+        if self.total_chapters < 0 or self.total_chapters > 200:
+            raise ValueError("total_chapters must be between 0 and 200")
+        if self.chapter_word_count < 100 or self.chapter_word_count > 100000:
+            raise ValueError("chapter_word_count must be between 100 and 100000")
+        self.language = str(self.language or "zh").strip()[:16] or "zh"
         if self.writing_spec == WritingSpec():
             self.writing_spec = WritingSpec.default_for(self.target_audience, self.level, self.style)
         if not self.writing_spec.audience:

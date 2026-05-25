@@ -121,18 +121,57 @@ class MemorySearchTool(BaseTool):
             
             # Format results
             output = [f"Found {len(results)} relevant memories:\n"]
+            conflict_notes = self._build_conflict_notes(results)
+            if conflict_notes:
+                output.append("Conflict notes:")
+                output.extend(f"- {note}" for note in conflict_notes)
             
             for i, result in enumerate(results, 1):
                 metadata = getattr(result, "metadata", None) or {}
                 layer = metadata.get("memory_layer", result.source)
                 kind = metadata.get("path_kind", "")
                 label = f"{layer}/{kind}".strip("/")
+                temporal = metadata.get("temporal_scope", "unknown")
+                authority = metadata.get("authority", "unknown")
+                observed_at = metadata.get("observed_at", "")
+                valid_from = metadata.get("valid_from", "")
+                valid_until = metadata.get("valid_until", "") or "present"
+                entity_key = metadata.get("entity_key", "")
+                superseded_by = metadata.get("superseded_by", "")
                 output.append(f"\n{i}. {result.path} (lines {result.start_line}-{result.end_line})")
                 output.append(f"   Score: {result.score:.3f}")
                 output.append(f"   Layer: {label}")
+                if entity_key:
+                    output.append(f"   Entity: {entity_key}")
+                output.append(f"   Temporal: {temporal}")
+                output.append(f"   Authority: {authority}")
+                if superseded_by:
+                    output.append(f"   Superseded by: {superseded_by}")
+                if observed_at:
+                    output.append(f"   Observed: {observed_at}")
+                if valid_from or valid_until != "present":
+                    output.append(f"   Valid: {valid_from or 'unknown'} -> {valid_until}")
                 output.append(f"   Snippet: {result.snippet}")
             
             return ToolResult.success("\n".join(output))
             
         except Exception as e:
             return ToolResult.fail(f"Error searching memory: {str(e)}")
+
+    @staticmethod
+    def _build_conflict_notes(results) -> list:
+        by_entity = {}
+        for result in results or []:
+            metadata = getattr(result, "metadata", None) or {}
+            entity_key = metadata.get("entity_key") or metadata.get("book_id") or ""
+            if not entity_key:
+                continue
+            by_entity.setdefault(entity_key, set()).add(metadata.get("temporal_scope") or "unknown")
+        notes = []
+        for entity_key, scopes in by_entity.items():
+            if "current" in scopes and ({"historical", "expired"} & scopes):
+                notes.append(
+                    f"{entity_key}: current truth-file memory appears with historical/expired memories. "
+                    "Prefer current unless the user explicitly asks for history."
+                )
+        return notes[:5]

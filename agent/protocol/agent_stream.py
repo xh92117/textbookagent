@@ -398,10 +398,9 @@ class AgentStreamExecutor:
             ]
         })
 
+        self._maybe_record_task_boundary(user_message)
         self._record_short_term_user_goal(user_message)
         self._apply_tool_routing(user_message)
-        self._inject_tool_routing_board()
-        self._inject_short_term_memory_board()
 
         self._maybe_save_context_checkpoint(user_message)
 
@@ -414,6 +413,7 @@ class AgentStreamExecutor:
         # boundary (e.g. the last kept turn ends with an assistant tool_use whose
         # tool_result was in a discarded turn).
         self._validate_and_fix_messages()
+        self._emit_context_diagnostics("before_llm_loop")
 
         self._emit_event("agent_start")
 
@@ -693,6 +693,7 @@ class AgentStreamExecutor:
                             logger.info(f"📦 Mid-run context trim: ~{total_estimated} tokens approaching {max_allowed} limit")
                             self._trim_messages()
                             self._validate_and_fix_messages()
+                            self._emit_context_diagnostics("midrun_trim")
                             new_total = system_tokens + sum(self.agent._estimate_message_tokens(m) for m in self.messages)
                             logger.info(f"📦 After mid-run trim: ~{new_total} tokens")
                     except Exception as e:
@@ -794,6 +795,18 @@ class AgentStreamExecutor:
             )
         except Exception as exc:
             logger.debug(f"[ShortTermMemory] user goal skipped: {exc}")
+
+    def _maybe_record_task_boundary(self, user_message: str) -> None:
+        pool = self._get_short_term_memory()
+        if not pool:
+            return
+        try:
+            boundary = pool.maybe_record_task_boundary(user_message)
+            if boundary:
+                logger.info(f"[TaskBoundary] {boundary.get('reason', '')}")
+                self._emit_event("task_boundary", boundary)
+        except Exception as exc:
+            logger.debug(f"[TaskBoundary] detection skipped: {exc}")
 
     def _record_short_term_tool_start(self, tool_name: str, arguments: Dict[str, Any]) -> None:
         pool = self._get_short_term_memory()
@@ -2047,7 +2060,7 @@ class AgentStreamExecutor:
             
             if old_count > len(self.messages):
                 logger.info(f"   重建消息列表: {old_count} -> {len(self.messages)} 条消息")
-            self._inject_context_state_board(turns, reason="rebuild")
+            self._inject_runtime_context_board(turns, reason="rebuild")
             return
 
         # Token limit exceeded — progressive compression strategy:
@@ -2091,7 +2104,7 @@ class AgentStreamExecutor:
             for turn in turns:
                 new_messages.extend(turn['messages'])
             self.messages = new_messages
-            self._inject_context_state_board(turns, reason="token-compress")
+            self._inject_runtime_context_board(turns, reason="token-compress")
             return
 
         # Phase 2: Discard oldest turns, keeping at least 3
@@ -2118,20 +2131,19 @@ class AgentStreamExecutor:
         
         old_count = len(self.messages)
         self.messages = new_messages
-        self._inject_context_state_board(turns, reason="token-trim")
+        self._inject_runtime_context_board(turns, reason="token-trim")
 
         logger.info(
             f"📦 渐进式压缩完成: {old_count} -> {len(self.messages)} 条消息，"
             f"~{current_tokens + system_tokens} tokens"
         )
 
-    def _inject_context_state_board(self, turns: List[Dict], reason: str = ""):
-        """Inject a compact operational state board into the latest user text."""
-        board = build_context_state_board(turns)
+    def _inject_runtime_context_board(self, turns: List[Dict], reason: str = ""):
+        """Inject one bounded runtime board into the latest user text."""
+        board = self._build_runtime_context_board(turns, reason=reason)
         if not board:
             return
 
-        marker = "[System: Current task state board]"
         for msg in self.messages:
             content = msg.get("content", [])
             if not isinstance(content, list):
@@ -2140,8 +2152,7 @@ class AgentStreamExecutor:
                 if not isinstance(block, dict) or block.get("type") != "text":
                     continue
                 text = block.get("text", "")
-                if marker in text:
-                    block["text"] = self._strip_context_state_board(text)
+                block["text"] = self._strip_runtime_context_board(text)
 
         for msg in reversed(self.messages):
             if msg.get("role") != "user":
@@ -2157,6 +2168,100 @@ class AgentStreamExecutor:
                         f"📌 Context state board injected ({len(board)} chars, reason={reason})"
                     )
                     return
+
+    def _build_runtime_context_board(self, turns: List[Dict], reason: str = "") -> str:
+        sections = []
+        route_prompt = getattr(self.tool_route, "prompt", "") if self.tool_route else ""
+        if route_prompt:
+            sections.append(("Tool Route", self._strip_known_board(route_prompt)))
+
+        pool = self._get_short_term_memory()
+        if pool:
+            try:
+                short_term = pool.compact_prompt(max_events=self._runtime_board_max_events())
+                if short_term:
+                    sections.append(("Short-Term State", self._strip_known_board(short_term)))
+            except Exception as exc:
+                logger.debug(f"[RuntimeContext] short-term board skipped: {exc}")
+
+        task_board = build_context_state_board(turns, max_events=self._runtime_board_max_events())
+        if task_board:
+            sections.append(("Task Checkpoint", self._strip_known_board(task_board)))
+
+        if not sections:
+            return ""
+
+        lines = [
+            "[System: Runtime Context Board]",
+            f"reason: {reason or 'normal'}",
+            "This bounded board is the authoritative runtime context for this turn. Prefer it over stale conversation summaries.",
+        ]
+        max_chars = self._runtime_board_max_chars()
+        remaining = max_chars - len("\n".join(lines)) - 20
+        for idx, (title, body) in enumerate(sections):
+            if remaining <= 80:
+                break
+            remaining_sections = max(1, len(sections) - idx)
+            budget = max(400, remaining // remaining_sections)
+            clipped = self._clip_runtime_section(body, budget)
+            lines.append(f"\n## {title}\n{clipped}")
+            remaining = max_chars - len("\n".join(lines))
+        return "\n".join(lines)[:max_chars]
+
+    def _runtime_board_max_chars(self) -> int:
+        try:
+            from config import conf
+            value = int(conf().get("agent_runtime_board_max_chars", 6000) or 6000)
+            return max(2000, min(20000, value))
+        except Exception:
+            return 6000
+
+    def _runtime_board_max_events(self) -> int:
+        try:
+            from config import conf
+            value = int(conf().get("agent_runtime_board_max_events", 12) or 12)
+            return max(4, min(40, value))
+        except Exception:
+            return 12
+
+    @staticmethod
+    def _clip_runtime_section(text: str, max_chars: int) -> str:
+        text = (text or "").strip()
+        if len(text) <= max_chars:
+            return text
+        head = int(max_chars * 0.75)
+        tail = max_chars - head - 80
+        return (
+            text[:head].rstrip()
+            + f"\n... [runtime section clipped: {len(text)} -> {max_chars} chars] ...\n"
+            + (text[-tail:].lstrip() if tail > 0 else "")
+        )
+
+    @staticmethod
+    def _strip_known_board(text: str) -> str:
+        for marker in (
+            "[System: Tool routing policy]",
+            "[System: Short-term working memory]",
+            "[System: Current task state board]",
+            "[System: Runtime Context Board]",
+        ):
+            text = text.replace(marker, "").strip()
+        return text
+
+    @staticmethod
+    def _strip_runtime_context_board(text: str) -> str:
+        markers = (
+            "[System: Runtime Context Board]",
+            "[System: Tool routing policy]",
+            "[System: Short-term working memory]",
+            "[System: Current task state board]",
+        )
+        if not any(marker in text for marker in markers):
+            return text
+        parts = text.split("\n\n---\n\n", 1)
+        if len(parts) == 2 and any(marker in parts[0] for marker in markers):
+            return parts[1].strip()
+        return text
 
     @staticmethod
     def _strip_context_state_board(text: str) -> str:
@@ -2188,6 +2293,71 @@ class AgentStreamExecutor:
             logger.info(f"🗑️ Cleared dirty session data from DB: {session_id}")
         except Exception as e:
             logger.warning(f"Failed to clear session DB: {e}")
+
+    def context_diagnostics(self) -> Dict[str, Any]:
+        """Return lightweight diagnostics for the current assembled context."""
+        turns = self._identify_complete_turns()
+        system_tokens = (
+            self.agent._estimate_message_tokens({"role": "system", "content": self.system_prompt})
+            if self.agent and self.system_prompt
+            else 0
+        )
+        message_tokens = (
+            sum(self.agent._estimate_message_tokens(m) for m in self.messages)
+            if self.agent
+            else 0
+        )
+        runtime_board_chars = 0
+        tool_result_chars = 0
+        compressed_blocks = 0
+        for msg in self.messages:
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                text = str(block.get("text") or block.get("content") or "")
+                if "[System: Runtime Context Board]" in text:
+                    runtime_board_chars = len(text.split("\n\n---\n\n", 1)[0])
+                if block.get("type") == "tool_result":
+                    tool_result_chars += len(str(block.get("content", "")))
+                    if "compacted" in str(block.get("content", "")).lower() or "compressed" in str(block.get("content", "")).lower():
+                        compressed_blocks += 1
+        max_allowed, reserve = self._effective_context_budget()
+        return {
+            "system_prompt_chars": len(self.system_prompt or ""),
+            "message_count": len(self.messages),
+            "turn_count": len(turns),
+            "estimated_tokens": system_tokens + message_tokens,
+            "max_allowed_tokens": max_allowed,
+            "reserve_tokens": reserve,
+            "runtime_board_chars": runtime_board_chars,
+            "tool_result_chars": tool_result_chars,
+            "compressed_blocks": compressed_blocks,
+            "memory_bootstrap_loaded": "SYSTEM_MEMORY_BOOTSTRAP.md" in (self.system_prompt or ""),
+        }
+
+    def _emit_context_diagnostics(self, reason: str = "") -> None:
+        """Emit context diagnostics without adding anything to the LLM context."""
+        try:
+            payload = self.context_diagnostics()
+            payload["reason"] = reason or "normal"
+            self._emit_event("context_diagnostics", payload)
+            logger.info(
+                "[ContextDiagnostics] reason=%s messages=%s turns=%s tokens~%s/%s "
+                "runtime_board_chars=%s tool_result_chars=%s compressed_blocks=%s",
+                payload["reason"],
+                payload["message_count"],
+                payload["turn_count"],
+                payload["estimated_tokens"],
+                payload["max_allowed_tokens"],
+                payload["runtime_board_chars"],
+                payload["tool_result_chars"],
+                payload["compressed_blocks"],
+            )
+        except Exception as exc:
+            logger.debug(f"[ContextDiagnostics] skipped: {exc}")
 
     def _prepare_messages(self) -> List[Dict[str, Any]]:
         """

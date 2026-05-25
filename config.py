@@ -230,8 +230,20 @@ available_setting = {
     "web_port": 9899,
     "web_host": "127.0.0.1",  # Bind host; use 0.0.0.0 only when remote access is intentional and protected
     "web_password": "",  # Web console password; empty means no authentication required
+    "web_password_hash": "",  # Hashed web console password; preferred over plaintext web_password
     "web_require_password_on_public_host": True,
     "web_session_expire_days": 30,  # Auth session expiry in days
+    "web_upload_max_file_mb": 100,
+    "web_upload_max_files": 500,
+    "web_upload_max_dir_depth": 12,
+    "web_upload_allowed_extensions": [],
+    "knowledge_upload_max_file_mb": 200,
+    "knowledge_upload_max_files": 100,
+    "knowledge_upload_max_dir_depth": 8,
+    "knowledge_upload_allowed_extensions": [
+        ".pdf", ".doc", ".docx", ".md", ".txt", ".csv", ".json",
+        ".png", ".jpg", ".jpeg", ".webp", ".gif",
+    ],
     "log_dir": "logs",
     "log_file": "run.log",
     "log_max_bytes": 5242880,
@@ -246,6 +258,8 @@ available_setting = {
     "agent_context_midrun_trim_ratio": 0.97,  # 运行中达到该比例才触发压缩，避免频繁compact
     "agent_context_anxiety_guard_enabled": True,
     "agent_context_anxiety_threshold": 0.7,
+    "agent_runtime_board_max_chars": 6000,
+    "agent_runtime_board_max_events": 12,
     "short_term_memory_enabled": True,
     "short_term_memory_max_events": 200,
     "short_term_memory_keep_events": 50,

@@ -6,6 +6,7 @@ from channel.web.web.routes import get_urls
 import channel.web.web.web_channel as web_channel
 from channel.web.web import handlers_admin, handlers_channels, handlers_config, handlers_core
 from channel.web.web import handlers_knowledge, handlers_textbook
+from channel.web.web.security import hash_password, verify_password, verify_session_token
 
 
 def _route_handler_names():
@@ -94,6 +95,61 @@ def test_config_handler_can_switch_active_chat_model(tmp_path, monkeypatch):
     assert response["applied"]["model"] == "deepseek-reasoner"
     assert saved["active_chat_model_id"] == "m2"
     assert saved["model"] == "deepseek-reasoner"
+
+
+def test_config_handler_hashes_web_password(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+    local_config = {}
+
+    monkeypatch.setattr(handlers_config, "require_auth", lambda: None)
+    monkeypatch.setattr(handlers_config, "conf", lambda: local_config)
+    monkeypatch.setattr(handlers_config, "get_config_path", lambda: str(config_path))
+    monkeypatch.setattr(handlers_config.web, "data", lambda: json.dumps({"updates": {"web_password": "secret-pass"}}).encode("utf-8"))
+    monkeypatch.setattr(handlers_config.web, "header", lambda *args, **kwargs: None)
+
+    response = json.loads(handlers_config.ConfigHandler().POST())
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert response["status"] == "success"
+    assert saved["web_password"] == ""
+    assert verify_password("secret-pass", saved["web_password_hash"])
+    assert saved["web_password_hash"] != "secret-pass"
+
+
+def test_password_hash_verification_rejects_wrong_password():
+    stored = hash_password("right")
+
+    assert verify_password("right", stored) is True
+    assert verify_password("wrong", stored) is False
+
+
+def test_legacy_plaintext_session_tokens_still_verify():
+    import hashlib
+    import hmac
+    import time
+
+    ts = format(int(time.time()), "x")
+    sig = hmac.new(b"legacy-pass", ts.encode("ascii"), hashlib.sha256).hexdigest()
+
+    assert verify_session_token(f"{ts}.{sig}", "legacy-pass", 60) is True
+
+
+def test_config_handler_rejects_invalid_numeric_update(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+    local_config = {}
+
+    monkeypatch.setattr(handlers_config, "require_auth", lambda: None)
+    monkeypatch.setattr(handlers_config, "conf", lambda: local_config)
+    monkeypatch.setattr(handlers_config, "get_config_path", lambda: str(config_path))
+    monkeypatch.setattr(handlers_config.web, "data", lambda: json.dumps({"updates": {"agent_max_steps": 0}}).encode("utf-8"))
+    monkeypatch.setattr(handlers_config.web, "header", lambda *args, **kwargs: None)
+
+    response = json.loads(handlers_config.ConfigHandler().POST())
+
+    assert response["status"] == "error"
+    assert "agent_max_steps" in response["message"]
 
 
 def test_uploaded_skill_zip_installs_to_workspace_and_updates_config(tmp_path):

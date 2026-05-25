@@ -31,3 +31,16 @@ def test_chat_upload_normalizes_browser_filename(tmp_path, monkeypatch):
     assert payload["status"] == "success"
     assert payload["file_name"] == "image.png"
     assert payload["file_type"] == "image"
+
+
+def test_chat_upload_rejects_file_over_configured_limit(tmp_path, monkeypatch):
+    file_obj = SimpleNamespace(filename="large.txt", file=BytesIO(b"x" * (1024 * 1024 + 1)))
+    monkeypatch.setattr(web_channel, "_upload_web_input", lambda: {"file": file_obj, "session_id": "s1"})
+    monkeypatch.setattr(web_channel, "_get_upload_dir", lambda: str(tmp_path))
+    monkeypatch.setattr("common.upload_limits.conf", lambda: {"web_upload_max_file_mb": 1})
+
+    result = web_channel.WebChannel().upload_file()
+    payload = json.loads(result)
+
+    assert payload["status"] == "error"
+    assert "maximum size" in payload["message"]

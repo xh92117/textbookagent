@@ -1,13 +1,11 @@
 import json
-import hashlib
-import hmac
 import os
-import time
 from typing import Any, Dict
 
 import web
 
 from config import conf
+from channel.web.web.security import create_session_token, verify_session_token
 
 
 def json_response(payload: Dict[str, Any], *, ensure_ascii: bool = False) -> str:
@@ -31,7 +29,7 @@ def read_json_body(default=None):
 
 
 def is_password_enabled() -> bool:
-    return bool(conf().get("web_password", ""))
+    return bool(conf().get("web_password_hash", "") or conf().get("web_password", ""))
 
 
 def session_expire_seconds() -> int:
@@ -39,31 +37,12 @@ def session_expire_seconds() -> int:
 
 
 def create_auth_token() -> str:
-    ts = format(int(time.time()), "x")
-    sig = hmac.new(
-        conf().get("web_password", "").encode(),
-        ts.encode(),
-        hashlib.sha256,
-    ).hexdigest()
-    return f"{ts}.{sig}"
+    return create_session_token(conf().get("web_password_hash", "") or conf().get("web_password", ""))
 
 
 def verify_auth_token(token) -> bool:
-    if not token or "." not in token:
-        return False
-    ts_hex, sig = token.split(".", 1)
-    try:
-        ts = int(ts_hex, 16)
-    except ValueError:
-        return False
-    if time.time() - ts > session_expire_seconds():
-        return False
-    expected = hmac.new(
-        conf().get("web_password", "").encode(),
-        ts_hex.encode(),
-        hashlib.sha256,
-    ).hexdigest()
-    return hmac.compare_digest(sig, expected)
+    stored = conf().get("web_password_hash", "") or conf().get("web_password", "")
+    return verify_session_token(token, stored, session_expire_seconds())
 
 
 def check_auth() -> bool:

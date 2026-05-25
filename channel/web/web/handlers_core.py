@@ -1,6 +1,5 @@
 """Core page, auth, and file-serving handlers for the web channel."""
 
-import hmac
 import mimetypes
 import os
 import re
@@ -23,6 +22,7 @@ from channel.web.web.utils import (
     require_auth,
     session_expire_seconds,
 )
+from channel.web.web.security import verify_password
 
 
 class RootHandler:
@@ -46,8 +46,8 @@ class AuthLoginHandler:
         except Exception:
             return json_error("Invalid request")
         password = data.get("password", "")
-        expected = conf().get("web_password", "")
-        if not hmac.compare_digest(password, expected):
+        expected = conf().get("web_password_hash", "") or conf().get("web_password", "")
+        if not verify_password(password, expected):
             logger.warning("[WebChannel] Invalid login attempt")
             return json_error("Wrong password")
         token = create_auth_token()

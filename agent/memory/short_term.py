@@ -19,6 +19,19 @@ class ShortTermMemoryPool:
 
     VERSION = "short-term-memory-v1"
 
+    @staticmethod
+    def _temporal(observed_at: str = "") -> Dict[str, Any]:
+        observed = observed_at or datetime.now().isoformat()
+        return {
+            "scope": "active",
+            "authority": "short_term",
+            "observed_at": observed,
+            "valid_from": observed,
+            "valid_until": "",
+            "supersedes": [],
+            "superseded_by": "",
+        }
+
     def __init__(
         self,
         system_root: str,
@@ -52,6 +65,27 @@ class ShortTermMemoryPool:
             "text": self._clip(text, 1200),
         })
         self._save(payload)
+
+    def maybe_record_task_boundary(self, text: str) -> Optional[Dict[str, str]]:
+        payload = self._load()
+        previous_goal = payload.get("current_goal", "")
+        boundary = self._detect_task_boundary(previous_goal, text)
+        if not boundary:
+            return None
+        payload["active_book_id"] = boundary.get("new_book_id", "")
+        payload["active_chapter"] = ""
+        payload["next_step"] = "new task boundary detected; follow the latest user goal"
+        payload["read_files"] = []
+        payload["written_files"] = []
+        payload["failures"] = []
+        self._append_event(payload, {
+            "type": "task_boundary",
+            "summary": boundary["reason"],
+            "previous_domain": boundary["previous_domain"],
+            "new_domain": boundary["new_domain"],
+        })
+        self._save(payload)
+        return boundary
 
     def record_tool_start(self, tool_name: str, arguments: Dict[str, Any]) -> None:
         payload = self._load()
@@ -135,6 +169,7 @@ class ShortTermMemoryPool:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
                     data.setdefault("version", self.VERSION)
+                    data.setdefault("temporal", self._temporal(data.get("created_at", "")))
                     data.setdefault("events", [])
                     return data
             except Exception:
@@ -142,6 +177,7 @@ class ShortTermMemoryPool:
         now = datetime.now().isoformat()
         return {
             "version": self.VERSION,
+            "temporal": self._temporal(now),
             "session_id": self.session_id,
             "created_at": now,
             "updated_at": now,
@@ -200,6 +236,61 @@ class ShortTermMemoryPool:
         if status and status != "success":
             failure = f"{tool_name}: {self._summarize_result(tool_name, result, status)}"
             self._append_unique(payload, "failures", failure, 30)
+
+    @classmethod
+    def _detect_task_boundary(cls, previous_goal: str, new_goal: str) -> Optional[Dict[str, str]]:
+        previous_goal = (previous_goal or "").strip()
+        new_goal = (new_goal or "").strip()
+        if not previous_goal or not new_goal:
+            return None
+        if cls._is_continuation(new_goal):
+            return None
+        previous_domain = cls._task_domain(previous_goal)
+        new_domain = cls._task_domain(new_goal)
+        previous_book = cls._extract_book_id(previous_goal)
+        new_book = cls._extract_book_id(new_goal)
+        if previous_book and new_book and previous_book != new_book:
+            return {
+                "previous_domain": previous_domain,
+                "new_domain": new_domain,
+                "previous_book_id": previous_book,
+                "new_book_id": new_book,
+                "reason": f"active textbook changed: {previous_book} -> {new_book}",
+            }
+        if previous_domain != new_domain and new_domain != "general":
+            return {
+                "previous_domain": previous_domain,
+                "new_domain": new_domain,
+                "previous_book_id": previous_book,
+                "new_book_id": new_book,
+                "reason": f"task domain changed: {previous_domain} -> {new_domain}",
+            }
+        return None
+
+    @staticmethod
+    def _is_continuation(text: str) -> bool:
+        return bool(re.match(r"^\s*(继续|接着|下一步|开始吧|好的|执行|go on|continue)\b", text, re.I))
+
+    @staticmethod
+    def _extract_book_id(text: str) -> str:
+        match = re.search(r"\btb_[A-Za-z0-9_-]+\b", text or "")
+        return match.group(0) if match else ""
+
+    @staticmethod
+    def _task_domain(text: str) -> str:
+        text = (text or "").lower()
+        checks = [
+            ("textbook", ("教材", "章节", "大纲", "导出", "写作", "审查", "textbook", "chapter", "outline")),
+            ("memory", ("记忆", "画像", "memory", "profile")),
+            ("frontend", ("前端", "界面", "按钮", "ui", "css", "html")),
+            ("git", ("github", "提交", "推送", "commit", "push")),
+            ("context", ("上下文", "token", "runtime context", "context")),
+            ("skill", ("技能", "skill")),
+        ]
+        for domain, keywords in checks:
+            if any(keyword in text for keyword in keywords):
+                return domain
+        return "general"
 
     @staticmethod
     def _append_unique(payload: Dict[str, Any], key: str, value: str, limit: int) -> None:

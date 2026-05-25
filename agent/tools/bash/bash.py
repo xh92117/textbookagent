@@ -63,6 +63,8 @@ SAFETY:
         self.allow_destructive_outside_workspace = bool(
             self.config.get("allow_destructive_outside_workspace", False)
         )
+        self.permission_level = self.config.get("permission_level", "workspace-write")
+        self.expose_sensitive_env = bool(self.config.get("expose_sensitive_env", False))
 
     def execute(self, args: Dict[str, Any]) -> ToolResult:
         """
@@ -93,6 +95,9 @@ SAFETY:
 
         # Optional safety check - only warn about extremely dangerous commands
         if self.safety_mode:
+            permission_warning = self._permission_warning(command)
+            if permission_warning:
+                return ToolResult.fail(f"Safety Warning: {permission_warning}")
             warning = self._get_safety_warning(command)
             if warning:
                 return ToolResult.fail(
@@ -115,6 +120,8 @@ SAFETY:
                     logger.debug("[Bash] python-dotenv not installed, skipping .env loading")
                 except Exception as e:
                     logger.debug(f"[Bash] Failed to load .env: {e}")
+            if not self.expose_sensitive_env:
+                env = self._redact_sensitive_env(env)
 
             # getuid() only exists on Unix-like systems
             if hasattr(os, 'getuid'):
@@ -299,6 +306,22 @@ SAFETY:
 
         return ""
 
+    def _permission_warning(self, command: str) -> str:
+        level = str(self.permission_level or "workspace-write").lower()
+        if level in {"dangerous", "full"}:
+            return ""
+        tokens = [t.lower() for t in self._rough_tokens(command)]
+        write_markers = {">", ">>"}
+        write_verbs = {
+            "rm", "del", "erase", "rmdir", "rd", "remove-item", "mv", "move",
+            "copy", "cp", "mkdir", "new-item", "set-content", "add-content",
+            "out-file",
+        }
+        if level == "read-only":
+            if any(token in write_markers or token in write_verbs for token in tokens):
+                return "Bash tool is running in read-only mode for this agent"
+        return ""
+
     def _remote_script_warning(self, command: str) -> str:
         lowered = command.lower()
         if re.search(r'\b(curl|wget)\b.+\|\s*(sh|bash|zsh|python|python3|pwsh|powershell)\b', lowered):
@@ -377,6 +400,15 @@ SAFETY:
             return os.path.commonpath([self.workspace_root, path]) == self.workspace_root
         except ValueError:
             return False
+
+    @staticmethod
+    def _redact_sensitive_env(env: dict) -> dict:
+        sensitive_markers = ("KEY", "SECRET", "TOKEN", "PASSWORD", "COOKIE", "CREDENTIAL")
+        return {
+            key: value
+            for key, value in env.items()
+            if not any(marker in key.upper() for marker in sensitive_markers)
+        }
 
     @staticmethod
     def _looks_like_powershell_file_write(command: str) -> bool:

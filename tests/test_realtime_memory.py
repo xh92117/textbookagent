@@ -2,6 +2,7 @@ import json
 
 from agent.memory.realtime import RealtimeMemoryRecorder
 from agent.memory.short_term import ShortTermMemoryPool
+from agent.memory.error_memory import ErrorMemoryRecorder
 
 
 def test_process_memory_records_state_and_profile(tmp_path):
@@ -20,12 +21,17 @@ def test_process_memory_records_state_and_profile(tmp_path):
     index_path = tmp_path / "memory" / "process_index.md"
 
     assert state_path.exists()
+    process_payload = json.loads((tmp_path / "memory" / "processes" / "proc_demo.json").read_text(encoding="utf-8"))
+    assert process_payload["temporal"]["scope"] == "historical"
+    assert process_payload["temporal"]["authority"] == "process_log"
     assert "实时记忆功能" in state_path.read_text(encoding="utf-8")
     assert "completed" in state_path.read_text(encoding="utf-8")
     assert index_path.exists()
     assert "proc_demo" in index_path.read_text(encoding="utf-8")
 
     profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    assert profile["temporal"]["scope"] == "evergreen"
+    assert profile["temporal"]["authority"] == "user_profile"
     assert "教材智能体开发与知识库增强" in profile["projects"]
     assert any("我想要实现教材智能体的实时记忆功能" in item for item in profile["preferences"])
 
@@ -73,9 +79,20 @@ def test_short_term_memory_pool_records_and_compacts_prompt(tmp_path):
     path = tmp_path / "memory" / "short_term" / "session_demo.json"
     data = json.loads(path.read_text(encoding="utf-8"))
 
+    assert data["temporal"]["scope"] == "active"
+    assert data["temporal"]["authority"] == "short_term"
     assert data["active_book_id"] == "tb_demo"
     assert data["active_chapter"] == "2"
     assert data["summary"]
     assert len(data["events"]) <= 20
     assert "Short-term working memory" in prompt
     assert "file_23.md" in prompt
+
+
+def test_error_memory_records_temporal_metadata(tmp_path):
+    recorder = ErrorMemoryRecorder(str(tmp_path))
+    path = recorder.record_tool_error("memory_search", "failed")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    assert payload["temporal"]["scope"] == "historical"
+    assert payload["temporal"]["authority"] == "error_log"

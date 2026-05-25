@@ -235,6 +235,22 @@ def test_bash_rejects_destructive_absolute_path_outside_workspace(tmp_path):
     assert "outside the workspace" in str(result.result)
 
 
+def test_bash_read_only_permission_blocks_writes():
+    tool = Bash({"permission_level": "read-only"})
+    result = tool.execute({"command": "mkdir should_not_be_created"})
+
+    assert result.status == "error"
+    assert "read-only mode" in str(result.result)
+
+
+def test_bash_redacts_sensitive_environment_by_default(monkeypatch):
+    monkeypatch.setenv("TEST_SECRET_TOKEN", "hidden")
+
+    env = Bash._redact_sensitive_env({"PATH": "x", "TEST_SECRET_TOKEN": "hidden"})
+
+    assert env == {"PATH": "x"}
+
+
 def test_parse_error_recovery_hint_prefers_textbook_chapter():
     hint = AgentStreamExecutor._tool_parse_recovery_hint("edit")
     assert "textbook_chapter" in hint

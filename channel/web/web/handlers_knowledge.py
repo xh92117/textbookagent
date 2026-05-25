@@ -7,6 +7,7 @@ import uuid
 import web
 
 from common.log import logger
+from common.upload_limits import UploadLimitError, get_upload_limits, validate_file_upload
 from common.run_events import RunStateRecorder
 from channel.web.web.utils import (
     get_upload_dir, get_workspace_root, json_error, json_response, json_success, read_json_body, require_auth,
@@ -86,6 +87,7 @@ class KnowledgeUploadHandler:
                 return json_error("No file uploaded")
             content_bytes = file_obj.file.read()
             original_name = file_obj.filename
+            validate_file_upload(original_name, len(content_bytes), get_upload_limits("knowledge_upload"))
             upload_dir = get_upload_dir()
             os.makedirs(upload_dir, exist_ok=True)
             tmp_path = os.path.join(upload_dir, f"knowledge_{uuid.uuid4().hex[:8]}_{original_name}")
@@ -100,6 +102,9 @@ class KnowledgeUploadHandler:
                     os.remove(tmp_path)
                 except OSError:
                     pass
+        except UploadLimitError as e:
+            logger.warning(f"[WebChannel] Knowledge upload rejected: {e}")
+            return json_error(e)
         except Exception as e:
             logger.error(f"[WebChannel] Knowledge upload error: {e}", exc_info=True)
             return json_error(e)

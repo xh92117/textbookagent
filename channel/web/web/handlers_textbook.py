@@ -147,9 +147,8 @@ class TextbookChapterDetailHandler:
         require_auth()
         try:
             bridge = _get_textbook_bridge()
-            content = bridge.get_chapter(book_id, int(num))
-            mgr = bridge._memory_manager.get_truth_manager(book_id)
-            return json_success(chapter_num=int(num), content=content, content_hash=mgr.content_hash(content))
+            payload = bridge.get_chapter_with_hash(book_id, int(num))
+            return json_success(**payload)
         except Exception as e:
             logger.error(f"[WebChannel] Chapter get error: {e}")
             return json_error(e)

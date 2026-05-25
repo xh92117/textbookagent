@@ -45,6 +45,26 @@ def test_memory_sync_indexes_textbook_truth_files(tmp_path):
     assert any(result.path == "textbooks/tb_demo/state/status.json" for result in results)
 
 
+def test_memory_sync_removes_deleted_textbook_truth_file_index(tmp_path):
+    status_path = tmp_path / "textbooks" / "tb_demo" / "state" / "status.json"
+    status_path.parent.mkdir(parents=True)
+    status_path.write_text(json.dumps({"title": "demo", "phase": "persist_chapter"}), encoding="utf-8")
+
+    async def run():
+        manager = MemoryManager(MemoryConfig(workspace_root=str(tmp_path)), embedding_provider=None)
+        await manager.sync(force=True)
+        first = await manager.search("persist_chapter", max_results=5, min_score=0.0)
+        status_path.unlink()
+        await manager.sync(force=True)
+        second = await manager.search("persist_chapter", max_results=5, min_score=0.0)
+        manager.close()
+        return first, second
+
+    first, second = asyncio.run(run())
+    assert any(result.path == "textbooks/tb_demo/state/status.json" for result in first)
+    assert not any(result.path == "textbooks/tb_demo/state/status.json" for result in second)
+
+
 def test_memory_sync_indexes_project_profile_files(tmp_path):
     system_root = tmp_path / "system"
     project_root = tmp_path / "project"

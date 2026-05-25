@@ -13,6 +13,7 @@ from typing import Optional, List
 from agent.textbook.models.textbook import TextbookConfig, WritingSpec, ContentRatio, VisualPolicy, StylePolicy, WordCountPolicy
 from agent.textbook.state.manager import TextbookMemoryManager
 from agent.textbook.state.truth_files import TruthFileManager
+from agent.textbook.state.resolver import TextbookStateResolver
 from agent.textbook.pipeline.runner import PipelineRunner
 
 from common.log import logger
@@ -286,6 +287,7 @@ class TextbookBridge:
         os.makedirs(self.data_dir, exist_ok=True)
         self.textbooks = {}
         self.active_pipelines = {}
+        self._pipeline_lock = threading.RLock()
         self._memory_manager = TextbookMemoryManager(self.data_dir, workspace_root=workspace_root)
         self._sse_broadcast_queues = []
         self._sse_lock = threading.Lock()
@@ -327,6 +329,51 @@ class TextbookBridge:
 
     def _book_dir(self, book_id):
         return os.path.join(self.data_dir, book_id)
+
+    def _pipeline_status_path(self, book_id):
+        return os.path.join(self._book_dir(book_id), "state", "pipeline_status.json")
+
+    def _public_pipeline_status(self, info):
+        if not info:
+            return {}
+        result = {
+            "book_id": info.get("book_id", ""),
+            "status": info.get("status", "none"),
+            "started_at": info.get("started_at", ""),
+            "current_phase": info.get("current_phase", ""),
+            "phases_completed": info.get("phases_completed", []),
+            "progress": info.get("progress", 0.0),
+            "phase_details": info.get("phase_details", {}),
+            "phase_steps": info.get("phase_steps", {}),
+            "chapter_actions": info.get("chapter_actions", {}),
+            "resume_from": info.get("resume_from", ""),
+        }
+        if info.get("error"):
+            result["error"] = info["error"]
+        return result
+
+    def _persist_pipeline_status(self, book_id, info):
+        try:
+            path = self._pipeline_status_path(book_id)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._public_pipeline_status(info), f, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            logger.warning(f"[TextbookBridge] Failed to persist pipeline status for {book_id}: {exc}")
+
+    def _load_pipeline_status(self, book_id):
+        path = self._pipeline_status_path(book_id)
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if data.get("status") == "running":
+                data["status"] = "interrupted"
+            return data
+        except Exception as exc:
+            logger.warning(f"[TextbookBridge] Failed to load pipeline status for {book_id}: {exc}")
+            return None
 
     def get_book_dir(self, book_id):
         return self._book_dir(book_id)
@@ -407,21 +454,21 @@ class TextbookBridge:
             data = config.to_dict()
             try:
                 mgr = self._memory_manager.get_truth_manager(config.id)
-                completed_numbers = self._list_written_chapter_numbers(mgr, min_chars=50)
-                total = int(config.total_chapters or 0)
-                completed = len(completed_numbers)
-                progress = round((completed / total) * 100, 1) if total > 0 else 0
-                data["completed_chapters"] = completed
-                data["completed_chapter_numbers"] = completed_numbers
-                data["progress"] = progress
-                if total > 0 and completed >= total and data.get("status") not in ("completed", "published"):
-                    data["status"] = "reviewing"
+                snapshot = TextbookStateResolver(mgr).resolve(config)
+                data.update(snapshot.to_dict())
                 data["latest_activity"] = self._latest_activity_for_book(config.id, config)
             except Exception:
                 data.setdefault("completed_chapters", 0)
                 data.setdefault("progress", 0)
             cards.append(data)
         return cards
+
+    def resolve_textbook_state(self, book_id):
+        config = self.get_textbook(book_id)
+        if config is None:
+            return None
+        mgr = self._memory_manager.get_truth_manager(book_id)
+        return TextbookStateResolver(mgr).resolve(config).to_dict()
 
     def _list_written_chapter_numbers(self, mgr, min_chars: int = 50) -> list:
         chapter_numbers = []
@@ -511,6 +558,15 @@ class TextbookBridge:
         mgr = self._memory_manager.get_truth_manager(book_id)
         return mgr.read_chapter(chapter_num)
 
+    def get_chapter_with_hash(self, book_id, chapter_num):
+        mgr = self._memory_manager.get_truth_manager(book_id)
+        content = mgr.read_chapter(chapter_num)
+        return {
+            "chapter_num": int(chapter_num),
+            "content": content,
+            "content_hash": mgr.content_hash(content),
+        }
+
     def update_chapter(self, book_id, chapter_num, content, expected_hash=None):
         mgr = self._memory_manager.get_truth_manager(book_id)
         existing = mgr.read_chapter(chapter_num)
@@ -567,12 +623,14 @@ class TextbookBridge:
             return {"error": f"Textbook {book_id} not found"}
         logger.info(f"[TextbookBridge] Config loaded: title={config.title}, chapters={config.total_chapters}")
 
-        if book_id in self.active_pipelines:
-            info = self.active_pipelines[book_id]
+        with self._pipeline_lock:
+            info = self.active_pipelines.get(book_id)
+        if info:
             if info.get("status") in ("running", "paused") and info.get("thread") and info["thread"].is_alive():
                 return {"error": f"Pipeline already running for {book_id}"}
             else:
-                del self.active_pipelines[book_id]
+                with self._pipeline_lock:
+                    self.active_pipelines.pop(book_id, None)
 
         resume_from = self._determine_resume_point(book_id, config)
         logger.info(f"[TextbookBridge] Resume point for {book_id}: {resume_from}")
@@ -612,9 +670,10 @@ class TextbookBridge:
             if not event_recorder.run_id and normalized.get("run_id"):
                 event_recorder.run_id = normalized["run_id"]
             normalized = event_recorder.record(event)
-            pipeline_info.setdefault("events", []).append(normalized)
-            if len(pipeline_info["events"]) > 100:
-                del pipeline_info["events"][:-100]
+            with self._pipeline_lock:
+                pipeline_info.setdefault("events", []).append(normalized)
+                if len(pipeline_info["events"]) > 100:
+                    del pipeline_info["events"][:-100]
             if sse_queue is not None:
                 sse_queue.put(event)
                 sse_queue.put({"type": "run_event", "data": normalized})
@@ -627,14 +686,18 @@ class TextbookBridge:
                         pass
             event_type = event.get("type", "")
             if event_type == "pipeline_complete":
-                pipeline_info["status"] = "completed"
-                pipeline_info["progress"] = 1.0
-                threading.Timer(5.0, lambda: self.active_pipelines.pop(book_id, None)).start()
+                with self._pipeline_lock:
+                    pipeline_info["status"] = "completed"
+                    pipeline_info["progress"] = 1.0
+                    self._persist_pipeline_status(book_id, pipeline_info)
+                threading.Timer(5.0, lambda: self._drop_active_pipeline(book_id)).start()
             elif event_type == "pipeline_error":
-                pipeline_info["status"] = "error"
                 err_data = event.get("data", {})
-                pipeline_info["error"] = err_data.get("error", "Unknown error")
-                threading.Timer(5.0, lambda: self.active_pipelines.pop(book_id, None)).start()
+                with self._pipeline_lock:
+                    pipeline_info["status"] = "error"
+                    pipeline_info["error"] = err_data.get("error", "Unknown error")
+                    self._persist_pipeline_status(book_id, pipeline_info)
+                threading.Timer(5.0, lambda: self._drop_active_pipeline(book_id)).start()
             elif event_type == "phase_start":
                 phase = event.get("data", {}).get("phase", "")
                 pipeline_info["current_phase"] = phase
@@ -705,6 +768,7 @@ class TextbookBridge:
                             steps.append({"desc": step_desc, "time": time.strftime("%H:%M:%S"), "agent": agent_name})
                             if len(steps) > 20:
                                 pipeline_info["phase_steps"][cur_phase]["steps"] = steps[-20:]
+            self._persist_pipeline_status(book_id, pipeline_info)
             self._flush_stdio()
 
         llm_model = _LightweightLLM(role="writer")
@@ -735,8 +799,10 @@ class TextbookBridge:
                 loop.close()
                 logger.info(f"[TextbookBridge] Pipeline completed for {book_id}, result keys: {list(result.keys()) if isinstance(result, dict) else type(result)}")
             except Exception as e:
-                pipeline_info["status"] = "error"
-                pipeline_info["error"] = str(e)
+                with self._pipeline_lock:
+                    pipeline_info["status"] = "error"
+                    pipeline_info["error"] = str(e)
+                    self._persist_pipeline_status(book_id, pipeline_info)
                 logger.error(f"[TextbookBridge] Pipeline error for {book_id}: {e}", exc_info=True)
                 if sse_queue is not None:
                     sse_queue.put({"type": "pipeline_error", "data": {"error": str(e)}})
@@ -747,39 +813,25 @@ class TextbookBridge:
 
         thread = threading.Thread(target=run, daemon=True)
         pipeline_info["thread"] = thread
-        self.active_pipelines[book_id] = pipeline_info
+        with self._pipeline_lock:
+            self.active_pipelines[book_id] = pipeline_info
+            self._persist_pipeline_status(book_id, pipeline_info)
         thread.start()
-        return {
-            "book_id": pipeline_info["book_id"],
-            "status": pipeline_info["status"],
-            "started_at": pipeline_info["started_at"],
-            "current_phase": pipeline_info["current_phase"],
-            "phases_completed": pipeline_info["phases_completed"],
-            "progress": pipeline_info["progress"],
-            "phase_details": pipeline_info["phase_details"],
-            "chapter_actions": pipeline_info.get("chapter_actions", {}),
-            "error": pipeline_info["error"],
-            "resume_from": resume_from,
-        }
+        return self._public_pipeline_status(pipeline_info)
 
     def get_pipeline_status(self, book_id):
-        info = self.active_pipelines.get(book_id)
-        if info is None:
-            return {"book_id": book_id, "status": "none"}
-        result = {
-            "book_id": info["book_id"],
-            "status": info["status"],
-            "started_at": info.get("started_at", ""),
-            "current_phase": info.get("current_phase", ""),
-            "phases_completed": info.get("phases_completed", []),
-            "progress": info.get("progress", 0.0),
-            "phase_details": info.get("phase_details", {}),
-            "phase_steps": info.get("phase_steps", {}),
-            "chapter_actions": info.get("chapter_actions", {}),
-        }
-        if info.get("error"):
-            result["error"] = info["error"]
-        return result
+        with self._pipeline_lock:
+            info = self.active_pipelines.get(book_id)
+            if info is not None:
+                return self._public_pipeline_status(info)
+        persisted = self._load_pipeline_status(book_id)
+        if persisted:
+            return persisted
+        return {"book_id": book_id, "status": "none"}
+
+    def _drop_active_pipeline(self, book_id):
+        with self._pipeline_lock:
+            self.active_pipelines.pop(book_id, None)
 
     def register_sse_queue(self, q):
         with self._sse_lock:
@@ -792,28 +844,34 @@ class TextbookBridge:
                 self._sse_broadcast_queues.remove(q)
 
     def pause_pipeline(self, book_id):
-        info = self.active_pipelines.get(book_id)
+        with self._pipeline_lock:
+            info = self.active_pipelines.get(book_id)
         if info is None or info.get("runner") is None:
             return False
         info["runner"].pause()
         info["status"] = "paused"
+        self._persist_pipeline_status(book_id, info)
         return True
 
     def resume_pipeline(self, book_id):
-        info = self.active_pipelines.get(book_id)
+        with self._pipeline_lock:
+            info = self.active_pipelines.get(book_id)
         if info is None or info.get("runner") is None:
             return False
         info["runner"].resume()
         info["status"] = "running"
+        self._persist_pipeline_status(book_id, info)
         return True
 
     def cancel_pipeline(self, book_id):
-        info = self.active_pipelines.get(book_id)
+        with self._pipeline_lock:
+            info = self.active_pipelines.get(book_id)
         if info is None or info.get("runner") is None:
             return False
         info["runner"].cancel()
         info["status"] = "cancelled"
-        threading.Timer(3.0, lambda: self.active_pipelines.pop(book_id, None)).start()
+        self._persist_pipeline_status(book_id, info)
+        threading.Timer(3.0, lambda: self._drop_active_pipeline(book_id)).start()
         return True
 
     def export_word(self, book_id, template_name="academic", chapter_numbers=None):

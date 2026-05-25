@@ -189,6 +189,7 @@ class MemoryManager:
         )
         
         reranked = self._rerank_results(query, merged)
+        reranked = self._resolve_authoritative_results(query, reranked)
         compressed = [self._compress_search_result(r) for r in reranked if r.score >= min_score]
         return compressed[:max_results]
     
@@ -251,7 +252,7 @@ class MemoryManager:
                 text=chunk.text,
                 embedding=embedding,
                 hash=chunk_hash,
-                metadata=metadata or self._classify_memory(path, source)
+                metadata=self._with_temporal_metadata(path, source, metadata or self._classify_memory(path, source))
             ))
         
         # Save to storage
@@ -277,12 +278,15 @@ class MemoryManager:
         memory_dir = self.config.get_memory_dir()
         workspace_dir = self.config.get_workspace()
         self.storage.delete_windows_style_paths()
+        seen_paths = set()
         
         # Scan system MEMORY.md. Project-level MEMORY.md is indexed below as a
         # workspace profile, not as the agent's durable memory store.
         memory_file = memory_dir / "MEMORY.md"
         if memory_file.exists():
-            await self._sync_file(memory_file, "memory", "shared", None)
+            rel = await self._sync_file(memory_file, "memory", "shared", None)
+            if rel:
+                seen_paths.add(rel)
         
         # Scan memory directory (including daily summaries)
         if memory_dir.exists():
@@ -319,7 +323,9 @@ class MemoryManager:
                     user_id = None
                     scope = "shared"
                 
-                await self._sync_file(file_path, "memory", scope, user_id)
+                rel = await self._sync_file(file_path, "memory", scope, user_id)
+                if rel:
+                    seen_paths.add(rel)
 
         project_workspace_dir = self.config.get_project_workspace()
 
@@ -328,7 +334,9 @@ class MemoryManager:
         for root_name in ("AGENT.md", "USER.md", "RULE.md", "MEMORY.md"):
             root_file = Path(project_workspace_dir) / root_name
             if root_file.exists() and root_file.is_file():
-                await self._sync_file(root_file, "workspace_profile", "shared", None)
+                rel = await self._sync_file(root_file, "workspace_profile", "shared", None)
+                if rel:
+                    seen_paths.add(rel)
 
         # Scan knowledge directory (structured knowledge wiki)
         from config import conf
@@ -336,7 +344,9 @@ class MemoryManager:
             knowledge_dir = Path(project_workspace_dir) / "knowledge"
             if knowledge_dir.exists():
                 for file_path in knowledge_dir.rglob("*.md"):
-                    await self._sync_file(file_path, "knowledge", "shared", None)
+                    rel = await self._sync_file(file_path, "knowledge", "shared", None)
+                    if rel:
+                        seen_paths.add(rel)
 
         # Scan textbook truth files and generated chapters. This lets agents
         # recall textbook status/outline/summaries through memory_search
@@ -344,7 +354,11 @@ class MemoryManager:
         textbooks_dir = Path(project_workspace_dir) / "textbooks"
         if textbooks_dir.exists():
             for file_path in self._iter_textbook_memory_files(textbooks_dir):
-                await self._sync_file(file_path, "textbook", "shared", None)
+                rel = await self._sync_file(file_path, "textbook", "shared", None)
+                if rel:
+                    seen_paths.add(rel)
+
+        self._cleanup_stale_file_indexes(seen_paths)
         
         self._dirty = False
 
@@ -367,7 +381,7 @@ class MemoryManager:
         source: str,
         scope: str,
         user_id: Optional[str]
-    ):
+    ) -> Optional[str]:
         """Sync a single file"""
         # Compute file hash
         content = file_path.read_text(encoding='utf-8')
@@ -384,7 +398,7 @@ class MemoryManager:
         # Check if file changed
         stored_hash = self.storage.get_file_hash(rel_path)
         if stored_hash == file_hash:
-            return  # No changes
+            return rel_path  # No changes
         
         # Delete old chunks
         self.storage.delete_by_path(rel_path)
@@ -392,7 +406,8 @@ class MemoryManager:
         # Chunk and embed
         chunks = self.chunker.chunk_text(content)
         if not chunks:
-            return
+            self.storage.delete_by_path(rel_path)
+            return rel_path
         
         texts = [chunk.text for chunk in chunks]
         if self.embedding_provider:
@@ -417,7 +432,12 @@ class MemoryManager:
                 text=chunk.text,
                 embedding=embedding,
                 hash=chunk_hash,
-                metadata=self._classify_memory(rel_path, source)
+                metadata=self._with_temporal_metadata(
+                    rel_path,
+                    source,
+                    self._classify_memory(rel_path, source),
+                    observed_at=datetime.fromtimestamp(file_path.stat().st_mtime).isoformat(),
+                )
             ))
         
         # Save
@@ -432,6 +452,35 @@ class MemoryManager:
             mtime=int(stat.st_mtime),
             size=stat.st_size
         )
+        return rel_path
+
+    def _cleanup_stale_file_indexes(self, seen_paths: set):
+        """Remove stale file-backed memory rows whose source file is no longer present."""
+        stale = []
+        for record in self.storage.list_file_records():
+            path = (record.get("path") or "").replace("\\", "/")
+            source = record.get("source") or ""
+            if path in seen_paths:
+                continue
+            if self._is_managed_file_index(path, source):
+                stale.append(path)
+        if stale:
+            self.storage.delete_paths(stale)
+
+    @staticmethod
+    def _is_managed_file_index(path: str, source: str) -> bool:
+        if source in {"textbook", "knowledge", "workspace_profile"}:
+            return True
+        if source != "memory":
+            return False
+        lower = (path or "").lower()
+        if lower == "memory/memory.md" or lower == "memory.md":
+            return True
+        if lower.startswith(("memory/processes/", "memory/sessions/", "memory/errors/", "memory/short_term/")):
+            return True
+        if MemoryManager._is_dated_memory_path(lower):
+            return True
+        return False
     
     def flush_memory(
         self,
@@ -587,6 +636,7 @@ class MemoryManager:
         lower = normalized.lower()
         layer = "project"
         book_id = ""
+        path_kind = MemoryManager._path_kind(normalized)
         if source == "workspace_profile" or lower in {"agent.md", "user.md", "rule.md", "memory.md"}:
             layer = "project"
         elif "user_profile" in lower or "/users/" in lower:
@@ -604,11 +654,96 @@ class MemoryManager:
             layer = "knowledge"
         elif source == "memory":
             layer = "memory"
+        authority, temporal_scope = MemoryManager._infer_temporal_defaults(
+            normalized,
+            source,
+            layer,
+            path_kind,
+        )
         return {
             "memory_layer": layer,
             "book_id": book_id,
-            "path_kind": MemoryManager._path_kind(normalized),
+            "path_kind": path_kind,
+            "chapter_num": MemoryManager._chapter_num(normalized),
+            "entity_key": MemoryManager._memory_entity_key(normalized, layer, book_id, path_kind),
+            "temporal_scope": temporal_scope,
+            "authority": authority,
+            "observed_at": "",
+            "valid_from": "",
+            "valid_until": "",
+            "supersedes": [],
+            "superseded_by": "",
         }
+
+    @staticmethod
+    def _infer_temporal_defaults(path: str, source: str, layer: str, path_kind: str) -> tuple[str, str]:
+        lower = (path or "").lower()
+        if layer == "textbook":
+            if "/snapshots/" in lower or "/versions/" in lower:
+                return "truth_file", "historical"
+            return "truth_file", "current"
+        if layer == "user" or path_kind == "user_profile":
+            return "user_profile", "evergreen"
+        if source == "workspace_profile" or path_kind == "rule" or lower in {"agent.md", "user.md", "rule.md", "memory.md"}:
+            authority = "workspace_rule" if path_kind == "rule" else "workspace_profile"
+            return authority, "evergreen"
+        if "/short_term/" in lower:
+            return "short_term", "active"
+        if "/processes/" in lower:
+            return "process_log", "historical"
+        if "/sessions/" in lower:
+            return "conversation", "historical"
+        if "/errors/" in lower or layer == "error":
+            return "error_log", "historical"
+        if source == "knowledge" or layer == "knowledge":
+            return "knowledge", "evergreen"
+        if MemoryManager._is_dated_memory_path(lower):
+            return "daily_summary", "historical"
+        if source == "memory":
+            return "long_term_memory", "evergreen"
+        return source or "memory", "historical"
+
+    @staticmethod
+    def _with_temporal_metadata(
+        path: str,
+        source: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        observed_at: str = "",
+    ) -> Dict[str, Any]:
+        merged = dict(metadata or MemoryManager._classify_memory(path, source))
+        authority, temporal_scope = MemoryManager._infer_temporal_defaults(
+            (path or "").replace("\\", "/"),
+            source,
+            str(merged.get("memory_layer") or ""),
+            str(merged.get("path_kind") or ""),
+        )
+        merged.setdefault("temporal_scope", temporal_scope)
+        merged.setdefault("authority", authority)
+        merged["observed_at"] = merged.get("observed_at") or observed_at or datetime.now().isoformat()
+        merged["valid_from"] = merged.get("valid_from") or merged["observed_at"]
+        merged.setdefault("valid_until", "")
+        merged.setdefault("supersedes", [])
+        merged.setdefault("superseded_by", "")
+        if MemoryManager._is_expired(merged):
+            merged["temporal_scope"] = "expired"
+        return merged
+
+    @staticmethod
+    def _is_dated_memory_path(path: str) -> bool:
+        import re
+        return bool(re.search(r"(^|/)\d{4}-\d{2}-\d{2}\.md$", path or ""))
+
+    @staticmethod
+    def _is_expired(metadata: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+        valid_until = (metadata or {}).get("valid_until") or ""
+        if not valid_until:
+            return False
+        try:
+            until = datetime.fromisoformat(str(valid_until).replace("Z", "+00:00"))
+            current = now or datetime.now(until.tzinfo)
+            return until < current
+        except Exception:
+            return False
 
     @staticmethod
     def _path_kind(path: str) -> str:
@@ -627,6 +762,29 @@ class MemoryManager:
             return "rule"
         return Path(path).suffix.lower().lstrip(".") or "file"
 
+    @staticmethod
+    def _chapter_num(path: str) -> str:
+        import re
+        match = re.search(r"chapter_0*(\d+)(?:_meta)?\.(?:md|json)$", (path or "").lower())
+        return str(int(match.group(1))) if match else ""
+
+    @staticmethod
+    def _memory_entity_key(path: str, layer: str, book_id: str, path_kind: str) -> str:
+        normalized = (path or "").replace("\\", "/")
+        lower = normalized.lower()
+        if layer == "textbook" and book_id:
+            chapter = MemoryManager._chapter_num(lower)
+            if chapter:
+                return f"textbook:{book_id}:chapter:{chapter}"
+            if "/state/" in lower:
+                return f"textbook:{book_id}:state:{Path(lower).name}"
+            if "/outline/" in lower:
+                return f"textbook:{book_id}:outline:{Path(lower).name}"
+            if lower.endswith("harness.md"):
+                return f"textbook:{book_id}:harness"
+            return f"textbook:{book_id}:{path_kind}:{Path(lower).name}"
+        return f"{layer}:{path_kind}:{lower}"
+
     def _rerank_results(self, query: str, results: List[SearchResult]) -> List[SearchResult]:
         query_lower = (query or "").lower()
         query_text = query or ""
@@ -644,12 +802,85 @@ class MemoryManager:
                 boost += 0.35
             if any(word in query_text for word in ("错误", "失败", "修复", "bug", "报错")) and layer == "error":
                 boost += 0.35
+            temporal_scope = metadata.get("temporal_scope", "")
+            if self._is_expired(metadata):
+                temporal_scope = "expired"
+                metadata["temporal_scope"] = "expired"
+            boost += {
+                "current": 0.35,
+                "active": 0.25,
+                "evergreen": 0.15,
+                "historical": 0.0,
+                "expired": -0.50,
+            }.get(temporal_scope, 0.0)
             book_id = metadata.get("book_id") or ""
             if book_id and book_id.lower() in query_lower:
                 boost += 0.45
-            result.score = min(1.0, result.score * boost)
+            result.score = max(0.0, min(1.0, result.score * boost))
         results.sort(key=lambda item: item.score, reverse=True)
         return results
+
+    def _resolve_authoritative_results(self, query: str, results: List[SearchResult]) -> List[SearchResult]:
+        """Annotate conflicts and prefer current authority for the same memory entity."""
+        by_entity: Dict[str, List[SearchResult]] = {}
+        for result in results:
+            metadata = result.metadata or {}
+            if not metadata.get("entity_key"):
+                metadata["entity_key"] = self._memory_entity_key(
+                    result.path,
+                    metadata.get("memory_layer", result.source),
+                    metadata.get("book_id", ""),
+                    metadata.get("path_kind", ""),
+                )
+            result.metadata = metadata
+            entity_key = metadata.get("entity_key") or ""
+            if entity_key:
+                by_entity.setdefault(entity_key, []).append(result)
+
+        current_state_query = self._is_current_state_query(query)
+        historical_query = self._is_historical_query(query)
+        for entity_key, group in by_entity.items():
+            current = [
+                result for result in group
+                if (result.metadata or {}).get("temporal_scope") == "current"
+                and (result.metadata or {}).get("authority") == "truth_file"
+            ]
+            if not current:
+                continue
+            authority = sorted(current, key=lambda item: item.score, reverse=True)[0]
+            authority_path = authority.path
+            for result in group:
+                if result is authority:
+                    continue
+                metadata = result.metadata or {}
+                scope = metadata.get("temporal_scope", "")
+                if scope in {"historical", "expired"}:
+                    metadata["superseded_by"] = authority_path
+                    metadata.setdefault("conflict_note", "Superseded by current truth-file memory for the same entity.")
+                    if current_state_query and not historical_query:
+                        result.score = max(0.0, result.score * 0.2)
+                result.metadata = metadata
+
+        results.sort(key=lambda item: item.score, reverse=True)
+        return results
+
+    @staticmethod
+    def _is_current_state_query(query: str) -> bool:
+        text = (query or "").lower()
+        markers = (
+            "current", "status", "progress", "latest", "now",
+            "当前", "现在", "最新", "状态", "进度", "完成", "是否", "目前",
+        )
+        return any(marker in text for marker in markers)
+
+    @staticmethod
+    def _is_historical_query(query: str) -> bool:
+        text = (query or "").lower()
+        markers = (
+            "history", "historical", "previous", "old", "past",
+            "历史", "之前", "曾经", "过去", "旧版", "早期", "记录",
+        )
+        return any(marker in text for marker in markers)
 
     @staticmethod
     def _compress_search_result(result: SearchResult, max_chars: int = 320) -> SearchResult:

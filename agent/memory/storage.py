@@ -467,6 +467,25 @@ class MemoryStorage:
         self.conn.execute("""
             DELETE FROM chunks WHERE path = ?
         """, (path,))
+        self.conn.execute("""
+            DELETE FROM files WHERE path = ?
+        """, (path,))
+        self._rebuild_fts_if_available()
+        self.conn.commit()
+
+    def list_file_records(self) -> List[Dict[str, Any]]:
+        """Return indexed file metadata records."""
+        rows = self.conn.execute("""
+            SELECT path, source, hash, mtime, size, updated_at FROM files
+        """).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_paths(self, paths: List[str]):
+        """Delete chunks and metadata for multiple paths."""
+        if not paths:
+            return
+        self.conn.executemany("DELETE FROM chunks WHERE path = ?", [(p,) for p in paths])
+        self.conn.executemany("DELETE FROM files WHERE path = ?", [(p,) for p in paths])
         self._rebuild_fts_if_available()
         self.conn.commit()
 

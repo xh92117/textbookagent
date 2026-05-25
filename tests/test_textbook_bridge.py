@@ -253,6 +253,28 @@ def test_list_textbook_cards_counts_written_chapters_even_with_stale_metadata():
         assert card["completed_chapter_numbers"] == [1, 2]
         assert card["progress"] == 100
         assert card["status"] == "reviewing"
+        assert card["state_source"] == "truth_files"
+
+
+def test_resolve_textbook_state_prefers_chapter_files_over_stale_progress():
+    with tempfile.TemporaryDirectory() as tmp:
+        bridge = _make_bridge(tmp)
+        created = bridge.create_textbook(_make_config(total_chapters=3, status="writing"))
+        mgr = bridge._memory_manager.get_truth_manager(created.id)
+        mgr.write_chapter(1, "# Chapter 1\n\n" + "body " * 30)
+        mgr.write_chapter(2, "# Chapter 2\n\n" + "body " * 30)
+        mgr.write("progress", json.dumps({
+            "completed_chapters": 0,
+            "total_chapters": 3,
+            "percentage": 0,
+        }))
+
+        state = bridge.resolve_textbook_state(created.id)
+
+        assert state["completed_chapters"] == 2
+        assert state["completed_chapter_numbers"] == [1, 2]
+        assert state["progress"] == 66.7
+        assert state["state_warnings"]
 
 
 def test_recent_activity_returns_multiple_items_for_one_textbook():
@@ -336,6 +358,39 @@ def test_pipeline_start():
             assert info["book_id"] == created.id
             assert info["status"] == "running"
             assert "started_at" in info
+
+
+def test_pipeline_status_is_persisted_and_reloaded():
+    with tempfile.TemporaryDirectory() as tmp:
+        bridge = _make_bridge(tmp)
+        created = bridge.create_textbook(_make_config())
+        status_path = os.path.join(tmp, created.id, "state", "pipeline_status.json")
+        os.makedirs(os.path.dirname(status_path), exist_ok=True)
+        with open(status_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "book_id": created.id,
+                "status": "running",
+                "started_at": "2026-01-01T00:00:00",
+                "progress": 0.5,
+            }, f)
+
+        reloaded = _make_bridge(tmp).get_pipeline_status(created.id)
+
+        assert reloaded["status"] == "interrupted"
+        assert reloaded["progress"] == 0.5
+
+
+def test_get_chapter_with_hash_avoids_web_private_state_access():
+    with tempfile.TemporaryDirectory() as tmp:
+        bridge = _make_bridge(tmp)
+        created = bridge.create_textbook(_make_config())
+        bridge.update_chapter(created.id, 1, "# Chapter\n\nbody text")
+
+        payload = bridge.get_chapter_with_hash(created.id, 1)
+
+        assert payload["chapter_num"] == 1
+        assert payload["content"] == "# Chapter\n\nbody text"
+        assert payload["content_hash"]
 
 
 def test_pipeline_status():

@@ -19,6 +19,19 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 
+def _temporal(scope: str, authority: str, observed_at: str = "") -> Dict[str, Any]:
+    observed = observed_at or datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    return {
+        "scope": scope,
+        "authority": authority,
+        "observed_at": observed,
+        "valid_from": observed,
+        "valid_until": "",
+        "supersedes": [],
+        "superseded_by": "",
+    }
+
+
 class RealtimeMemoryRecorder:
     def __init__(
         self,
@@ -48,6 +61,7 @@ class RealtimeMemoryRecorder:
         now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         payload = {
             "version": "process-memory-v1",
+            "temporal": _temporal("historical", "process_log", now),
             "session_id": session_id,
             "process_id": process_id,
             "channel_type": channel_type,
@@ -246,6 +260,7 @@ class RealtimeMemoryRecorder:
                 payload = {
                     "session_id": session_id,
                     "channel_type": channel_type,
+                    "temporal": _temporal("historical", "conversation", event.get("time", "")),
                     **event,
                 }
                 f.write(json.dumps(payload, ensure_ascii=False) + "\n")
@@ -306,6 +321,7 @@ class RealtimeMemoryRecorder:
         profile_path = self.memory_dir / "user_profile.json"
         profile = self._load_json(profile_path, default={
             "version": "user-profile-v1",
+            "temporal": _temporal("evergreen", "user_profile"),
             "preferences": [],
             "goals": [],
             "projects": [],
@@ -313,6 +329,7 @@ class RealtimeMemoryRecorder:
             "recent_focus": [],
             "updated_at": "",
         })
+        profile.setdefault("temporal", _temporal("evergreen", "user_profile", profile.get("updated_at", "")))
         for event in events:
             if event.get("role") != "user":
                 continue
@@ -378,6 +395,7 @@ class RealtimeMemoryRecorder:
         profile_path = self.memory_dir / "user_profile.json"
         profile = self._load_json(profile_path, default={
             "version": "user-profile-v1",
+            "temporal": _temporal("evergreen", "user_profile"),
             "preferences": [],
             "goals": [],
             "projects": [],
@@ -385,6 +403,7 @@ class RealtimeMemoryRecorder:
             "recent_focus": [],
             "updated_at": "",
         })
+        profile.setdefault("temporal", _temporal("evergreen", "user_profile", profile.get("updated_at", "")))
         for key in ("preferences", "goals", "projects", "facts"):
             values = patch.get(key) or []
             if isinstance(values, str):
