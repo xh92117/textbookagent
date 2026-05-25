@@ -17,6 +17,7 @@ from agent.skills.loader import SkillLoader
 from agent.skills.manager import SkillManager
 from agent.skills.service import SkillService
 from agent.skills.formatter import format_skills_for_prompt
+from agent.skills.router import SkillRoute, route_skills
 
 __all__ = [
     "Skill",
@@ -28,4 +29,6 @@ __all__ = [
     "SkillManager",
     "SkillService",
     "format_skills_for_prompt",
+    "SkillRoute",
+    "route_skills",
 ]

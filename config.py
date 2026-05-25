@@ -255,6 +255,9 @@ available_setting = {
     "agent_tool_routing_enabled": True,
     "agent_tool_same_args_repeat_limit": 2,
     "agent_tool_failure_repeat_limit": 2,
+    "agent_skill_routing_enabled": True,
+    "agent_skill_routing_max_skills": 2,
+    "agent_skill_routing_min_confidence": 1.0,
     "agent_max_steps": 20,  # Agent妯″紡涓嬪崟娆¤繍琛屾渶澶у喅绛栨鏁?
     "agent_stream_idle_timeout_seconds": 180,  # Close a stalled model stream after this many seconds without chunks; 0 disables
     "enable_thinking": False,  # Enable deep-thinking mode for thinking-capable models

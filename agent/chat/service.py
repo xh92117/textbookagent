@@ -194,8 +194,12 @@ class ChatService:
         from config import conf
         max_context_turns = conf().get("agent_max_context_turns", 20)
 
-        # Get full system prompt with skills
-        full_system_prompt = agent.get_full_system_prompt()
+        # Get full system prompt with routed skills
+        routed_skill_filter, skill_route_prompt = agent.route_skills_for_message(query)
+        full_system_prompt = agent.get_full_system_prompt(
+            skill_filter=routed_skill_filter,
+            skill_route_prompt=skill_route_prompt,
+        )
 
         # Create a copy of messages for this execution
         with agent.messages_lock:

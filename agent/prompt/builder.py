@@ -116,6 +116,8 @@ def build_agent_system_prompt(
         完整的系统提示词
     """
     sections = []
+    skill_filter = kwargs.get("skill_filter")
+    skill_route_prompt = kwargs.get("skill_route_prompt") or ""
     
     # 1. 工具系统（最重要，放在最前面）
     if tools:
@@ -124,7 +126,9 @@ def build_agent_system_prompt(
     
     # 2. 技能系统（紧跟工具，因为需要用 read 工具）
     if skill_manager:
-        sections.extend(_build_skills_section(skill_manager, tools, language))
+        if skill_route_prompt:
+            sections.extend([skill_route_prompt, ""])
+        sections.extend(_build_skills_section(skill_manager, tools, language, skill_filter=skill_filter))
     
     # 3. 记忆系统（独立的记忆能力）
     if memory_manager:
@@ -243,10 +247,17 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
     return lines
 
 
-def _build_skills_section(skill_manager: Any, tools: Optional[List[Any]], language: str) -> List[str]:
+def _build_skills_section(skill_manager: Any, tools: Optional[List[Any]], language: str, skill_filter=None) -> List[str]:
     """构建技能系统section"""
     if not skill_manager:
         return []
+    if skill_filter == []:
+        return [
+            "## 技能系统（mandatory）",
+            "",
+            "Skill routing did not select a specific skill for this turn. Do not read any SKILL.md unless the user explicitly asks for a skill workflow.",
+            "",
+        ]
     
     # 获取read工具名称
     read_tool_name = "read"
@@ -275,7 +286,7 @@ def _build_skills_section(skill_manager: Any, tools: Optional[List[Any]], langua
     
     # 添加技能列表（通过skill_manager获取）
     try:
-        skills_prompt = skill_manager.build_skills_prompt()
+        skills_prompt = skill_manager.build_skills_prompt(skill_filter=skill_filter)
         logger.debug(f"[PromptBuilder] Skills prompt length: {len(skills_prompt) if skills_prompt else 0}")
         if skills_prompt:
             lines.append(skills_prompt.strip())

@@ -100,7 +100,34 @@ class Agent:
             logger.warning(f"Failed to build skills prompt: {e}")
             return ""
     
-    def get_full_system_prompt(self, skill_filter=None) -> str:
+    def route_skills_for_message(self, user_message: str, skill_filter=None) -> tuple:
+        """Return the skill filter and compact route prompt for this turn."""
+        if not self.skill_manager:
+            return skill_filter, ""
+        if skill_filter is not None:
+            return skill_filter, ""
+        try:
+            from config import conf
+            from agent.skills.router import route_skills
+
+            self.skill_manager.refresh_skills()
+            enabled = conf().get("agent_skill_routing_enabled", True)
+            max_skills = int(conf().get("agent_skill_routing_max_skills", 2) or 2)
+            min_confidence = float(conf().get("agent_skill_routing_min_confidence", 1.0) or 1.0)
+            entries = self.skill_manager.filter_skills(include_disabled=False)
+            route = route_skills(
+                user_message,
+                entries,
+                max_skills=max_skills,
+                min_confidence=min_confidence,
+                enabled=enabled,
+            )
+            return route.selected_skills, route.prompt
+        except Exception as e:
+            logger.debug(f"[Agent] Skill routing skipped: {e}")
+            return skill_filter, ""
+
+    def get_full_system_prompt(self, skill_filter=None, skill_route_prompt: str = "") -> str:
         """
         Build the complete system prompt from scratch every time.
 
@@ -134,6 +161,8 @@ class Agent:
                 skill_manager=self.skill_manager,
                 memory_manager=self.memory_manager,
                 runtime_info=self.runtime_info,
+                skill_filter=skill_filter,
+                skill_route_prompt=skill_route_prompt,
             )
         except Exception as e:
             logger.warning(f"Failed to rebuild system prompt, using cached version: {e}")
@@ -491,8 +520,12 @@ class Agent:
         if not self.model:
             raise ValueError("No model available for agent")
 
-        # Get full system prompt with skills
-        full_system_prompt = self.get_full_system_prompt(skill_filter=skill_filter)
+        # Get full system prompt with routed skills
+        routed_skill_filter, skill_route_prompt = self.route_skills_for_message(user_message, skill_filter=skill_filter)
+        full_system_prompt = self.get_full_system_prompt(
+            skill_filter=routed_skill_filter,
+            skill_route_prompt=skill_route_prompt,
+        )
 
         # Create a copy of messages for this execution to avoid concurrent modification
         # Record the original length to track which messages are new
