@@ -329,3 +329,75 @@ def test_textbook_chapter_validate_structure_ignores_fenced_code_comments(tmp_pa
     assert report.result["fatal_issues"] == []
     heading_text = "\n".join(h["text"] for h in report.result["headings"])
     assert "这只是代码注释" not in heading_text
+
+
+def test_textbook_chapter_replace_section_ignores_headings_inside_code_fences(tmp_path, monkeypatch):
+    bridge = _bridge(tmp_path)
+    book = _book(bridge)
+    monkeypatch.setattr("bridge.textbook_bridge.get_bridge", lambda: bridge)
+
+    tool = TextbookChapterTool()
+    content = (
+        "# 第4章 智能体范式\n\n"
+        "## 4.1 ReAct 模式\n\n"
+        + ("应用说明。\n" * 180)
+        + "\n```python\n# ==== System Prompt 模板 ====\nSYSTEM_PROMPT = 'demo'\n```\n\n"
+        "## 4.2 Plan-and-Solve 模式\n\n"
+        + ("后续内容必须保留。\n" * 180)
+        + "\n## 本章小结\n\n"
+        + ("总结内容。\n" * 80)
+    )
+    assert tool.execute({
+        "action": "write_chapter",
+        "book_id": book.id,
+        "chapter_num": 4,
+        "content": content,
+    }).status == "success"
+
+    blocked = tool.execute({
+        "action": "replace_section",
+        "book_id": book.id,
+        "chapter_num": 4,
+        "heading": "# ==== System Prompt 模板 ====",
+        "content": "<!-- System Prompt 模板代码 -->",
+    })
+
+    assert blocked.status == "error"
+    assert "level-1 headings" in str(blocked.result) or "section not found" in str(blocked.result)
+    saved = bridge.get_chapter(book.id, 4)
+    assert saved == content
+    assert "## 4.2 Plan-and-Solve 模式" in saved
+    assert "后续内容必须保留" in saved
+
+
+def test_textbook_chapter_replace_section_rejects_large_accidental_shrink(tmp_path, monkeypatch):
+    bridge = _bridge(tmp_path)
+    book = _book(bridge)
+    monkeypatch.setattr("bridge.textbook_bridge.get_bridge", lambda: bridge)
+
+    tool = TextbookChapterTool()
+    content = (
+        "# 第4章 智能体范式\n\n"
+        "## 4.1 ReAct 模式\n\n"
+        + ("较长内容。\n" * 500)
+        + "\n## 4.2 Plan-and-Solve 模式\n\n"
+        + ("后续内容。\n" * 500)
+    )
+    assert tool.execute({
+        "action": "write_chapter",
+        "book_id": book.id,
+        "chapter_num": 4,
+        "content": content,
+    }).status == "success"
+
+    blocked = tool.execute({
+        "action": "replace_section",
+        "book_id": book.id,
+        "chapter_num": 4,
+        "heading": "## 4.1 ReAct 模式",
+        "content": "## 4.1 ReAct 模式\n\n短替换。",
+    })
+
+    assert blocked.status == "error"
+    assert "large portion" in str(blocked.result)
+    assert bridge.get_chapter(book.id, 4) == content

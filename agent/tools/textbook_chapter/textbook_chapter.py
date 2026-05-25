@@ -8,6 +8,22 @@ from typing import Any, Dict, List, Tuple
 from agent.tools.base_tool import BaseTool, ToolResult
 
 
+class _SimpleMatch:
+    def __init__(self, text: str, start: int, end: int):
+        self._text = text
+        self._start = start
+        self._end = end
+
+    def group(self, index: int = 0) -> str:
+        return self._text if index == 0 else ""
+
+    def start(self) -> int:
+        return self._start
+
+    def end(self) -> int:
+        return self._end
+
+
 class TextbookChapterTool(BaseTool):
     name: str = "textbook_chapter"
     description: str = (
@@ -226,17 +242,31 @@ class TextbookChapterTool(BaseTool):
 
     def _replace_section(self, mgr, book_id: str, chapter_num: int, heading: str, content: str, completed: bool) -> ToolResult:
         existing = mgr.read_chapter(chapter_num)
+        if self._heading_level(heading.strip()) <= 1:
+            return ToolResult.fail(
+                "Refusing replace_section for level-1 headings or non-section markers. "
+                "Use rewrite_chapter for full chapter rewrites, or target a level-2+ Markdown section outside code blocks."
+            )
         start, end = self._find_section_bounds(existing, heading)
         if start < 0:
             return ToolResult.fail(f"section not found: {heading}. Use append_section if this is a new section.")
         section = self._normalize_section(heading, content).rstrip()
         updated = existing[:start].rstrip() + "\n\n" + section + "\n\n" + existing[end:].lstrip()
+        if self._looks_like_accidental_truncation(existing, updated, heading):
+            return ToolResult.fail(
+                "Refusing replace_section because the result would remove a large portion of the chapter. "
+                "This often means the requested heading is inside a code block or is too broad. "
+                "Use a precise level-2/level-3 section heading, append_section, or rewrite_chapter with a complete body."
+            )
+        backup_path = self._backup_existing_chapter(mgr, chapter_num, existing, updated)
         mgr.write_chapter(chapter_num, updated)
         self._write_metadata(mgr, chapter_num, updated, completed)
         self._update_status(mgr, book_id, chapter_num, "persist_chapter" if completed else "write_chapter")
         report = self._update_chapter_index(mgr, book_id, chapter_num, "replace_section")
         payload = self._result_payload(mgr, book_id, chapter_num, "replaced", updated, completed, heading, source_chars=len(content))
         payload["structure"] = report
+        if backup_path:
+            payload["backup_path"] = backup_path
         return ToolResult.success(payload)
 
     def _validate(self, mgr, book_id: str, chapter_num: int) -> Dict[str, Any]:
@@ -328,6 +358,16 @@ class TextbookChapterTool(BaseTool):
         with open(backup_path, "w", encoding="utf-8") as f:
             f.write(existing)
         return backup_path
+
+    @staticmethod
+    def _looks_like_accidental_truncation(existing: str, updated: str, heading: str) -> bool:
+        existing_len = len(existing or "")
+        updated_len = len(updated or "")
+        if existing_len < 2000:
+            return False
+        removed_ratio = 1 - (updated_len / max(existing_len, 1))
+        heading_level = TextbookChapterTool._heading_level((heading or "").strip())
+        return heading_level <= 2 and removed_ratio > 0.35
 
     @classmethod
     def _overwrite_safety_error(cls, existing: str, content: str, completed: bool, allow_overwrite: bool = False) -> str:
@@ -568,7 +608,7 @@ class TextbookChapterTool(BaseTool):
     @classmethod
     def _find_heading(cls, text: str, heading: str) -> Tuple[int, int]:
         normalized = heading.strip()
-        for match in re.finditer(r"(?m)^#{1,6}\s+.*$", text or ""):
+        for match in cls._iter_markdown_heading_matches(text or ""):
             if match.group(0).strip() == normalized:
                 return match.start(), match.end()
         return -1, -1
@@ -580,12 +620,29 @@ class TextbookChapterTool(BaseTool):
             return -1, -1
         level = cls._heading_level(heading.strip())
         end = len(text)
-        for match in re.finditer(r"(?m)^#{1,6}\s+.*$", text[heading_end:]):
+        for match in cls._iter_markdown_heading_matches(text[heading_end:]):
             found = match.group(0)
             if cls._heading_level(found) <= level:
                 end = heading_end + match.start()
                 break
         return start, end
+
+    @staticmethod
+    def _iter_markdown_heading_matches(text: str):
+        in_fence = False
+        pos = 0
+        for line in (text or "").splitlines(keepends=True):
+            stripped = line.strip()
+            if stripped.startswith("```") or stripped.startswith("~~~"):
+                in_fence = not in_fence
+                pos += len(line)
+                continue
+            if not in_fence:
+                line_body = line.rstrip("\r\n")
+                match = re.match(r"^#{1,6}\s+.*$", line_body)
+                if match:
+                    yield _SimpleMatch(line_body, pos + match.start(), pos + match.end())
+            pos += len(line)
 
     @classmethod
     def _append_to_existing_section(cls, existing: str, heading: str, section: str) -> str:
