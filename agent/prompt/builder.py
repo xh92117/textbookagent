@@ -20,6 +20,13 @@ class ContextFile:
     content: str
 
 
+@dataclass
+class PromptBuildResult:
+    """Prompt text plus section-level diagnostics."""
+    prompt: str
+    diagnostics: Dict[str, Any]
+
+
 class PromptBuilder:
     """提示词构建器"""
     
@@ -74,6 +81,30 @@ class PromptBuilder:
             **kwargs
         )
 
+    def build_with_diagnostics(
+        self,
+        base_persona: Optional[str] = None,
+        user_identity: Optional[Dict[str, str]] = None,
+        tools: Optional[List[Any]] = None,
+        context_files: Optional[List[ContextFile]] = None,
+        skill_manager: Any = None,
+        memory_manager: Any = None,
+        runtime_info: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ) -> PromptBuildResult:
+        return _build_agent_system_prompt_result(
+            workspace_dir=self.workspace_dir,
+            language=self.language,
+            base_persona=base_persona,
+            user_identity=user_identity,
+            tools=tools,
+            context_files=context_files,
+            skill_manager=skill_manager,
+            memory_manager=memory_manager,
+            runtime_info=runtime_info,
+            **kwargs
+        )
+
 
 def build_agent_system_prompt(
     workspace_dir: str,
@@ -115,6 +146,19 @@ def build_agent_system_prompt(
     Returns:
         完整的系统提示词
     """
+    return _build_agent_system_prompt_result(
+        workspace_dir=workspace_dir,
+        language=language,
+        base_persona=base_persona,
+        user_identity=user_identity,
+        tools=tools,
+        context_files=context_files,
+        skill_manager=skill_manager,
+        memory_manager=memory_manager,
+        runtime_info=runtime_info,
+        **kwargs,
+    ).prompt
+
     sections = []
     skill_filter = kwargs.get("skill_filter")
     skill_route_prompt = kwargs.get("skill_route_prompt") or ""
@@ -155,6 +199,115 @@ def build_agent_system_prompt(
         sections.extend(_build_runtime_section(runtime_info, language))
     
     return "\n".join(sections)
+
+
+def _build_agent_system_prompt_result(
+    workspace_dir: str,
+    language: str = "zh",
+    base_persona: Optional[str] = None,
+    user_identity: Optional[Dict[str, str]] = None,
+    tools: Optional[List[Any]] = None,
+    context_files: Optional[List[ContextFile]] = None,
+    skill_manager: Any = None,
+    memory_manager: Any = None,
+    runtime_info: Optional[Dict[str, Any]] = None,
+    **kwargs
+) -> PromptBuildResult:
+    section_texts: List[str] = []
+    section_records: List[Dict[str, Any]] = []
+    skill_filter = kwargs.get("skill_filter")
+    skill_route_prompt = kwargs.get("skill_route_prompt") or ""
+
+    def add_section(name: str, lines: List[str]):
+        text = "\n".join(lines or []).strip("\n")
+        if not text:
+            return
+        original_chars = len(text)
+        budget = _prompt_section_budget(name)
+        clipped = False
+        if budget and original_chars > budget:
+            text = _clip_prompt_section(text, budget, name)
+            clipped = True
+        section_texts.append(text)
+        section_records.append({
+            "name": name,
+            "chars": len(text),
+            "original_chars": original_chars,
+            "budget_chars": budget,
+            "clipped": clipped,
+        })
+
+    add_section("language_policy", _build_language_policy_section(language))
+
+    if tools:
+        add_section("tooling", _build_tooling_section(tools, language))
+        add_section("harness_tool_policy", _build_harness_tool_policy_section(language))
+
+    if skill_manager:
+        if skill_route_prompt:
+            add_section("skill_route", [skill_route_prompt])
+        add_section("skills", _build_skills_section(skill_manager, tools, language, skill_filter=skill_filter))
+
+    if memory_manager:
+        add_section("memory", _build_memory_section(memory_manager, tools, language))
+
+    if conf().get("knowledge", True):
+        add_section("knowledge", _build_knowledge_section(workspace_dir, language))
+
+    add_section("workspace", _build_workspace_section(workspace_dir, language))
+
+    if user_identity:
+        add_section("user_identity", _build_user_identity_section(user_identity, language))
+
+    if context_files:
+        add_section("context_files", _build_context_files_section(context_files, language))
+
+    if runtime_info:
+        add_section("runtime", _build_runtime_section(runtime_info, language))
+
+    prompt = "\n\n".join(section_texts)
+    return PromptBuildResult(
+        prompt=prompt,
+        diagnostics={
+            "total_chars": len(prompt),
+            "sections": section_records,
+            "clipped_sections": [s["name"] for s in section_records if s["clipped"]],
+        },
+    )
+
+
+def _prompt_section_budget(name: str) -> int:
+    defaults = {
+        "tooling": 1500,
+        "harness_tool_policy": 1400,
+        "skills": 2800,
+        "memory": 1200,
+        "knowledge": 1800,
+        "workspace": 1200,
+        "context_files": 4000,
+        "runtime": 1600,
+    }
+    try:
+        budgets = conf().get("agent_prompt_section_budgets", {}) or {}
+        if isinstance(budgets, dict):
+            if name in budgets:
+                return max(0, int(budgets.get(name) or 0))
+    except Exception:
+        pass
+    return defaults.get(name, 0)
+
+
+def _clip_prompt_section(text: str, max_chars: int, name: str) -> str:
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    notice = (
+        f"\n\n[Section clipped: {name}, original_chars={len(text)}, "
+        f"budget_chars={max_chars}. Use read/memory tools for full details.]\n\n"
+    )
+    budget = max(200, max_chars - len(notice))
+    head_chars = max(120, int(budget * 0.65))
+    tail_chars = max(60, budget - head_chars)
+    return (text[:head_chars].rstrip() + notice + text[-tail_chars:].lstrip())[:max_chars]
 
 
 def _build_language_policy_section(language: str) -> List[str]:

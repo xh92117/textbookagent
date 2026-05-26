@@ -134,6 +134,7 @@ class RealtimeMemoryRecorder:
         if profile_events:
             self._update_user_profile(profile_events, payload.get("session_id", ""))
             self._update_workspace_profile(profile_events, payload.get("session_id", ""))
+        self._record_promotion_candidate(payload)
 
     def distill_user_profile(
         self,
@@ -359,6 +360,13 @@ class RealtimeMemoryRecorder:
         try:
             from agent.memory.workspace_profile_updater import WorkspaceProfileUpdater
             WorkspaceProfileUpdater(self.project_workspace).update_from_events(events, session_id=session_id)
+        except Exception:
+            return
+
+    def _record_promotion_candidate(self, payload: Dict[str, Any]) -> None:
+        try:
+            from agent.memory.promotion import MemoryPromotionCandidatePool
+            MemoryPromotionCandidatePool(self.memory_dir).record_from_process(payload)
         except Exception:
             return
 

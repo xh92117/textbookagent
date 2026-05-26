@@ -189,6 +189,7 @@ class MemoryManager:
         )
         
         reranked = self._rerank_results(query, merged)
+        reranked = self._prioritize_context_tags(query, reranked)
         reranked = self._resolve_authoritative_results(query, reranked)
         compressed = [self._compress_search_result(r) for r in reranked if r.score >= min_score]
         return compressed[:max_results]
@@ -476,7 +477,7 @@ class MemoryManager:
         lower = (path or "").lower()
         if lower == "memory/memory.md" or lower == "memory.md":
             return True
-        if lower.startswith(("memory/processes/", "memory/sessions/", "memory/errors/", "memory/short_term/")):
+        if lower.startswith(("memory/processes/", "memory/sessions/", "memory/errors/", "memory/short_term/", "memory/candidates/")):
             return True
         if MemoryManager._is_dated_memory_path(lower):
             return True
@@ -532,6 +533,20 @@ class MemoryManager:
     def mark_dirty(self):
         """Mark memory as dirty (needs sync)"""
         self._dirty = True
+        try:
+            from agent.memory.graph import MemoryGraphService
+
+            system_root = str(self.config.get_workspace())
+            project_workspace = ""
+            if hasattr(self.config, "get_project_workspace"):
+                project_workspace = str(self.config.get_project_workspace())
+            service = MemoryGraphService(system_root, project_workspace=project_workspace)
+            try:
+                service.mark_dirty("memory manager marked dirty")
+            finally:
+                service.close()
+        except Exception:
+            pass
     
     def close(self):
         """Close memory manager and release resources"""
@@ -689,6 +704,8 @@ class MemoryManager:
             return authority, "evergreen"
         if "/short_term/" in lower:
             return "short_term", "active"
+        if "/candidates/" in lower:
+            return "promotion_candidate", "active"
         if "/processes/" in lower:
             return "process_log", "historical"
         if "/sessions/" in lower:
@@ -816,9 +833,143 @@ class MemoryManager:
             book_id = metadata.get("book_id") or ""
             if book_id and book_id.lower() in query_lower:
                 boost += 0.45
+            boost *= self._authority_weight(metadata, query_text)
+            boost *= self._temporary_style_override_weight(query_text, result)
             result.score = max(0.0, min(1.0, result.score * boost))
         results.sort(key=lambda item: item.score, reverse=True)
         return results
+
+    @staticmethod
+    def _prioritize_context_tags(query: str, results: List[SearchResult]) -> List[SearchResult]:
+        desired = MemoryManager._context_tag_for_query(query)
+        if not desired:
+            return results
+        for result in results:
+            metadata = result.metadata or {}
+            tags = metadata.get("context_tags") or []
+            if desired in tags:
+                result.score = min(1.0, result.score * 1.35 + 0.05)
+                metadata["context_match"] = desired
+                result.metadata = metadata
+        results.sort(key=lambda item: item.score, reverse=True)
+        return results
+
+    @staticmethod
+    def _context_tag_for_query(query: str) -> str:
+        text = (query or "").lower()
+        groups = (
+            ("paper", ("论文", "引用", "文献", "摘要", "paper", "citation", "academic")),
+            ("code", ("代码", "测试", "bug", "报错", "code", "test", "debug")),
+            ("writing", ("写作", "润色", "章节", "大纲", "writing", "chapter", "outline")),
+            ("chat", ("日常", "闲聊", "聊天", "chat")),
+        )
+        for tag, terms in groups:
+            if any(term in text for term in terms):
+                return tag
+        return ""
+
+    @staticmethod
+    def _authority_weight(metadata: Dict[str, Any], query: str = "") -> float:
+        """Prefer authoritative memory layers before noisy episodic logs."""
+        metadata = metadata or {}
+        authority = metadata.get("authority", "")
+        temporal_scope = metadata.get("temporal_scope", "")
+        layer = metadata.get("memory_layer", "")
+
+        if temporal_scope == "expired":
+            return 0.30
+
+        weights = {
+            "truth_file": 1.45,
+            "workspace_rule": 1.35,
+            "workspace_profile": 1.25,
+            "user_profile": 1.35,
+            "long_term_memory": 1.20,
+            "promotion_candidate": 1.05,
+            "short_term": 1.15,
+            "knowledge": 1.05,
+            "daily_summary": 0.85,
+            "conversation": 0.80,
+            "process_log": 0.75,
+            "error_log": 0.55,
+        }
+        weight = weights.get(authority, 1.0)
+
+        if layer == "error" or authority == "error_log":
+            weight = 1.10 if MemoryManager._is_error_query(query) else weight
+        if temporal_scope == "current":
+            weight += 0.10
+        elif temporal_scope == "active":
+            weight += 0.05
+        return weight
+
+    @staticmethod
+    def _temporary_style_override_weight(query: str, result: SearchResult) -> float:
+        override = MemoryManager._current_response_style_override(query)
+        if not override:
+            return 1.0
+
+        metadata = result.metadata or {}
+        text = f"{result.snippet or ''} {metadata.get('style', '')} {metadata.get('preference', '')}".lower()
+        if override == "detail" and MemoryManager._looks_like_brevity_preference(text):
+            metadata["temporary_override"] = "detail_overrides_brevity"
+            result.metadata = metadata
+            return 0.35
+        if override == "brief" and MemoryManager._looks_like_detail_preference(text):
+            metadata["temporary_override"] = "brevity_overrides_detail"
+            result.metadata = metadata
+            return 0.35
+        return 1.0
+
+    @staticmethod
+    def _current_response_style_override(query: str) -> str:
+        text = (query or "").lower()
+        if not text:
+            return ""
+        directive_markers = (
+            "这次", "本次", "当前", "这轮", "本轮", "请", "回答", "解释", "说",
+            "this time", "for now", "in this answer", "please", "answer", "explain",
+        )
+        if not any(marker in text for marker in directive_markers):
+            return ""
+        detail_markers = (
+            "详细", "展开", "完整解释", "一步步", "分步骤", "具体说明",
+            "detailed", "detail", "step by step", "explain fully",
+        )
+        brief_markers = (
+            "简短", "简洁", "简单说", "只要结论", "不要展开", "概括",
+            "brief", "concise", "short", "just the answer", "summary only",
+        )
+        if any(marker in text for marker in detail_markers):
+            return "detail"
+        if any(marker in text for marker in brief_markers):
+            return "brief"
+        return ""
+
+    @staticmethod
+    def _looks_like_brevity_preference(text: str) -> bool:
+        markers = (
+            "concise", "concisely", "brief", "short", "succinct",
+            "简洁", "简短", "简明", "只要结论",
+        )
+        return any(marker in (text or "").lower() for marker in markers)
+
+    @staticmethod
+    def _looks_like_detail_preference(text: str) -> bool:
+        markers = (
+            "detailed", "detail", "full explanation", "step by step", "thorough",
+            "详细", "展开", "完整解释", "一步步", "分步骤",
+        )
+        return any(marker in (text or "").lower() for marker in markers)
+
+    @staticmethod
+    def _is_error_query(query: str) -> bool:
+        text = (query or "").lower()
+        markers = (
+            "error", "failure", "failed", "bug", "fix", "exception", "traceback",
+            "错误", "失败", "修复", "报错", "异常",
+        )
+        return any(marker in text for marker in markers)
 
     def _resolve_authoritative_results(self, query: str, results: List[SearchResult]) -> List[SearchResult]:
         """Annotate conflicts and prefer current authority for the same memory entity."""

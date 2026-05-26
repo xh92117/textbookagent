@@ -177,7 +177,10 @@ class Agent:
 
             session_id = getattr(self.model, "session_id", "") if self.model else ""
             bootstrap = MemoryBootstrap(system_dir(), project_workspace=self.workspace_dir or "")
-            return bootstrap.build_startup_context(session_id=session_id)
+            return bootstrap.build_startup_context(
+                session_id=session_id,
+                include_workspace_profile=False,
+            )
         except Exception as e:
             logger.debug(f"Memory bootstrap context skipped: {e}")
             return ""

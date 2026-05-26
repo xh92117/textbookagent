@@ -34,3 +34,21 @@ def test_compact_current_textbook_chapter_result_keeps_metadata():
     assert "current textbook_chapter result compacted" in compacted
     assert "chapter_path" in compacted
     assert "正文" not in compacted
+
+
+def test_tool_result_compaction_uses_type_specific_budgets():
+    long_output = "\n".join(f"row {idx}: value" for idx in range(1000))
+
+    compacted = compact_current_tool_result_content(
+        long_output,
+        tool_name="bash",
+        tool_args={"command": "run-long-report"},
+        status="success",
+        max_chars=5000,
+        tool_budget_chars={"bash": 1200},
+    )
+
+    assert len(compacted) <= 1200
+    assert "output compacted" in compacted
+    assert "row 0" in compacted
+    assert "row 999" in compacted

@@ -124,6 +124,7 @@ def test_memory_temporal_defaults_cover_all_main_layers(tmp_path):
         "memory/sessions/s1_state.md": ("historical", "conversation"),
         "memory/short_term/s1.json": ("active", "short_term"),
         "memory/errors/e1.json": ("historical", "error_log"),
+        "memory/candidates/promotion_candidates.jsonl": ("active", "promotion_candidate"),
         "memory/2026-05-25.md": ("historical", "daily_summary"),
         "memory/user_profile.md": ("evergreen", "user_profile"),
         "RULE.md": ("evergreen", "workspace_rule"),
@@ -164,6 +165,124 @@ def test_memory_rerank_prefers_current_over_historical(tmp_path):
         manager.close()
 
 
+def test_memory_rerank_prefers_current_truth_over_error_noise_for_normal_queries(tmp_path):
+    manager = MemoryManager(config=MemoryConfig(workspace_root=str(tmp_path)))
+    try:
+        current = SearchResult(
+            path="textbooks/tb_demo/state/status.json",
+            start_line=1,
+            end_line=1,
+            score=0.55,
+            snippet="current textbook status",
+            source="textbook",
+            metadata=MemoryManager._classify_memory("textbooks/tb_demo/state/status.json", "textbook"),
+        )
+        error = SearchResult(
+            path="memory/errors/20260525_textbook_chapter_failed.json",
+            start_line=1,
+            end_line=1,
+            score=0.70,
+            snippet="old chapter failure",
+            source="memory",
+            metadata=MemoryManager._classify_memory("memory/errors/20260525_textbook_chapter_failed.json", "memory"),
+        )
+
+        ranked = manager._rerank_results("tb_demo latest chapter status", [error, current])
+
+        assert ranked[0].path == "textbooks/tb_demo/state/status.json"
+    finally:
+        manager.close()
+
+
+def test_memory_rerank_prefers_evergreen_profile_over_process_log(tmp_path):
+    manager = MemoryManager(config=MemoryConfig(workspace_root=str(tmp_path)))
+    try:
+        profile = SearchResult(
+            path="memory/user_profile.md",
+            start_line=1,
+            end_line=4,
+            score=0.60,
+            snippet="stable user working style",
+            source="memory",
+            metadata=MemoryManager._classify_memory("memory/user_profile.md", "memory"),
+        )
+        process = SearchResult(
+            path="memory/processes/proc_demo_state.md",
+            start_line=1,
+            end_line=4,
+            score=0.78,
+            snippet="transient process log mentions working style once",
+            source="memory",
+            metadata=MemoryManager._classify_memory("memory/processes/proc_demo_state.md", "memory"),
+        )
+
+        ranked = manager._rerank_results("working style", [process, profile])
+
+        assert ranked[0].path == "memory/user_profile.md"
+    finally:
+        manager.close()
+
+
+def test_memory_rerank_lets_current_detail_request_override_concise_preference(tmp_path):
+    manager = MemoryManager(config=MemoryConfig(workspace_root=str(tmp_path)))
+    try:
+        concise_preference = SearchResult(
+            path="memory/user_profile.md",
+            start_line=1,
+            end_line=3,
+            score=0.90,
+            snippet="User preference: always answer concisely.",
+            source="memory",
+            metadata=MemoryManager._classify_memory("memory/user_profile.md", "memory"),
+        )
+        relevant_detail = SearchResult(
+            path="knowledge/calculus.md",
+            start_line=1,
+            end_line=6,
+            score=0.60,
+            snippet="Detailed derivation notes for calculus explanations.",
+            source="knowledge",
+            metadata=MemoryManager._classify_memory("knowledge/calculus.md", "knowledge"),
+        )
+
+        ranked = manager._rerank_results("这次请详细解释推导过程", [concise_preference, relevant_detail])
+
+        assert ranked[0].path == "knowledge/calculus.md"
+        assert concise_preference.metadata["temporary_override"] == "detail_overrides_brevity"
+    finally:
+        manager.close()
+
+
+def test_memory_rerank_lets_current_brief_request_override_detail_preference(tmp_path):
+    manager = MemoryManager(config=MemoryConfig(workspace_root=str(tmp_path)))
+    try:
+        detailed_preference = SearchResult(
+            path="memory/user_profile.md",
+            start_line=1,
+            end_line=3,
+            score=0.90,
+            snippet="User preference: always answer with detailed explanations.",
+            source="memory",
+            metadata=MemoryManager._classify_memory("memory/user_profile.md", "memory"),
+        )
+        relevant_summary = SearchResult(
+            path="knowledge/summary.md",
+            start_line=1,
+            end_line=4,
+            score=0.60,
+            snippet="Short summary notes for the current topic.",
+            source="knowledge",
+            metadata=MemoryManager._classify_memory("knowledge/summary.md", "knowledge"),
+        )
+
+        ranked = manager._rerank_results("这次请简短回答，只要结论", [detailed_preference, relevant_summary])
+
+        assert ranked[0].path == "knowledge/summary.md"
+        assert detailed_preference.metadata["temporary_override"] == "brevity_overrides_detail"
+    finally:
+        manager.close()
+
+
 class _FakeMemoryManager:
     async def search(self, **kwargs):
         return [
@@ -194,6 +313,9 @@ def test_memory_search_outputs_temporal_metadata():
     assert "Authority: truth_file" in result.result
     assert "Observed: 2026-05-25T10:00:00" in result.result
     assert "Valid: 2026-05-25T10:00:00 -> present" in result.result
+    assert "Hit reason:" in result.result
+    assert "Matched terms:" in result.result
+    assert "Confidence:" in result.result
 
 
 class _ConflictMemoryManager:
@@ -229,6 +351,50 @@ def test_memory_search_warns_when_current_and_historical_textbook_memory_coexist
     assert result.status == "success"
     assert "Conflict notes:" in result.result
     assert "Prefer current" in result.result
+
+
+class _NoisyMemoryManager:
+    async def search(self, **kwargs):
+        rows = [
+            ("textbooks/tb_demo/state/status.json", "textbook", "current status", 0.92),
+            ("memory/user_profile.md", "memory", "stable profile", 0.88),
+            ("memory/processes/p1_state.md", "memory", "process one", 0.86),
+            ("memory/processes/p2_state.md", "memory", "process two", 0.85),
+            ("memory/processes/p3_state.md", "memory", "process three", 0.84),
+            ("memory/errors/e1.json", "memory", "old error one", 0.83),
+            ("memory/errors/e2.json", "memory", "old error two", 0.82),
+        ]
+        return [
+            SearchResult(
+                path=path,
+                start_line=1,
+                end_line=2,
+                score=score,
+                snippet=snippet,
+                source=source,
+                metadata=MemoryManager._classify_memory(path, source),
+            )
+            for path, source, snippet, score in rows
+        ]
+
+
+def test_memory_search_caps_process_and_error_noise_for_normal_queries():
+    tool = MemorySearchTool(_NoisyMemoryManager())
+    result = tool.execute({"query": "tb_demo status", "max_results": 7})
+
+    assert result.status == "success"
+    assert "memory/processes/p1_state.md" in result.result
+    assert "memory/processes/p2_state.md" not in result.result
+    assert "memory/errors/e1.json" not in result.result
+    assert "memory/errors/e2.json" not in result.result
+
+
+def test_memory_search_keeps_error_memory_for_debug_queries():
+    tool = MemorySearchTool(_NoisyMemoryManager())
+    result = tool.execute({"query": "fix old error", "max_results": 7})
+
+    assert result.status == "success"
+    assert "memory/errors/e1.json" in result.result
 
 
 def test_memory_authority_resolver_marks_historical_same_entity_as_superseded(tmp_path):

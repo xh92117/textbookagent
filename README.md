@@ -121,6 +121,20 @@ TextBookAgent 是一个面向教材、讲义、课程资料和专业知识内容
 - 记忆查询 API。
 - 长会话压缩与上下文预算控制。
 
+#### MemoryGraph 与上下文检索优化
+
+2026-05-26 完成了一轮面向低 token 消耗、记忆精准命中和长对话无幻觉的上下文工程优化：
+
+- 新增轻量级 `MemoryGraph` 图索引，默认数据库位于 `system/memory/graph/memory_graph.db`，索引系统记忆、教材 `textbooks/` 和项目知识库 `knowledge/` 中的 Markdown、JSON、JSONL 资料。
+- 图索引维护 `sources`、`nodes`、`edges`、`aliases`、`dirty_sources` 等表，节点保留来源路径、行号锚点、证据片段、时效范围和权威级别，便于增删改和后续演进。
+- 支持 `belongs_to`、`supersedes`、`conflicts_with`、`depends_on`、`derived_from`、`mentions` 等关系，并从真实教材文本中识别“第 N 章建立/依赖/基于/参考/见/讨论”等自然表达。
+- 记忆更新时会通过 dirty 标记触发懒同步，`MemoryManager.mark_dirty()` 会同步标记 MemoryGraph，并清理 Graph planner 短时缓存。
+- `memory_search` 已接入 `Graph planner -> 旧记忆索引 -> Graph fallback` 链路：先用图索引定位实体和推荐阅读路径，再把 graph hints 传给旧索引检索；图索引未命中时保持旧索引直查。
+- 当旧索引无结果但图索引命中时，compact fallback 默认只输出短说明、1 条 planner 摘要和 Top 3 推荐路径；`graph_mode=full` 保留更完整的 graph notes 和更多推荐路径。
+- 真实教材 graph 重建后统计：`source_count=680`、`node_count=680`、`edge_count=112`，其中 `belongs_to=50`、`depends_on=23`、`derived_from=3`、`mentions=36`。
+- compact fallback 在真实教材查询 `chapter status` 上约为 113 tokens，full 约为 229 tokens，输出 token 估算下降约 50.7%，同时不改变图索引、旧索引增强查询和排序逻辑。
+- 新增 `memory_graph_context` 与 `memory_graph_status` 工具，可查看 graph 导航、缓存状态、dirty 状态，并支持 rebuild/repair/benchmark。
+
 #### 记忆保存规则
 
 记忆系统已经统一为系统级存储，默认目录为：

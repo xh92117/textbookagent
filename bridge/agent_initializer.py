@@ -335,7 +335,7 @@ class AgentInitializer:
             
             # Create memory tools
             memory_tools = [
-                MemorySearchTool(memory_manager),
+                MemorySearchTool(memory_manager, system_root=system_dir()),
                 MemoryGetTool(memory_manager)
             ]
             
@@ -404,7 +404,7 @@ class AgentInitializer:
 
                 if tool:
                     # Apply workspace config to file operation tools
-                    if tool_name in ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls', 'web_fetch', 'knowledge_capture', 'textbook_chapter', 'send', 'browser']:
+                    if tool_name in ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls', 'web_fetch', 'knowledge_capture', 'textbook_chapter', 'send', 'browser', 'memory_graph_context', 'memory_graph_status']:
                         tool.config = file_config
                         tool.cwd = file_config.get("cwd", getattr(tool, 'cwd', None))
                         if 'memory_manager' in file_config:

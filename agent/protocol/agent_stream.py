@@ -113,6 +113,7 @@ class AgentStreamExecutor:
         self.files_to_send = []  # List of file metadata dicts
         self.short_term_memory = None
         self.tool_route = None
+        self.context_compression_history = []
 
     def _emit_event(self, event_type: str, data: dict = None):
         """Emit event"""
@@ -666,6 +667,7 @@ class AgentStreamExecutor:
                             tool_args=tool_call.get("arguments") or {},
                             status=result.get("status", ""),
                             max_chars=self._current_tool_result_context_limit(),
+                            tool_budget_chars=self._tool_result_context_budgets(),
                         )
                         if compacted_content != result_content:
                             logger.info(
@@ -950,6 +952,48 @@ class AgentStreamExecutor:
             return max(2000, min(50000, value))
         except Exception:
             return 16000
+
+    def _tool_result_context_budgets(self) -> dict:
+        try:
+            from config import conf
+            budgets = conf().get("agent_tool_result_context_budgets", {}) or {}
+            if not isinstance(budgets, dict):
+                return {}
+            cleaned = {}
+            for name, value in budgets.items():
+                try:
+                    cleaned[str(name)] = max(400, int(value))
+                except Exception:
+                    continue
+            return cleaned
+        except Exception:
+            return {}
+
+    def _record_context_compression(self, kind: str, saved_chars: int = 0) -> None:
+        self.context_compression_history.append({
+            "kind": kind,
+            "saved_chars": int(saved_chars or 0),
+            "time": time.time(),
+        })
+        if len(self.context_compression_history) > 20:
+            self.context_compression_history = self.context_compression_history[-20:]
+
+    def _compression_debounce_limit(self) -> int:
+        try:
+            from config import conf
+            return max(1, int(conf().get("agent_context_compression_debounce_limit", 3) or 3))
+        except Exception:
+            return 3
+
+    def _recent_compression_count(self) -> int:
+        cutoff = time.time() - 3600
+        return len([
+            item for item in self.context_compression_history
+            if float(item.get("time", 0) or 0) >= cutoff
+        ])
+
+    def _compression_debounce_active(self) -> bool:
+        return self._recent_compression_count() >= self._compression_debounce_limit()
 
     def _apply_tool_routing(self, user_message: str) -> None:
         try:
@@ -1891,6 +1935,7 @@ class AgentStreamExecutor:
                             compressed_count += 1
 
         if compressed_count > 0:
+            self._record_context_compression("tool_results", saved_chars=saved_chars)
             logger.info(
                 f"📦 渐进式压缩工具结果: 压缩了 {compressed_count} 个结果，"
                 f"节省 ~{saved_chars} 字符"
@@ -2051,12 +2096,57 @@ class AgentStreamExecutor:
                 f"The recent conversation continues below.\n\n---\n\n"
                 f"{original_text}"
             )
+            structured_summary = self._format_compacted_context_summary(
+                summary.strip(),
+                turn_count=turn_count,
+            )
+            target_block["text"] = (
+                f"{structured_summary}\n\n"
+                f"The recent conversation continues below.\n\n---\n\n"
+                f"{original_text}"
+            )
+            if not self._message_list_contains_block(target_block):
+                self.messages.append({
+                    "role": "user",
+                    "content": [{"type": "text", "text": target_block["text"]}],
+                })
             logger.info(
                 f"📝 Context summary injected "
                 f"({len(summary)} chars, {turn_count} turns)"
             )
 
         return _on_summary_ready
+
+    @staticmethod
+    def _format_compacted_context_summary(summary: str, turn_count: int = 0) -> str:
+        return (
+            "[Compacted Context Summary]\n"
+            f"source_turns: {turn_count} compacted turn(s)\n"
+            "confidence: medium\n"
+            "confirmed_facts:\n"
+            f"- {summary}\n"
+            "decisions:\n"
+            "- None recorded in the compacted summary unless explicitly listed above.\n"
+            "open_tasks:\n"
+            "- Verify against current state files or memory before acting on old task state.\n"
+            "files_or_state_refs:\n"
+            "- Use status files, chapter indexes, memory_search, or memory_get when precision matters.\n"
+            "user_preferences:\n"
+            "- Do not infer stable preferences from this summary alone.\n"
+            "omitted_details:\n"
+            "- Intermediate tool outputs and exact wording may have been omitted.\n"
+            "must_verify_before_use:\n"
+            "- Treat this as a navigation aid, not the sole source of truth for files, dates, status, or user preferences."
+        )
+
+    def _message_list_contains_block(self, target_block: dict) -> bool:
+        for msg in self.messages:
+            content = msg.get("content", [])
+            if isinstance(content, list):
+                for block in content:
+                    if block is target_block:
+                        return True
+        return False
 
     def _trim_messages(self):
         """
@@ -2163,6 +2253,7 @@ class AgentStreamExecutor:
                 compressed_count += 1
 
         if compressed_count > 0:
+            self._record_context_compression("turn_summary", saved_chars=0)
             logger.info(
                 f"📦 渐进式压缩: 压缩了 {compressed_count} 轮为纯文本摘要 "
                 f"(~{current_tokens + system_tokens} tokens)"
@@ -2476,6 +2567,7 @@ class AgentStreamExecutor:
                     if "compacted" in str(block.get("content", "")).lower() or "compressed" in str(block.get("content", "")).lower():
                         compressed_blocks += 1
         max_allowed, reserve = self._effective_context_budget()
+        last_compression = self.context_compression_history[-1] if self.context_compression_history else {}
         return {
             "system_prompt_chars": len(self.system_prompt or ""),
             "message_count": len(self.messages),
@@ -2487,6 +2579,10 @@ class AgentStreamExecutor:
             "tool_result_chars": tool_result_chars,
             "compressed_blocks": compressed_blocks,
             "memory_bootstrap_loaded": "SYSTEM_MEMORY_BOOTSTRAP.md" in (self.system_prompt or ""),
+            "recent_compression_count": self._recent_compression_count(),
+            "compression_debounce_active": self._compression_debounce_active(),
+            "last_compression_kind": last_compression.get("kind", ""),
+            "last_compression_saved_chars": last_compression.get("saved_chars", 0),
         }
 
     def _emit_context_diagnostics(self, reason: str = "") -> None:

@@ -49,6 +49,9 @@ class ChatService:
             agent.model.channel_type = channel_type or ""
             agent.model.session_id = session_id or ""
 
+        if self._handle_memory_natural_language(query, send_chunk_fn):
+            return
+
         process_id = f"{session_id}_{int(time.time() * 1000)}"
         process_recorder = None
         try:
@@ -306,6 +309,7 @@ class ChatService:
         logger.info(f"[ChatService] Agent run completed: session={session_id}")
         if process_recorder:
             process_recorder.finish_process(process_id, final_response=response, status="completed")
+            self._auto_consolidate_memory()
             try:
                 from config import conf
                 if conf().get("memory_profile_llm_enabled", True):
@@ -314,6 +318,102 @@ class ChatService:
                 pass
 
 
+
+    def _handle_memory_natural_language(self, query: str, send_chunk_fn: Callable[[dict], None]) -> bool:
+        try:
+            from common.app_paths import system_dir
+            from agent.memory.service import MemoryService
+
+            result = MemoryService(system_dir()).dispatch("natural_language", {"text": query})
+            if result.get("code") == 204:
+                return False
+            send_chunk_fn({
+                "chunk_type": "content",
+                "delta": self._format_memory_action_result(result),
+                "segment_id": 0,
+            })
+            return True
+        except Exception as exc:
+            logger.debug(f"[ChatService] memory natural-language action skipped: {exc}")
+            return False
+
+    @staticmethod
+    def _auto_consolidate_memory(system_root: str = "", now: str | None = None, health_compress_threshold: int = 0) -> dict:
+        try:
+            from common.app_paths import system_dir
+            from agent.memory.service import MemoryService
+
+            root = system_root or system_dir()
+            service = MemoryService(root)
+            consolidate_result = service.dispatch("consolidate", {})
+            from agent.memory.promotion import MemoryPromotionCandidatePool
+            pool = MemoryPromotionCandidatePool(service.memory_dir)
+            decay_result = pool.decay_confidence(now=now)
+            auto_apply_result = pool.apply_auto_candidates(min_evidence=2)
+            cleanup_payload = {"now": now} if now else {}
+            cleanup_result = service.dispatch("cleanup_candidates", cleanup_payload)
+            payload = consolidate_result.get("payload") or {}
+            payload["decay"] = decay_result
+            payload["auto_apply"] = auto_apply_result
+            payload["cleanup"] = cleanup_result.get("payload") or {}
+            payload["health"] = pool.health_report()
+            payload["health_actions"] = {"compressed": False}
+            if not health_compress_threshold:
+                health_compress_threshold = int((service.governance_config() or {}).get("auto_compress_health_threshold", 0) or 0)
+            if health_compress_threshold and payload["health"].get("health_score", 100) < health_compress_threshold:
+                compress_result = service.dispatch("compress_long_term", {})
+                payload["health_actions"] = {
+                    "compressed": compress_result.get("code") == 200,
+                    "compress": compress_result.get("payload") or {},
+                }
+            return payload
+        except Exception as exc:
+            logger.debug(f"[ChatService] memory auto-consolidation skipped: {exc}")
+            return {}
+
+    @staticmethod
+    def _format_memory_action_result(result: dict) -> str:
+        action = result.get("action", "")
+        code = result.get("code", 0)
+        payload = result.get("payload") or {}
+        if code >= 400:
+            return f"记忆操作未完成：{result.get('message', 'unknown error')}"
+        if action == "candidates":
+            total = payload.get("total", 0)
+            rows = payload.get("list", [])[:5]
+            lines = [f"候选记忆共 {total} 条。"]
+            for item in rows:
+                lines.append(f"- `{item.get('id', '')}` [{item.get('status', '')}] {item.get('content', '')}")
+            return "\n".join(lines)
+        if action == "consolidate":
+            return f"已整理候选记忆 {payload.get('selected_count', 0)} 条，审查文件：{payload.get('review_file', '') or '无'}"
+        if action == "apply_candidate":
+            return f"已应用候选记忆：{payload.get('candidate_id', '')}，快照：{payload.get('snapshot_file', '')}"
+        if action == "apply_ready_candidates":
+            return f"已应用待审查候选记忆 {payload.get('applied_count', 0)} 条。"
+        if action == "cleanup_candidates":
+            return (
+                "已清理候选记忆："
+                f"过期 {payload.get('expired_count', 0)} 条，"
+                f"归档 {payload.get('archived_count', 0)} 条，"
+                f"因常被查阅保留 {payload.get('kept_by_lookup_count', 0)} 条。"
+            )
+        if action == "resolve_conflict":
+            return f"已处理记忆冲突：保留 {payload.get('kept_id', '')}，拒绝 {payload.get('rejected_id', '')}。"
+        if action == "rollback_version":
+            return f"已回滚记忆版本：{payload.get('version_id', '')}。"
+        if action == "rollback_latest_version":
+            candidate_id = payload.get("rolled_back_candidate_id", "") or "最近一条"
+            return f"已撤销最近写入的记忆：{candidate_id}。"
+        if action == "forget_memory":
+            previews = payload.get("removed_previews", []) or []
+            suffix = f"\n- {previews[0]}" if previews else ""
+            return f"已忘掉匹配的记忆 {payload.get('removed_count', 0)} 条。{suffix}"
+        if action == "explain":
+            return payload.get("explanation", "我会优先遵循你当前这句话的要求。")
+        if action == "modify_memory":
+            return f"已修改匹配的记忆 {payload.get('modified_count', 0)} 条。"
+        return "记忆操作已完成。"
 
     @staticmethod
     def _persist_messages(session_id: str, new_messages: list, channel_type: str = ""):

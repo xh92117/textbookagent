@@ -33,6 +33,63 @@ def test_memory_bootstrap_creates_compact_startup_context(tmp_path):
     assert (tmp_path / "system" / "memory" / "process_index.md").exists()
 
 
+def test_memory_bootstrap_can_skip_workspace_profile_when_context_files_loaded(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "RULE.md").write_text("workspace rule should not duplicate", encoding="utf-8")
+    bootstrap = MemoryBootstrap(str(tmp_path / "system"), project_workspace=str(project))
+
+    context = bootstrap.build_startup_context(session_id="s1", include_workspace_profile=False)
+
+    assert "Workspace Profile Files" not in context
+    assert "workspace rule should not duplicate" not in context
+    assert "On-demand Memory Stores" in context
+
+
+def test_memory_bootstrap_caps_large_profile_and_workspace_memory(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    memory_dir = tmp_path / "system" / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "user_profile.md").write_text(
+        "# User Profile\n\n" + "\n".join(f"stable preference {i}: " + ("x" * 80) for i in range(120)),
+        encoding="utf-8",
+    )
+    (project / "MEMORY.md").write_text(
+        "# Workspace Memory\n\n" + "\n".join(f"workspace memory {i}: " + ("y" * 80) for i in range(160)),
+        encoding="utf-8",
+    )
+
+    bootstrap = MemoryBootstrap(str(tmp_path / "system"), project_workspace=str(project))
+    context = bootstrap.build_startup_context(session_id="s1")
+
+    assert len(context) <= 7000
+    assert "Startup memory budget" in context
+    assert "truncated; use memory_get" in context
+    assert "stable preference 0" in context
+    assert "stable preference 119" in context
+    assert "workspace memory 0" in context
+    assert "workspace memory 159" not in context
+
+
+def test_memory_bootstrap_includes_bounded_process_index(tmp_path):
+    memory_dir = tmp_path / "system" / "memory"
+    memory_dir.mkdir(parents=True)
+    rows = ["# Process Memory Index", ""]
+    for i in range(80):
+        rows.append(f"- `proc-{i}` [completed] -> `memory/processes/proc-{i}_state.md` (2026-05-25 10:{i:02d}): task {i}")
+    (memory_dir / "process_index.md").write_text("\n".join(rows), encoding="utf-8")
+
+    bootstrap = MemoryBootstrap(str(tmp_path / "system"))
+    context = bootstrap.build_startup_context(session_id="s1")
+
+    assert "Recent Process Index" in context
+    assert "proc-79" in context
+    assert "proc-78" in context
+    assert "proc-0" not in context
+    assert context.count("memory/processes/") <= 8
+
+
 def test_error_memory_recorder_writes_metadata(tmp_path):
     recorder = ErrorMemoryRecorder(str(tmp_path / "system"))
     path = recorder.record_tool_error("read", "file not found", {"path": "x.md"})

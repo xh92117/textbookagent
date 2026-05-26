@@ -794,6 +794,7 @@ def compact_current_tool_result_content(
     tool_args: dict = None,
     status: str = "",
     max_chars: int = 16000,
+    tool_budget_chars: dict = None,
 ) -> str:
     """Compact a just-produced tool result before it enters model context.
 
@@ -805,7 +806,10 @@ def compact_current_tool_result_content(
     if not content:
         return content
     tool_args = tool_args or {}
-    max_chars = max(2000, int(max_chars or 16000))
+    tool_budget_chars = tool_budget_chars or {}
+    if tool_name in tool_budget_chars:
+        max_chars = int(tool_budget_chars.get(tool_name) or max_chars or 16000)
+    max_chars = max(400, int(max_chars or 16000))
 
     if len(content) <= max_chars and tool_name not in {"read", "file_read", "web_fetch"}:
         return content
@@ -869,7 +873,14 @@ def compact_current_tool_result_content(
         lines = content.splitlines()
         if len(content) <= max_chars and len(lines) <= 120:
             return content
-        kept = lines[:80] + [f"... [output compacted: {len(lines)} lines, {len(content)} chars] ..."] + lines[-40:]
+        marker = f"... [output compacted: {len(lines)} lines, {len(content)} chars] ..."
+        if max_chars < 3000:
+            head_budget = max(120, int(max_chars * 0.38))
+            tail_budget = max(120, max_chars - head_budget - len(marker) - 4)
+            head = content[:head_budget].rstrip()
+            tail = content[-tail_budget:].lstrip()
+            return f"{head}\n{marker}\n{tail}"[:max_chars]
+        kept = lines[:80] + [marker] + lines[-40:]
         return "\n".join(kept)[:max_chars]
 
     if len(content) <= max_chars:

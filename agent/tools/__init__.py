@@ -18,6 +18,7 @@ from agent.tools.textbook_image.textbook_image import TextbookImageTool
 # Import memory tools
 from agent.tools.memory.memory_search import MemorySearchTool
 from agent.tools.memory.memory_get import MemoryGetTool
+from agent.tools.memory.memory_graph import MemoryGraphContextTool, MemoryGraphStatusTool
 
 # Import tools with optional dependencies
 def _import_optional_tools():
@@ -145,6 +146,8 @@ __all__ = [
     'TextbookImageTool',
     'MemorySearchTool',
     'MemoryGetTool',
+    'MemoryGraphContextTool',
+    'MemoryGraphStatusTool',
     'EnvConfig',
     'SchedulerTool',
     'WebSearch',
