@@ -1,5 +1,5 @@
 from agent.textbook.agents.writer import WriterAgent
-from agent.textbook.pipeline.visual_asset_router import VisualAssetRouter
+from agent.textbook.pipeline.runner import PipelineRunner
 
 
 def test_writer_parses_structured_visual_assets_before_markers():
@@ -11,30 +11,48 @@ ok
 ```json
 {
   "visual_assets": [
-    {"type": "chart", "description": "施工进度对比图", "chart_type": "bar", "insert_after": "进度控制"},
-    {"type": "image", "description": "智能体协作架构图", "image_type": "diagram", "insert_after": "系统架构"}
+    {"type": "chart", "description": "Schedule comparison chart", "chart_type": "bar", "insert_after": "Progress control"},
+    {"type": "image", "description": "Agent collaboration diagram", "image_type": "diagram", "insert_after": "System architecture"}
   ]
 }
 ```
 
 ### CHAPTER_CONTENT
-## 第1章
-这里需要[图表: 施工进度对比图]，也需要[插图: 智能体协作架构图]。
+## Chapter text
+This paragraph mentions [chart: Schedule comparison chart] and [image: Agent collaboration diagram].
 """
 
     parsed = WriterAgent()._parse_output(output, {"chapter_number": 1})
 
     assert parsed["chart_requirements"] == [
         {
-            "description": "施工进度对比图",
+            "description": "Schedule comparison chart",
             "chart_type": "bar",
-            "insert_after": "进度控制",
+            "insert_after": "Progress control",
         }
     ]
     assert parsed["image_requirements"] == [
         {
-            "description": "智能体协作架构图",
+            "description": "Agent collaboration diagram",
             "image_type": "diagram",
-            "insert_after": "系统架构",
+            "insert_after": "System architecture",
         }
     ]
+
+
+def test_pipeline_inserts_visual_asset_after_target_heading_when_marker_missing():
+    content = "## Progress control\nBody\n## Next section\nMore"
+    visual_requests = [
+        {"description": "Schedule comparison chart", "insert_after": "Progress control"}
+    ]
+
+    result = PipelineRunner._insert_visual_assets(
+        content,
+        {"Schedule comparison chart": "assets/chart.png"},
+        visual_requests,
+    )
+
+    image_marker = "![Schedule comparison chart](assets/chart.png)"
+    assert image_marker in result
+    assert result.index("## Progress control") < result.index(image_marker)
+    assert result.index(image_marker) < result.index("## Next section")

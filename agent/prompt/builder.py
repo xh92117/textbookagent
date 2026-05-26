@@ -1,4 +1,4 @@
-"""
+﻿"""
 System Prompt Builder - 系统提示词构建器
 
 实现模块化的系统提示词构建，支持工具、技能、记忆等多个子系统
@@ -158,47 +158,6 @@ def build_agent_system_prompt(
         runtime_info=runtime_info,
         **kwargs,
     ).prompt
-
-    sections = []
-    skill_filter = kwargs.get("skill_filter")
-    skill_route_prompt = kwargs.get("skill_route_prompt") or ""
-    sections.extend(_build_language_policy_section(language))
-    
-    # 1. 工具系统（最重要，放在最前面）
-    if tools:
-        sections.extend(_build_tooling_section(tools, language))
-        sections.extend(_build_harness_tool_policy_section(language))
-    
-    # 2. 技能系统（紧跟工具，因为需要用 read 工具）
-    if skill_manager:
-        if skill_route_prompt:
-            sections.extend([skill_route_prompt, ""])
-        sections.extend(_build_skills_section(skill_manager, tools, language, skill_filter=skill_filter))
-    
-    # 3. 记忆系统（独立的记忆能力）
-    if memory_manager:
-        sections.extend(_build_memory_section(memory_manager, tools, language))
-
-    # 3.5 知识系统（结构化知识库）
-    if conf().get("knowledge", True):
-        sections.extend(_build_knowledge_section(workspace_dir, language))
-    
-    # 4. 工作空间（工作环境说明）
-    sections.extend(_build_workspace_section(workspace_dir, language))
-    
-    # 5. 用户身份（如果有）
-    if user_identity:
-        sections.extend(_build_user_identity_section(user_identity, language))
-    
-    # 6. 项目上下文文件（AGENT.md, USER.md, RULE.md - 定义人格）
-    if context_files:
-        sections.extend(_build_context_files_section(context_files, language))
-    
-    # 7. 运行时信息（元信息，放在最后）
-    if runtime_info:
-        sections.extend(_build_runtime_section(runtime_info, language))
-    
-    return "\n".join(sections)
 
 
 def _build_agent_system_prompt_result(
@@ -820,3 +779,4 @@ def _build_runtime_section(runtime_info: Dict[str, Any], language: str) -> List[
             pass
 
     return lines
+

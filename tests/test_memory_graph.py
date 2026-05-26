@@ -23,6 +23,22 @@ def test_memory_graph_sync_is_idempotent_and_indexes_sources(tmp_path):
     assert status["node_count"] == 1
     assert status["edge_count"] == 0
 
+def test_memory_graph_default_sync_indexes_all_changed_sources(tmp_path):
+    memory_dir = tmp_path / "system" / "memory"
+    memory_dir.mkdir(parents=True)
+    for idx in range(250):
+        (memory_dir / f"note_{idx:03d}.md").write_text(
+            f"Memory note {idx}", encoding="utf-8"
+        )
+
+    service = MemoryGraphService(str(tmp_path / "system"))
+    result = service.sync_changed()
+    status = service.status()
+
+    assert result["indexed"] == 250
+    assert status["source_count"] == 250
+    assert status["graph_dirty"] is False
+
 
 def test_memory_graph_updates_modified_source_without_duplicate_nodes(tmp_path):
     memory_dir = tmp_path / "system" / "memory"

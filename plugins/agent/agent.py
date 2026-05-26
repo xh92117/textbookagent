@@ -2,9 +2,14 @@ import os
 import yaml
 from typing import Dict, List, Optional
 
-from agentmesh import AgentTeam, Agent, LLMModel
-from agentmesh.models import ClaudeModel
-from agentmesh.tools import ToolManager
+try:
+    from agentmesh import AgentTeam, Agent, LLMModel
+    from agentmesh.models import ClaudeModel
+    from agentmesh.tools import ToolManager
+    _AGENTMESH_IMPORT_ERROR = None
+except Exception as exc:
+    AgentTeam = Agent = LLMModel = ClaudeModel = ToolManager = None
+    _AGENTMESH_IMPORT_ERROR = exc
 from config import conf
 
 import plugins
@@ -30,8 +35,12 @@ class AgentPlugin(Plugin):
         self.name = "agent"
         self.description = "Use AgentMesh framework to process tasks with multi-agent teams"
         self.config = self._load_config()
-        self.tool_manager = ToolManager()
-        self.tool_manager.load_tools(config_dict=self.config.get("tools"))
+        self.tool_manager = None
+        if ToolManager is not None:
+            self.tool_manager = ToolManager()
+            self.tool_manager.load_tools(config_dict=self.config.get("tools"))
+        else:
+            logger.warning(f"[agent] AgentMesh dependency unavailable: {_AGENTMESH_IMPORT_ERROR}")
         logger.debug("[agent] inited")
     
     def _load_config(self) -> Dict:
@@ -73,6 +82,10 @@ class AgentPlugin(Plugin):
 
     def create_team_from_config(self, team_name: str) -> Optional[AgentTeam]:
         """Create a team from configuration."""
+        if _AGENTMESH_IMPORT_ERROR:
+            logger.error(f"AgentMesh dependency unavailable: {_AGENTMESH_IMPORT_ERROR}")
+            return None
+
         # Get teams configuration
         teams_config = self.config.get("teams", {})
 
@@ -209,7 +222,7 @@ class AgentPlugin(Plugin):
 
         # If no team specified, use default or first available
         if not team_name:
-            teams = self.configself.get_available_teams()
+            teams = self.get_available_teams()
             if not teams:
                 reply = Reply()
                 reply.type = ReplyType.TEXT

@@ -408,6 +408,20 @@ def drag_sensitive(config):
     return config
 
 
+def _is_sensitive_config_key(name: str) -> bool:
+    lowered = (name or "").lower()
+    return any(token in lowered for token in ("key", "secret", "token", "password", "cookie", "authorization"))
+
+
+def _redact_config_log_value(name: str, value):
+    if not _is_sensitive_config_key(name):
+        return value
+    text = str(value)
+    if len(text) <= 6:
+        return "*" * len(text)
+    return text[:3] + "*" * 5 + text[-3:]
+
+
 def load_config():
     global config
 
@@ -438,7 +452,10 @@ def load_config():
         if name.startswith("_"):
             continue
         if name in available_setting:
-            logger.info("[INIT] override config by environ args: {}={}".format(name, value))
+            logger.info("[INIT] override config by environ args: {}={}".format(
+                name,
+                _redact_config_log_value(name, value),
+            ))
             config[name] = _parse_env_value(value)
 
     if config.get("debug", False):

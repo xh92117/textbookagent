@@ -64,7 +64,9 @@ class TextbookBaseAgent(ABC):
                 self.emit_event('agent_result', {'status': 'error', 'error': str(e)})
                 return {'error': str(e), 'status': 'failed'}
         else:
-            return {'status': 'no_llm', 'message': 'LLM model not configured'}
+            error = 'LLM model not configured'
+            self.emit_event('agent_result', {'status': 'error', 'error': error})
+            return {'status': 'failed', 'error': error}
 
     async def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
         _logger.info(f"[{self.name}] _call_llm called, has_llm={hasattr(self.llm_model, 'call')}")

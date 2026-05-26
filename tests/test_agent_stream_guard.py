@@ -341,6 +341,54 @@ def test_active_textbook_target_falls_back_to_number_near_book_id():
 
     assert executor._active_textbook_target() == {"book_id": "tb_alpha", "chapter_num": 3}
 
+def test_mcp_tools_synced_after_routing_remain_visible(monkeypatch):
+    monkeypatch.setattr(
+        config_module,
+        "conf",
+        lambda: {
+            "agent_tool_routing_enabled": True,
+            "agent_stream_idle_timeout_seconds": 10,
+        },
+    )
+
+    class DummyTool:
+        name = "mcp_new_tool"
+        description = "Freshly synced MCP tool"
+        params = {"type": "object", "properties": {}}
+
+    class FakeModel(LLMModel):
+        def __init__(self):
+            self.seen_tool_names = []
+
+        def call_stream(self, request):
+            self.seen_tool_names = [
+                item["name"] for item in (request.tools or [])
+            ]
+            return iter([])
+
+    def fake_sync(self, agent):
+        agent.tools["mcp_new_tool"] = DummyTool()
+        return ["mcp_new_tool"], []
+
+    monkeypatch.setattr("agent.tools.ToolManager.sync_mcp_into_agent", fake_sync)
+
+    model = FakeModel()
+    executor = AgentStreamExecutor(
+        agent=None,
+        model=model,
+        system_prompt="",
+        tools=[Bash()],
+        messages=[{
+            "role": "user",
+            "content": [{"type": "text", "text": "帮我分析这个项目结构"}],
+        }],
+    )
+
+    executor._apply_tool_routing("帮我分析这个项目结构")
+    executor._call_llm_stream(retry_on_empty=False)
+
+    assert "mcp_new_tool" in model.seen_tool_names
+
 
 def test_knowledge_stream_guard_returns_partial_sse_when_done_is_missing(monkeypatch):
     monkeypatch.setattr(

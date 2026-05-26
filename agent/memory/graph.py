@@ -139,8 +139,10 @@ class MemoryGraphService:
         if column not in columns:
             self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
-    def sync_changed(self, max_files: int = 200) -> Dict[str, Any]:
-        candidates = list(self._candidate_sources())[:max_files]
+    def sync_changed(self, max_files: int | None = None) -> Dict[str, Any]:
+        candidates = list(self._candidate_sources())
+        if max_files is not None and max_files > 0:
+            candidates = candidates[:max_files]
         seen = {src["source_path"] for src in candidates}
         indexed = 0
         skipped = 0

@@ -1,4 +1,4 @@
-import os
+﻿import os
 import uuid
 import time
 import asyncio
@@ -195,10 +195,56 @@ class PipelineRunner:
 
     def _ensure_agent_result(self, result: dict, agent_name: str, phase: str):
         status = (result or {}).get("status", "")
-        if status in ("failed", "cancelled"):
-            error = (result or {}).get("error", f"{agent_name} failed")
+        if status and status not in ("success", "ok", "passed"):
+            error = (result or {}).get("error") or (result or {}).get("message") or f"{agent_name} failed"
             raise RuntimeError(f"{phase}: {agent_name} failed: {error}")
         return result or {}
+
+    @staticmethod
+    def _insert_visual_assets(content: str, asset_files: dict, visual_requests: list | None = None) -> str:
+        content_with_media = content or ""
+        requests_by_desc = {
+            item.get("description", ""): item
+            for item in (visual_requests or [])
+            if isinstance(item, dict) and item.get("description")
+        }
+        inserted = set()
+
+        for desc, fpath in (asset_files or {}).items():
+            rel_path = fpath.replace('\\', '/') if fpath else ''
+            replacement = f'![{desc}]({rel_path})'
+            count = 0
+            for kind in ("chart", "Chart", "image", "Image", "Illustration", "illustration"):
+                for separator in (":", "："):
+                    marker = f"[{kind}{separator} {desc}]"
+                    if marker in content_with_media:
+                        count += content_with_media.count(marker)
+                        content_with_media = content_with_media.replace(marker, replacement)
+            if count:
+                inserted.add(desc)
+
+        for desc, fpath in (asset_files or {}).items():
+            if desc in inserted:
+                continue
+            rel_path = fpath.replace('\\', '/') if fpath else ''
+            image_line = f'![{desc}]({rel_path})'
+            insert_after = (requests_by_desc.get(desc) or {}).get("insert_after")
+            if not insert_after:
+                content_with_media = content_with_media.rstrip() + "\n\n" + image_line + "\n"
+                continue
+
+            lines = content_with_media.splitlines()
+            target_index = next(
+                (idx for idx, line in enumerate(lines) if insert_after in line),
+                None,
+            )
+            if target_index is None:
+                content_with_media = content_with_media.rstrip() + "\n\n" + image_line + "\n"
+                continue
+            lines.insert(target_index + 1, image_line)
+            content_with_media = "\n".join(lines)
+
+        return content_with_media
 
     def _should_polish_chapter(self, content: str, review_result: dict, style: str) -> bool:
         """Skip an expensive polish pass when the chapter already passed cleanly."""
@@ -510,6 +556,7 @@ class PipelineRunner:
             })
 
             content_with_media = write_result.get('content', '')
+            relative_chart_files = {}
             for desc, fpath in chart_files.items():
                 rel_path = fpath.replace('\\', '/') if fpath else ''
                 if book_dir and os.path.isabs(rel_path):
@@ -517,14 +564,12 @@ class PipelineRunner:
                         rel_path = os.path.relpath(rel_path, book_dir).replace('\\', '/')
                     except ValueError:
                         pass
-                marker_pattern = (
-                    r'\[(?:图表|图|Chart|chart|插图|图片|Image|image|Illustration|illustration)'
-                    r'\s*[:：]\s*'
-                    + re.escape(desc)
-                    + r'\]'
-                )
-                content_with_media = re.sub(marker_pattern, f'![{desc}]({rel_path})', content_with_media)
-            write_result['content'] = content_with_media
+                relative_chart_files[desc] = rel_path
+            write_result['content'] = self._insert_visual_assets(
+                content_with_media,
+                relative_chart_files,
+                list(chart_reqs or []) + list(image_reqs or []),
+            )
 
             if self.memory_manager:
                 self.memory_manager.update_terminology(book_id, write_result.get('key_terms', {}))
@@ -704,3 +749,4 @@ class PipelineRunner:
         self._cancelled = True
         self._cancel_event.set()
         self._emit('pipeline_error', {'phase': 'current', 'error': 'Cancelled by user'})
+

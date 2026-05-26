@@ -1007,6 +1007,7 @@ class AgentStreamExecutor:
 
             route = route_tools(user_message, self.tools, enabled=True)
             self.tool_route = route
+            self._tool_route_user_message = user_message
             self.tools = filter_tool_mapping(self.tools, route.allowed_tools)
             logger.info(
                 f"[ToolRouter] task_type={route.task_type}, "
@@ -1091,6 +1092,27 @@ class AgentStreamExecutor:
                     logger.info(f"📦 After trim: ~{new_total} tokens (was ~{total_estimated})")
             except Exception as e:
                 logger.debug(f"Pre-send token check skipped: {e}")
+
+        try:
+            from agent.tools import ToolManager
+            added, removed = ToolManager().sync_mcp_into_agent(self)
+            if self.tool_route:
+                from config import conf
+                from agent.tools.router import filter_tool_mapping, route_tools
+                route = route_tools(
+                    getattr(self, "_tool_route_user_message", ""),
+                    self.tools,
+                    enabled=conf().get("agent_tool_routing_enabled", True),
+                )
+                self.tool_route = route
+                self.tools = filter_tool_mapping(self.tools, route.allowed_tools)
+                if added or removed:
+                    logger.info(
+                        f"[ToolRouter] refreshed after MCP sync: "
+                        f"visible={route.allowed_tools}, hidden={route.omitted_tools}"
+                    )
+        except Exception as e:
+            logger.debug(f"[Agent] MCP sync skipped: {e}")
 
         # Prepare messages
         messages = self._prepare_messages()

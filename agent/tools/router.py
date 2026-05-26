@@ -150,7 +150,10 @@ def route_tools(
     task_type = infer_task_type(user_message)
     mode, required_tools, reason = _route_mode(task_type, user_message, names)
     profile = set(TASK_TOOL_PROFILES.get(task_type, TASK_TOOL_PROFILES["general"]))
-    allowed_set = (profile | ALWAYS_TOOLS | set(required_tools)) & names
+    if mode == "free":
+        allowed_set = set(names)
+    else:
+        allowed_set = (profile | ALWAYS_TOOLS | set(required_tools)) & names
     if mode == "strict" and required_tools:
         strict_support = {"knowledge_query", "memory_search", "memory_get", "read", "ls"}
         allowed_set = (set(required_tools) | strict_support) & names

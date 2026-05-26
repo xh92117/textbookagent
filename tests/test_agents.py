@@ -112,7 +112,8 @@ def test_polisher_agent_type():
 def test_agent_no_llm():
     agent = OutlinerAgent()
     result = asyncio.run(agent.run({'title': '测试'}))
-    assert result['status'] == 'no_llm'
+    assert result['status'] == 'failed'
+    assert 'LLM model not configured' in result['error']
 
 
 def test_agent_empty_llm_response_is_failed():
@@ -159,7 +160,7 @@ def test_agent_emit_event_on_run():
 
     agent = OutlinerAgent(on_event=on_event)
     result = asyncio.run(agent.run({'title': '测试'}))
-    assert result['status'] == 'no_llm'
+    assert result['status'] == 'failed'
     call_events = [e for e in events if e['type'] == 'agent_call']
     assert len(call_events) == 1
     assert call_events[0]['agent'] == 'OutlinerAgent'
@@ -195,6 +196,18 @@ def test_reviser_build_prompt():
     assert '65' in prompt
     assert 'critical' in prompt
     assert '公式有误' in prompt
+
+def test_reviser_build_prompt_accepts_quality_gate_message_field():
+    agent = ReviserAgent()
+    prompt = agent._build_user_prompt({
+        'content': 'draft',
+        'score': 70,
+        'issues': [
+            {'level': 'warning', 'message': 'missing evidence', 'code': 'missing_evidence'},
+        ],
+    })
+
+    assert 'missing evidence' in prompt
 
 
 def test_polisher_build_prompt():

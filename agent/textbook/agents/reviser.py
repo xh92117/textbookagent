@@ -12,10 +12,19 @@ class ReviserAgent(TextbookBaseAgent):
     def _build_user_prompt(self, input_data: dict, context: dict = None) -> str:
         issues = input_data.get('issues', [])
         if isinstance(issues, list):
-            issues_str = '\n'.join(
-                f"- [{i.get('level', '')}] {i.get('description', '')} → {i.get('suggestion', '')}"
-                for i in issues
-            )
+            lines = []
+            for issue in issues:
+                if not isinstance(issue, dict):
+                    lines.append(f"- {issue}")
+                    continue
+                description = (
+                    issue.get('description')
+                    or issue.get('message')
+                    or issue.get('code', '')
+                )
+                suggestion = issue.get('suggestion') or issue.get('recommendation', '')
+                lines.append(f"- [{issue.get('level', '')}] {description} -> {suggestion}")
+            issues_str = '\n'.join(lines)
         else:
             issues_str = str(issues)
         return REVISER_USER_PROMPT_TEMPLATE.format(
