@@ -84,7 +84,7 @@ class AgentInitializer:
         
         # Build system prompt
         prompt_builder = PromptBuilder(workspace_dir=workspace_root, language="zh")
-        runtime_info = self._get_runtime_info(workspace_root)
+        runtime_info = self._get_runtime_info(workspace_root, session_id=session_id)
         
         system_prompt = prompt_builder.build(
             tools=tools,
@@ -484,7 +484,7 @@ class AgentInitializer:
             logger.warning(f"[AgentInitializer] Failed to initialize SkillManager: {e}")
             return None
     
-    def _get_runtime_info(self, workspace_root: str):
+    def _get_runtime_info(self, workspace_root: str, session_id: Optional[str] = None):
         """Get runtime information with dynamic time support"""
         from config import conf
         
@@ -518,11 +518,23 @@ class AgentInitializer:
             """Get current model name dynamically from config"""
             return conf().get("model", "unknown")
 
+        def get_session_handoff():
+            if not session_id:
+                return ""
+            try:
+                from common.app_paths import system_dir
+                from agent.memory import HandoffService
+
+                return HandoffService(system_dir()).read_handoff(session_id).get("content", "")
+            except Exception:
+                return ""
+
         return {
             "_get_model": get_model,
             "workspace": workspace_root,
             "channel": ", ".join(conf().get("channel_type")) if isinstance(conf().get("channel_type"), list) else conf().get("channel_type", "unknown"),
             "_get_current_time": get_current_time,
+            "_get_session_handoff": get_session_handoff,
             "_get_work_state": lambda: self._load_work_state_summary(workspace_root)
         }
     

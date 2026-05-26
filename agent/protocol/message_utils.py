@@ -359,6 +359,18 @@ def build_context_state_board(turns: List[Dict], max_events: int = 24) -> str:
     # old progress into this "authority" board makes the agent revive previous
     # chapter tasks when the user has switched goals.
     turns = turns[-8:]
+    handoff_pointer = _find_active_handoff_pointer(turns)
+    if handoff_pointer:
+        lines = [
+            "[System: Current task state board]",
+            "Session handoff pointer is active. Use the handoff as the authority for task progress instead of rebuilding a long checkpoint from compressed turns.",
+            f"Session handoff pointer: {handoff_pointer.get('path', '')}",
+        ]
+        entity_key = handoff_pointer.get("entity_key", "")
+        if entity_key:
+            lines.append(f"Graph entity: {entity_key}")
+        lines.append("Compression rule: do not duplicate the handoff content here; retrieve/read the handoff if more detail is needed.")
+        return "\n".join(lines)
 
     latest_user = ""
     assistant_notes = []
@@ -481,6 +493,14 @@ def build_context_state_board(turns: List[Dict], max_events: int = 24) -> str:
     lines.append("Chapter writing rule: use textbook_chapter for chapter Markdown. Do not use bash/PowerShell to append Chinese textbook text.")
     lines.append("Checkpoint rule: if the structured checkpoint marks an action as completed, do not redo it unless the user explicitly asks.")
     return "\n".join(lines)
+
+
+def _find_active_handoff_pointer(turns: List[Dict]) -> Dict:
+    for turn in reversed(turns or []):
+        pointer = turn.get("session_handoff")
+        if isinstance(pointer, dict) and pointer.get("path"):
+            return pointer
+    return {}
 
 
 def _update_checkpoint_from_event(checkpoint: Dict, tool_name: str, tool_args: dict, event: str) -> None:

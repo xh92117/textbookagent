@@ -333,7 +333,7 @@ class MemoryGraphService:
     @staticmethod
     def _should_skip_path(path: Path) -> bool:
         text = path.as_posix().lower()
-        return any(part in text for part in ("/graph/", "/versions/", "/cache/"))
+        return any(part in text for part in ("/graph/", "/versions/", "/cache/", "/sessions_archive/"))
 
     def _source_record(self, path: Path) -> Dict[str, Any]:
         stat = path.stat()
@@ -349,6 +349,8 @@ class MemoryGraphService:
 
     def _source_type(self, path: Path) -> str:
         p = path.as_posix().lower()
+        if "/sessions/" in p and p.endswith("/handoff.md"):
+            return "session_handoff"
         if "/errors/" in p:
             return "error"
         if "/processes/" in p or p.endswith("process_index.md"):
@@ -406,6 +408,8 @@ class MemoryGraphService:
             )
         except Exception:
             metadata = {}
+        if src["source_type"] == "session_handoff":
+            metadata = self._handoff_metadata(path)
         entity_key = metadata.get("entity_key") or self._fallback_entity_key(path, src["source_type"])
         summary = self._summary_for_source(src)
         start_line, end_line, evidence = self._evidence_span(src)
@@ -745,6 +749,22 @@ class MemoryGraphService:
     @staticmethod
     def _fallback_entity_key(path: str, source_type: str) -> str:
         return f"{source_type}:{Path(path).name.lower()}"
+
+    @staticmethod
+    def _handoff_metadata(path: str) -> Dict[str, Any]:
+        parts = Path(path).as_posix().split("/")
+        session_id = "default"
+        if "sessions" in parts:
+            idx = parts.index("sessions")
+            if idx + 1 < len(parts):
+                session_id = parts[idx + 1]
+        return {
+            "entity_key": f"session:{session_id}:handoff",
+            "authority": "session_handoff",
+            "temporal_scope": "active",
+            "session_id": session_id,
+            "path_kind": "handoff",
+        }
 
     @staticmethod
     def _summary_for_source(src: Dict[str, Any], max_chars: int = 360) -> str:

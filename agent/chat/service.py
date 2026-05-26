@@ -428,6 +428,20 @@ class ChatService:
             get_conversation_store().append_messages(
                 session_id, new_messages, channel_type=channel_type
             )
+            try:
+                from common.app_paths import active_workspace, system_dir
+                from agent.memory import update_session_handoff_after_persist
+
+                update_session_handoff_after_persist(
+                    system_dir(),
+                    session_id,
+                    new_messages,
+                    project_workspace=active_workspace(),
+                )
+            except Exception as inner:
+                logger.debug(
+                    f"[ChatService] Session handoff update skipped for session={session_id}: {inner}"
+                )
         except Exception as e:
             logger.warning(
                 f"[ChatService] Failed to persist messages for session={session_id}: {e}"

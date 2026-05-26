@@ -114,6 +114,8 @@ class AgentStreamExecutor:
         self.short_term_memory = None
         self.tool_route = None
         self.context_compression_history = []
+        self.tool_budget = None
+        self.tool_metric_events = []
 
     def _emit_event(self, event_type: str, data: dict = None):
         """Emit event"""
@@ -807,6 +809,7 @@ class AgentStreamExecutor:
         finally:
             final_response = final_response.strip() if final_response else final_response
             self._record_short_term_final_response(final_response)
+            self._emit_tool_diagnostics()
             logger.info(f"[Agent] 🏁 完成 ({turn}轮)")
             self._emit_event("agent_end", {"final_response": final_response})
 
@@ -1539,7 +1542,24 @@ class AgentStreamExecutor:
                 arguments,
                 "parse_error",
             )
+            self._record_tool_metric_event(tool_name, arguments, result)
             return result
+
+        policy_result = self._preflight_tool_policy_check(tool_name, arguments)
+        if policy_result:
+            logger.warning(
+                f"[ToolPolicy] blocked {tool_name}: {policy_result.get('result', '')}"
+            )
+            self._record_tool_result(tool_name, arguments, False)
+            self._record_tool_failure_detail(tool_name, arguments, policy_result.get("result", "blocked"))
+            self._capture_tool_error_memory(
+                tool_name,
+                policy_result.get("result", "blocked"),
+                arguments,
+                "policy_blocked",
+            )
+            self._record_tool_metric_event(tool_name, arguments, policy_result)
+            return policy_result
 
         # Check for consecutive failures (retry protection)
         should_stop, stop_reason, is_critical = self._check_consecutive_failures(tool_name, arguments)
@@ -1626,6 +1646,7 @@ class AgentStreamExecutor:
             self._record_short_term_tool_end(tool_name, arguments, result.status, result.result)
 
             self._record_work_state(tool_name, arguments, result.status, result.result)
+            self._record_tool_metric_event(tool_name, arguments, result_dict)
 
             return result_dict
 
@@ -1653,8 +1674,138 @@ class AgentStreamExecutor:
             self._record_short_term_tool_end(tool_name, arguments, "error", str(e))
 
             self._record_work_state(tool_name, arguments, "error", str(e))
+            self._record_tool_metric_event(tool_name, arguments, error_result)
 
             return error_result
+
+    def _record_tool_metric_event(self, tool_name: str, arguments: dict, result: dict) -> None:
+        try:
+            from agent.tools.metrics import classify_tool_use, default_tool_budget, record_tool_metric
+
+            args_hash = self._hash_args(arguments or {})
+            repeat_count = 0
+            for name, ahash, _success in reversed(getattr(self, "tool_failure_history", [])):
+                if name == tool_name and ahash == args_hash:
+                    repeat_count += 1
+                else:
+                    break
+            route = getattr(self, "tool_route", None)
+            status = str((result or {}).get("status") or "")
+            output = (result or {}).get("result", "")
+            result_chars = len(output) if isinstance(output, str) else len(json.dumps(output, ensure_ascii=False))
+            usefulness_label = classify_tool_use(tool_name, status, repeat_count=repeat_count)
+            if getattr(self, "tool_budget", None) is None:
+                self.tool_budget = default_tool_budget(
+                    getattr(route, "mode", ""),
+                    getattr(route, "task_type", ""),
+                )
+            budget_payload = self.tool_budget.record(tool_name, usefulness_label)
+            payload = {
+                "tool_name": tool_name,
+                "task_type": getattr(route, "task_type", ""),
+                "route_mode": getattr(route, "mode", ""),
+                "arguments_hash": args_hash,
+                "status": status,
+                "latency_ms": int(float((result or {}).get("execution_time", 0) or 0) * 1000),
+                "result_chars": result_chars,
+                "repeat_count": repeat_count,
+                "usefulness_label": usefulness_label,
+                **budget_payload,
+            }
+            if not hasattr(self, "tool_metric_events"):
+                self.tool_metric_events = []
+            self.tool_metric_events.append(payload)
+            record_tool_metric(payload)
+        except Exception as exc:
+            logger.debug(f"Tool metric record skipped: {exc}")
+
+    def _emit_tool_diagnostics(self) -> None:
+        events = list(getattr(self, "tool_metric_events", []) or [])
+        if not events:
+            return
+        label_counts = {}
+        tool_counts = {}
+        over_budget_calls = 0
+        for item in events:
+            label = item.get("usefulness_label", "unknown")
+            label_counts[label] = label_counts.get(label, 0) + 1
+            tool = item.get("tool_name", "unknown")
+            tool_counts[tool] = tool_counts.get(tool, 0) + 1
+            if item.get("over_budget"):
+                over_budget_calls += 1
+        payload = {
+            "total_calls": len(events),
+            "label_counts": label_counts,
+            "tool_counts": tool_counts,
+            "over_budget_calls": over_budget_calls,
+            "route_mode": events[-1].get("route_mode", ""),
+            "task_type": events[-1].get("task_type", ""),
+        }
+        self._emit_event("tool_diagnostics", payload)
+
+    def _preflight_tool_policy_check(self, tool_name: str, arguments: dict) -> Dict[str, Any] | None:
+        """Block high-waste or high-risk calls before executing a tool."""
+        arguments = arguments or {}
+        if tool_name == "web_fetch" and self._is_search_result_url(str(arguments.get("url") or "")):
+            return {
+                "status": "blocked",
+                "result": (
+                    "Tool policy blocked web_fetch on search result pages. "
+                    "Use the search workflow to discover concrete source URLs, then fetch selected source pages."
+                ),
+                "execution_time": 0,
+            }
+
+        if tool_name == "bash" and self._is_strict_textbook_route():
+            command = str(arguments.get("command") or "")
+            if self._looks_like_chapter_write_command(command):
+                return {
+                    "status": "blocked",
+                    "result": (
+                        "Tool policy blocked bash from writing textbook chapter content in strict textbook mode. "
+                        "Use textbook_chapter for chapter append/replace/mark_completed operations."
+                    ),
+                    "execution_time": 0,
+                }
+        return None
+
+    @staticmethod
+    def _is_search_result_url(url: str) -> bool:
+        if not url:
+            return False
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(url)
+            host = (parsed.netloc or "").lower()
+            path = (parsed.path or "").lower()
+            if "google." in host and path.startswith("/search"):
+                return True
+            if "bing.com" in host and path.startswith("/search"):
+                return True
+            if "baidu.com" in host and path.startswith("/s"):
+                return True
+            if "search.brave.com" in host and path.startswith("/search"):
+                return True
+        except Exception:
+            return False
+        return False
+
+    def _is_strict_textbook_route(self) -> bool:
+        route = getattr(self, "tool_route", None)
+        return (
+            getattr(route, "mode", "") == "strict"
+            and getattr(route, "task_type", "") == "textbook"
+        )
+
+    @staticmethod
+    def _looks_like_chapter_write_command(command: str) -> bool:
+        low = (command or "").lower()
+        write_markers = ("add-content", "set-content", "out-file", ">", ">>")
+        chapter_markers = ("chapter_", "chapters", "textbooks", "教材", "章节")
+        return any(marker in low for marker in write_markers) and any(
+            marker in low for marker in chapter_markers
+        )
 
     @staticmethod
     def _tool_parse_recovery_hint(tool_name: str) -> str:

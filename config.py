@@ -266,6 +266,7 @@ available_setting = {
     "short_term_memory_keep_events": 50,
     "short_term_memory_retention_days": 14,
     "short_term_memory_max_files": 30,
+    "session_handoff_ttl_hours": 168,
     "agent_current_tool_result_context_chars": 10000,
     "agent_prompt_section_budgets": {},
     "agent_tool_result_context_budgets": {

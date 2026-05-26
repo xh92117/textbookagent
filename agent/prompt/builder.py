@@ -263,6 +263,9 @@ def _build_agent_system_prompt_result(
         add_section("context_files", _build_context_files_section(context_files, language))
 
     if runtime_info:
+        add_section("session_handoff", _build_session_handoff_section(runtime_info, language))
+
+    if runtime_info:
         add_section("runtime", _build_runtime_section(runtime_info, language))
 
     prompt = "\n\n".join(section_texts)
@@ -285,6 +288,7 @@ def _prompt_section_budget(name: str) -> int:
         "knowledge": 1800,
         "workspace": 1200,
         "context_files": 4000,
+        "session_handoff": 900,
         "runtime": 1600,
     }
     try:
@@ -308,6 +312,54 @@ def _clip_prompt_section(text: str, max_chars: int, name: str) -> str:
     head_chars = max(120, int(budget * 0.65))
     tail_chars = max(60, budget - head_chars)
     return (text[:head_chars].rstrip() + notice + text[-tail_chars:].lstrip())[:max_chars]
+
+
+def _build_session_handoff_section(runtime_info: Dict[str, Any], language: str) -> List[str]:
+    handoff = ""
+    try:
+        getter = runtime_info.get("_get_session_handoff")
+        if callable(getter):
+            handoff = str(getter() or "")
+        else:
+            handoff = str(runtime_info.get("session_handoff", "") or "")
+    except Exception:
+        handoff = ""
+    if not handoff.strip():
+        return []
+    compact = _compact_session_handoff_text(handoff)
+    lines = [
+        "## Session Handoff",
+        "",
+        "Use this compact handoff as the active session state. Prefer its evidence refs over copied conversation details.",
+        "",
+    ]
+    lines.extend(compact.strip().splitlines())
+    lines.append("")
+    return lines
+
+
+def _compact_session_handoff_text(handoff: str) -> str:
+    text = str(handoff or "").strip()
+    if not text:
+        return ""
+    wanted = {"Current Goal", "Next Actions", "Evidence Refs", "Suggested Retrieval"}
+    current = ""
+    sections: Dict[str, List[str]] = {name: [] for name in wanted}
+    for line in text.splitlines():
+        if line.startswith("## "):
+            current = line[3:].strip()
+            continue
+        if current in wanted and line.strip():
+            sections[current].append(line.strip())
+    lines: List[str] = []
+    for name in ("Current Goal", "Next Actions", "Evidence Refs", "Suggested Retrieval"):
+        values = sections.get(name) or []
+        if not values:
+            continue
+        lines.append(f"### {name}")
+        lines.extend(values[:4])
+        lines.append("")
+    return "\n".join(lines).strip() or text
 
 
 def _build_language_policy_section(language: str) -> List[str]:

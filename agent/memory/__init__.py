@@ -14,6 +14,7 @@ from agent.memory.work_state import WorkStateManager
 from agent.memory.realtime import RealtimeMemoryRecorder
 from agent.memory.query_service import MemoryQueryService
 from agent.memory.bootstrap import MemoryBootstrap
+from agent.memory.handoff import HandoffService, update_session_handoff_after_persist
 from agent.memory.short_term import ShortTermMemoryPool
 from agent.memory.promotion import MemoryPromotionCandidatePool
 from agent.memory.error_memory import ErrorMemoryRecorder
@@ -38,6 +39,8 @@ __all__ = [
     'RealtimeMemoryRecorder',
     'MemoryQueryService',
     'MemoryBootstrap',
+    'HandoffService',
+    'update_session_handoff_after_persist',
     'ShortTermMemoryPool',
     'MemoryPromotionCandidatePool',
     'ErrorMemoryRecorder',

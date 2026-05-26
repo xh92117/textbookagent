@@ -262,6 +262,9 @@ class MemorySearchTool(BaseTool):
                     limit=5,
                     sync=status.get("graph_dirty", True) or not status.get("last_sync_at"),
                 )
+                handoff_intent = self._graph_handoff_intent(query)
+                if handoff_intent:
+                    context = self._prioritize_handoff_context(context)
                 status = service.status()
             finally:
                 service.close()
@@ -291,6 +294,7 @@ class MemorySearchTool(BaseTool):
                 "planner_chars": max(0, len(search_query) - len(query)),
                 "cache_hit": False,
                 "temporal_intent": self._graph_temporal_intent(query),
+                "handoff_intent": handoff_intent,
             }
             self._GRAPH_PLAN_CACHE[cache_key] = {
                 "expires_at": __import__("time").time() + self._GRAPH_PLAN_CACHE_TTL_SECONDS,
@@ -388,6 +392,8 @@ class MemorySearchTool(BaseTool):
             notes.append("- graph planner cache hit; skipped graph context recomputation")
         if graph_plan.get("temporal_intent"):
             notes.append(f"- temporal intent: {graph_plan.get('temporal_intent')}")
+        if graph_plan.get("handoff_intent"):
+            notes.append("- handoff intent: session handoff nodes are prioritized")
         context = graph_plan.get("context") or {}
         conflicts = context.get("conflicts") or []
         if conflicts:
@@ -464,6 +470,39 @@ class MemorySearchTool(BaseTool):
         if any(marker in text for marker in current_markers):
             return "current"
         return ""
+
+    @staticmethod
+    def _graph_handoff_intent(query: str) -> bool:
+        text = (query or "").lower()
+        markers = (
+            "continue last", "continue previous", "resume", "handoff",
+            "继续上次", "接着做", "上次做到", "恢复上下文", "继续之前",
+            "缁х画涓婃", "鎺ョ潃鍋", "鎭㈠涓婁笅鏂",
+        )
+        return any(marker in text for marker in markers)
+
+    @staticmethod
+    def _prioritize_handoff_context(context: dict) -> dict:
+        if not context:
+            return context
+
+        def handoff_rank(item: dict) -> int:
+            blob = " ".join(
+                str(item.get(key, "") or "")
+                for key in ("source_path", "entity_key", "authority", "node_type")
+            ).lower()
+            return 0 if "session_handoff" in blob or "/sessions/" in blob else 1
+
+        updated = dict(context)
+        for key in ("authoritative_nodes", "historical_nodes", "recommended_reads"):
+            values = list(updated.get(key) or [])
+            updated[key] = sorted(values, key=lambda item: (handoff_rank(item), str(item.get("source_path", ""))))
+        entities = list(updated.get("matched_entities") or [])
+        updated["matched_entities"] = sorted(
+            entities,
+            key=lambda entity: (0 if str(entity).startswith("session:") and str(entity).endswith(":handoff") else 1, str(entity)),
+        )
+        return updated
 
     def _graph_cache_key(self, query: str, project_workspace: str) -> tuple:
         normalized_query = " ".join((query or "").lower().split())

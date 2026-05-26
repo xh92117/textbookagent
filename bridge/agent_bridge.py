@@ -781,6 +781,20 @@ class AgentBridge:
             get_conversation_store().append_messages(
                 session_id, messages_to_store, channel_type=channel_type
             )
+            try:
+                from common.app_paths import active_workspace, system_dir
+                from agent.memory import update_session_handoff_after_persist
+
+                update_session_handoff_after_persist(
+                    system_dir(),
+                    session_id,
+                    messages_to_store,
+                    project_workspace=active_workspace(),
+                )
+            except Exception as e:
+                logger.debug(
+                    f"[AgentBridge] Session handoff update skipped for session={session_id}: {e}"
+                )
         except Exception as e:
             logger.warning(
                 f"[AgentBridge] Failed to persist messages for session={session_id}: {e}"
