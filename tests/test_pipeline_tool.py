@@ -38,9 +38,19 @@ class FakeBridge:
 def test_start_pipeline_finds_existing_textbook_config_by_title():
     bridge = FakeBridge()
     with patch("bridge.textbook_bridge.get_bridge", return_value=bridge):
-        result = StartPipeline().execute({"title": "Existing Book"})
+        result = StartPipeline().execute({"title": "Existing Book", "confirm_pipeline_risk": True})
 
     assert result.status == "success"
     assert result.result["book_id"] == "tb_existing"
     assert result.result["pipeline_status"]["resume_from"] == "compose"
     assert bridge.started == ["tb_existing"]
+
+
+def test_start_pipeline_requires_explicit_user_confirmation():
+    bridge = FakeBridge()
+    with patch("bridge.textbook_bridge.get_bridge", return_value=bridge):
+        result = StartPipeline().execute({"title": "Existing Book"})
+
+    assert result.status == "error"
+    assert "confirm_pipeline_risk" in result.result
+    assert bridge.started == []

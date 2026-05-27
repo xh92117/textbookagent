@@ -14,6 +14,7 @@ DEFAULT_TOOL_POLICY: Dict[str, Any] = {
     "purpose": "Project-level guardrails for tool choice, writes, destructive operations, and verification.",
     "preferred_tools": {
         "create_textbook": "Create textbook projects through the canonical bridge so textbook.json is always written.",
+        "textbook_outline": "Read and write textbook outlines and terminology through canonical outline files.",
         "textbook_chapter": "Read, write, append, replace, and mark textbook chapters while preserving metadata.",
         "memory_search": "Search system memory before answering history-dependent questions.",
         "memory_get": "Read known memory paths from the unified system memory directory.",

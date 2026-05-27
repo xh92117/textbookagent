@@ -187,8 +187,8 @@ class TextbookPipelineHandler:
             bridge = _get_textbook_bridge()
             logger.info(f"[WebChannel] Bridge obtained: data_dir={bridge.data_dir}")
             if action == "pause":
-                result = bridge.pause_pipeline(book_id)
-                return json_success(paused=result)
+                result = bridge.cancel_pipeline(book_id)
+                return json_success(cancelled=result)
             elif action == "resume":
                 result = bridge.resume_pipeline(book_id)
                 return json_success(resumed=result)

@@ -41,6 +41,7 @@ _SIGNIFICANT_TOOLS = {
     "memory_search",
     "knowledge_capture",
     "create_textbook",
+    "textbook_outline",
     "start_pipeline",
     "pipeline",
 }

@@ -10,6 +10,7 @@ TASK_TOOL_PROFILES: Dict[str, Set[str]] = {
     "textbook": {
         "create_textbook",
         "start_pipeline",
+        "textbook_outline",
         "textbook_chapter",
         "textbook_image",
         "knowledge_query",
@@ -39,6 +40,7 @@ ROUTING_HINTS = {
     "textbook": [
         "Use create_textbook when the user wants to create/register a textbook project without starting the full pipeline.",
         "Use start_pipeline when the user wants automatic full-book generation.",
+        "Use textbook_outline for outline/catalog/terminology Markdown; do not use textbook_chapter for whole-book outlines.",
         "Use textbook_chapter for chapter Markdown; do not use bash/write/edit for textbook body text.",
         "Use knowledge_query before drafting when evidence or textbook continuity matters.",
         "Use textbook_image only for real diagrams/charts/assets, not prompt text inside images.",
@@ -207,6 +209,14 @@ def _tool_names(tools: Mapping[str, object] | Sequence[object]) -> Set[str]:
 
 def _route_mode(task_type: str, user_message: str, names: Set[str]) -> tuple[str, List[str], str]:
     text = (user_message or "").lower()
+    if task_type == "textbook" and "start_pipeline" in names:
+        pipeline_markers = (
+            "启动编制", "启动管线", "一键编写", "一键编制", "自动编制", "自动生成整本",
+            "/pipeline", "/start_pipeline", "/一键编写", "start pipeline", "one-click compile",
+            "automatic compilation",
+        )
+        if any(marker in text for marker in pipeline_markers):
+            return "strict", ["start_pipeline"], "full textbook pipeline requires explicit user intent and confirmation"
     if task_type == "textbook" and "create_textbook" in names:
         create_markers = (
             "创建教材", "新建教材", "创建一本教材", "新建一本教材", "初始化教材", "教材项目",
@@ -215,6 +225,13 @@ def _route_mode(task_type: str, user_message: str, names: Set[str]) -> tuple[str
         pipeline_markers = ("生成完整", "自动生成", "启动流水线", "start pipeline", "generate full")
         if any(marker in text for marker in create_markers) and not any(marker in text for marker in pipeline_markers):
             return "strict", ["create_textbook"], "textbook project creation must use canonical metadata creation"
+    if task_type == "textbook" and "textbook_outline" in names:
+        outline_markers = (
+            "大纲", "目录", "术语表", "术语", "outline", "catalog", "terminology", "glossary",
+        )
+        chapter_write_markers = ("第1章", "第2章", "第3章", "第4章", "chapter 1", "chapter 2")
+        if any(marker in text for marker in outline_markers) and not any(marker in text for marker in chapter_write_markers):
+            return "strict", ["textbook_outline"], "textbook outline artifacts have a dedicated canonical tool"
     if task_type == "textbook" and "textbook_chapter" in names:
         chapter_markers = (
             "章节", "第", "续写", "编写", "正文", "标记完成",

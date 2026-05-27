@@ -827,7 +827,11 @@ class TextbookBridge:
             elif event_type == "pipeline_error":
                 err_data = event.get("data", {})
                 with self._pipeline_lock:
-                    pipeline_info["status"] = "error"
+                    error_text = err_data.get("error", "Unknown error")
+                    if str(error_text).lower().startswith("cancel"):
+                        pipeline_info["status"] = "cancelled"
+                    else:
+                        pipeline_info["status"] = "error"
                     pipeline_info["error"] = err_data.get("error", "Unknown error")
                     self._persist_pipeline_status(book_id, pipeline_info)
                 threading.Timer(5.0, lambda: self._drop_active_pipeline(book_id)).start()
@@ -933,7 +937,7 @@ class TextbookBridge:
                 logger.info(f"[TextbookBridge] Pipeline completed for {book_id}, result keys: {list(result.keys()) if isinstance(result, dict) else type(result)}")
             except Exception as e:
                 with self._pipeline_lock:
-                    pipeline_info["status"] = "error"
+                    pipeline_info["status"] = "cancelled" if getattr(runner, "_cancelled", False) else "error"
                     pipeline_info["error"] = str(e)
                     self._persist_pipeline_status(book_id, pipeline_info)
                 logger.error(f"[TextbookBridge] Pipeline error for {book_id}: {e}", exc_info=True)
@@ -1003,8 +1007,8 @@ class TextbookBridge:
             return False
         info["runner"].cancel()
         info["status"] = "cancelled"
+        info["cancel_requested_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         self._persist_pipeline_status(book_id, info)
-        threading.Timer(3.0, lambda: self._drop_active_pipeline(book_id)).start()
         return True
 
     def export_word(self, book_id, template_name="academic", chapter_numbers=None):

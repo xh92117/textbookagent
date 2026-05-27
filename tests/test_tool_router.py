@@ -70,6 +70,66 @@ def test_tool_router_routes_textbook_project_creation_to_create_textbook():
     assert "edit" in route.blocked_tools
 
 
+def test_tool_router_routes_textbook_outline_to_textbook_outline():
+    tools = {
+        "create_textbook": object(),
+        "textbook_outline": object(),
+        "textbook_chapter": object(),
+        "write": object(),
+        "edit": object(),
+        "bash": object(),
+        "memory_search": object(),
+        "memory_get": object(),
+    }
+
+    route = route_tools("请为这本教材生成大纲和术语表", tools)
+
+    assert route.mode == "strict"
+    assert route.required_tools == ["textbook_outline"]
+    assert "textbook_outline" in route.allowed_tools
+    assert "textbook_chapter" not in route.allowed_tools
+    assert "write" in route.blocked_tools
+    assert "edit" in route.blocked_tools
+
+
+def test_tool_router_routes_single_chapter_writing_away_from_pipeline():
+    tools = {
+        "start_pipeline": object(),
+        "textbook_chapter": object(),
+        "textbook_outline": object(),
+        "write": object(),
+        "edit": object(),
+        "bash": object(),
+        "memory_search": object(),
+        "memory_get": object(),
+    }
+
+    route = route_tools("写第一章", tools)
+
+    assert route.mode == "strict"
+    assert route.required_tools == ["textbook_chapter"]
+    assert "start_pipeline" not in route.allowed_tools
+    assert "textbook_chapter" in route.allowed_tools
+
+
+def test_tool_router_routes_explicit_pipeline_start_to_start_pipeline():
+    tools = {
+        "start_pipeline": object(),
+        "create_textbook": object(),
+        "textbook_chapter": object(),
+        "textbook_outline": object(),
+        "memory_search": object(),
+        "memory_get": object(),
+    }
+
+    route = route_tools("请启动编制这本教材", tools)
+
+    assert route.mode == "strict"
+    assert route.required_tools == ["start_pipeline"]
+    assert "start_pipeline" in route.allowed_tools
+    assert "textbook_chapter" not in route.allowed_tools
+
+
 def test_tool_router_keeps_general_tasks_free_not_strict():
     tools = {"read": object(), "bash": object(), "knowledge_query": object()}
 

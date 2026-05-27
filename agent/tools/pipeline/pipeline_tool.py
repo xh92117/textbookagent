@@ -12,8 +12,9 @@ class StartPipeline(BaseTool):
     description: str = (
         "Start the textbook generation pipeline. This tool launches a multi-agent pipeline "
         "that automatically generates a complete textbook with outline, chapters, review, and revision. "
-        "Use this tool when the user asks to generate, write, or create a textbook or teaching material. "
-        "The pipeline runs asynchronously in the background."
+        "Use this tool only when the user explicitly asks to start the full automatic compilation pipeline, "
+        "one-click compile the whole textbook, or invokes a pipeline/start skill. Do not use it for ordinary "
+        "textbook creation, outline editing, or single-chapter writing. The pipeline runs asynchronously in the background."
     )
 
     params: dict = {
@@ -54,6 +55,13 @@ class StartPipeline(BaseTool):
             "research_evidence": {
                 "type": "string",
                 "description": "Optional compact Web Evidence Pack created with the multi-search-engine skill and web_fetch before starting the pipeline."
+            },
+            "confirm_pipeline_risk": {
+                "type": "boolean",
+                "description": (
+                    "Must be true only after the assistant has explained that automatic pipeline compilation quality is "
+                    "not controlled and can be affected by context, and the user explicitly agrees to start it."
+                )
             }
         },
         "required": []
@@ -75,6 +83,12 @@ class StartPipeline(BaseTool):
 
             bridge = get_bridge()
             research_evidence = args.get("research_evidence", "")
+            if args.get("confirm_pipeline_risk") is not True:
+                return ToolResult.fail(
+                    "confirm_pipeline_risk is required before starting the pipeline. "
+                    "Explain to the user that automatic compilation quality is not controlled and can be affected by context, "
+                    "then ask them to reply with an explicit phrase such as '同意启动编制' before calling start_pipeline again."
+                )
 
             title = args.get("title", "").strip()
             book_id = args.get("book_id", "").strip()

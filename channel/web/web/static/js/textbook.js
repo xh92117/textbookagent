@@ -144,7 +144,17 @@ function stopCurrentChat() {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({session_id: chatSessionId})
     }).catch(function() {});
-    showToast('对话已暂停');
+    cancelCurrentPipeline();
+    showToast('已请求停止对话和教材编制管线');
+}
+
+function cancelCurrentPipeline() {
+    if (!currentBookId) return;
+    fetch(API_BASE + '/api/textbook/' + currentBookId + '/pipeline', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'cancel'})
+    }).catch(function() {});
 }
 
 var EMOJIS = ['📖','🐍','🌳','🤖','💡','🔬','📊','🎯','🧮','📐','🌍','🎨'];
@@ -686,12 +696,12 @@ function handlePipelineEvent(d, bookId) {
 
 function startPipelineForCurrentBook() {
     if (!currentBookId) { alert('请先选择一本教材'); return; }
-    startPipeline(currentBookId);
+    navigateToChat('请准备启动编制这本教材。请先说明自动编制管线的风险；如果我确认，请让我回复“同意启动编制”后再启动。');
 }
 
 function startPipelineForChapter(chapterNum) {
     if (!currentBookId) { alert('请先选择一本教材'); return; }
-    startPipeline(currentBookId);
+    navigateToChat('请编写第' + chapterNum + '章，只写这一章，不要启动整本教材自动编制管线。');
 }
 
 async function loadExportChapters(bookId) {
