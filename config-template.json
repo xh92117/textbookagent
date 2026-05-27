@@ -1,5 +1,5 @@
 {
-  "channel_type": "weixin",
+  "channel_type": "web",
   "model": "deepseek-v4-flash",
   "bot_type": "deepseek",
   "review_model": "deepseek-v4-flash",

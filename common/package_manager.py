@@ -1,17 +1,18 @@
+import subprocess
+import sys
 import time
-
-import pip
-from pip._internal import main as pipmain
 
 from common.log import _reset_logger, logger
 
 
 def install(package):
-    pipmain(["install", package])
+    logger.info(f"Installing package into current Python environment: {sys.executable}")
+    subprocess.run([sys.executable, "-m", "pip", "install", package], check=True)
 
 
 def install_requirements(file):
-    pipmain(["install", "-r", file, "--upgrade"])
+    logger.info(f"Installing requirements into current Python environment: {sys.executable}")
+    subprocess.run([sys.executable, "-m", "pip", "install", "-r", file, "--upgrade"], check=True)
     _reset_logger(logger)
 
 

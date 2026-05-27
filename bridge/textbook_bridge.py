@@ -384,8 +384,135 @@ class TextbookBridge:
     def _load_config(self, book_id):
         path = self._config_path(book_id)
         if os.path.exists(path):
-            return TextbookConfig.load(path)
-        return None
+            config = TextbookConfig.load(path)
+            return self._normalize_config_id(config, book_id, path)
+        return self._recover_orphan_textbook_config(book_id)
+
+    def _normalize_config_id(self, config, folder_id, config_path=None):
+        if not config or not folder_id:
+            return config
+        if config.id != folder_id:
+            logger.warning(
+                f"[TextbookBridge] Textbook config id '{config.id}' does not match "
+                f"folder '{folder_id}', using folder id"
+            )
+            config.id = folder_id
+            config.updated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+            if config_path:
+                try:
+                    config.save(config_path)
+                except Exception as exc:
+                    logger.warning(
+                        f"[TextbookBridge] Failed to persist normalized textbook id "
+                        f"for {folder_id}: {exc}"
+                    )
+        return config
+
+    def _recover_orphan_textbook_config(self, book_id):
+        book_dir = self._book_dir(book_id)
+        if not self._looks_like_textbook_dir(book_dir):
+            return None
+        outline = self._read_textbook_outline_candidate(book_dir)
+        title = self._infer_textbook_title(book_id, outline)
+        total_chapters = self._infer_total_chapters(book_dir, outline)
+        config = TextbookConfig(
+            id=book_id,
+            title=title,
+            subject="",
+            target_audience="",
+            level="",
+            total_chapters=total_chapters,
+            chapter_word_count=5000,
+            style="学术",
+            status="planning",
+        )
+        try:
+            config.save(self._config_path(book_id))
+            logger.info(f"[TextbookBridge] Recovered missing textbook.json for {book_id}")
+        except Exception as exc:
+            logger.warning(f"[TextbookBridge] Failed to recover textbook config for {book_id}: {exc}")
+        return config
+
+    def _looks_like_textbook_dir(self, book_dir):
+        if not os.path.isdir(book_dir):
+            return False
+        signals = [
+            os.path.join(book_dir, "outline", "outline.md"),
+            os.path.join(book_dir, "outline", "terminology.md"),
+            os.path.join(book_dir, "state", "progress.md"),
+            os.path.join(book_dir, "state", "status.json"),
+        ]
+        if any(os.path.exists(path) for path in signals):
+            return True
+        chapters_dir = os.path.join(book_dir, "chapters")
+        if os.path.isdir(chapters_dir):
+            return any(
+                re.match(r"^chapter_0*\d+\.md$", filename, re.IGNORECASE)
+                for filename in os.listdir(chapters_dir)
+            )
+        return False
+
+    def _read_textbook_outline_candidate(self, book_dir):
+        path = os.path.join(book_dir, "outline", "outline.md")
+        if not os.path.exists(path):
+            return ""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception:
+            return ""
+
+    def _infer_textbook_title(self, book_id, outline):
+        for line in (outline or "").splitlines():
+            text = line.strip()
+            if text.startswith("#"):
+                title = text.lstrip("#").strip()
+                if title:
+                    return title[:80]
+        return book_id
+
+    def _infer_total_chapters(self, book_dir, outline):
+        chapter_numbers = set()
+        text = outline or ""
+        for match in re.finditer(r"第\s*([一二三四五六七八九十百零〇\d]+)\s*[章节]", text):
+            chapter_num = self._parse_chapter_number_token(match.group(1))
+            if chapter_num:
+                chapter_numbers.add(chapter_num)
+        for match in re.finditer(r"chapter\s+(\d+)", text, re.IGNORECASE):
+            chapter_numbers.add(int(match.group(1)))
+        chapters_dir = os.path.join(book_dir, "chapters")
+        if os.path.isdir(chapters_dir):
+            for filename in os.listdir(chapters_dir):
+                match = re.match(r"^chapter_0*(\d+)\.md$", filename, re.IGNORECASE)
+                if match:
+                    chapter_numbers.add(int(match.group(1)))
+        return max(chapter_numbers) if chapter_numbers else 0
+
+    @staticmethod
+    def _parse_chapter_number_token(token):
+        token = str(token or "").strip()
+        if not token:
+            return 0
+        if token.isdigit():
+            return int(token)
+        digits = {"零": 0, "〇": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+        if token == "十":
+            return 10
+        if "百" in token:
+            left, _, right = token.partition("百")
+            hundreds = digits.get(left, 1) if left else 1
+            return hundreds * 100 + TextbookBridge._parse_chapter_number_token(right)
+        if "十" in token:
+            left, _, right = token.partition("十")
+            tens = digits.get(left, 1) if left else 1
+            ones = digits.get(right, 0) if right else 0
+            return tens * 10 + ones
+        total = 0
+        for char in token:
+            if char not in digits:
+                return 0
+            total = total * 10 + digits[char]
+        return total
 
     def _save_config(self, config):
         book_dir = self._book_dir(config.id)
@@ -444,8 +571,14 @@ class TextbookBridge:
             config_path = os.path.join(self.data_dir, name, "textbook.json")
             if os.path.exists(config_path):
                 config = TextbookConfig.load(config_path)
+                config = self._normalize_config_id(config, name, config_path)
                 textbooks.append(config)
                 self.textbooks[config.id] = config
+            else:
+                config = self._recover_orphan_textbook_config(name)
+                if config:
+                    textbooks.append(config)
+                    self.textbooks[config.id] = config
         return textbooks
 
     def list_textbook_cards(self):

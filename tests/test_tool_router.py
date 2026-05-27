@@ -48,6 +48,28 @@ def test_tool_router_marks_textbook_writing_as_strict_with_required_tool():
     assert "Strict required tools" in route.prompt
 
 
+def test_tool_router_routes_textbook_project_creation_to_create_textbook():
+    tools = {
+        "create_textbook": object(),
+        "start_pipeline": object(),
+        "textbook_chapter": object(),
+        "write": object(),
+        "edit": object(),
+        "bash": object(),
+        "memory_search": object(),
+        "memory_get": object(),
+    }
+
+    route = route_tools("请创建教材项目《机器学习导论》", tools)
+
+    assert route.mode == "strict"
+    assert route.required_tools == ["create_textbook"]
+    assert "create_textbook" in route.allowed_tools
+    assert "textbook_chapter" not in route.allowed_tools
+    assert "write" in route.blocked_tools
+    assert "edit" in route.blocked_tools
+
+
 def test_tool_router_keeps_general_tasks_free_not_strict():
     tools = {"read": object(), "bash": object(), "knowledge_query": object()}
 

@@ -100,6 +100,44 @@ def test_get_textbook_from_disk():
         assert loaded is not None
         assert loaded.title == "测试教材"
 
+def test_list_textbooks_uses_directory_id_when_config_id_mismatches():
+    with tempfile.TemporaryDirectory() as tmp:
+        folder_id = "textbook_202605270001"
+        book_dir = os.path.join(tmp, folder_id)
+        os.makedirs(book_dir)
+        config = _make_config()
+        config.id = "tb_wrong"
+        config.save(os.path.join(book_dir, "textbook.json"))
+
+        bridge = _make_bridge(tmp)
+        books = bridge.list_textbooks()
+
+        assert len(books) == 1
+        assert books[0].id == folder_id
+        assert bridge.get_textbook(folder_id) is not None
+        assert bridge.get_textbook("tb_wrong") is None
+
+
+def test_list_textbooks_recovers_orphan_textbook_directory_without_config():
+    with tempfile.TemporaryDirectory() as tmp:
+        folder_id = "textbook_202605270002"
+        outline_dir = os.path.join(tmp, folder_id, "outline")
+        os.makedirs(outline_dir)
+        with open(os.path.join(outline_dir, "outline.md"), "w", encoding="utf-8") as f:
+            f.write("# AI 创建的教材\n\n## 第一章 绪论\n\n## 第二章 方法\n")
+        with open(os.path.join(outline_dir, "terminology.md"), "w", encoding="utf-8") as f:
+            f.write("# Terminology\n\n| 术语 | 解释 |\n")
+
+        bridge = _make_bridge(tmp)
+        books = bridge.list_textbooks()
+
+        assert len(books) == 1
+        assert books[0].id == folder_id
+        assert books[0].title == "AI 创建的教材"
+        assert books[0].total_chapters == 2
+        assert os.path.exists(os.path.join(tmp, folder_id, "textbook.json"))
+        assert bridge.get_textbook(folder_id) is not None
+
 
 def test_update_textbook():
     with tempfile.TemporaryDirectory() as tmp:

@@ -40,6 +40,7 @@ _SIGNIFICANT_TOOLS = {
     "memory_get",
     "memory_search",
     "knowledge_capture",
+    "create_textbook",
     "start_pipeline",
     "pipeline",
 }

@@ -12,6 +12,7 @@ from agent.tools.send.send import Send
 from agent.tools.pipeline.pipeline_tool import StartPipeline
 from agent.tools.knowledge_capture.knowledge_capture import KnowledgeCapture
 from agent.tools.knowledge_query.knowledge_query import KnowledgeQueryTool
+from agent.tools.textbook_create.textbook_create import CreateTextbookTool
 from agent.tools.textbook_chapter.textbook_chapter import TextbookChapterTool
 from agent.tools.textbook_image.textbook_image import TextbookImageTool
 
@@ -142,6 +143,7 @@ __all__ = [
     'StartPipeline',
     'KnowledgeCapture',
     'KnowledgeQueryTool',
+    'CreateTextbookTool',
     'TextbookChapterTool',
     'TextbookImageTool',
     'MemorySearchTool',

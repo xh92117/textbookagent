@@ -2,6 +2,8 @@ import os
 import re
 import json
 import shutil
+import subprocess
+import sys
 import time
 import hashlib
 import zipfile
@@ -797,9 +799,8 @@ class KnowledgeService:
 
     def _extract_doc(self, file_path: str) -> str:
         try:
-            import subprocess
             result = subprocess.run(
-                ["python", "-m", "docx2txt", "convert", file_path, "-"],
+                [sys.executable, "-m", "docx2txt", "convert", file_path, "-"],
                 capture_output=True, text=True, timeout=30
             )
             if result.returncode == 0 and result.stdout.strip():

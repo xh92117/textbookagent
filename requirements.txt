@@ -1,36 +1,25 @@
-aiohttp>=3.8.6,<3.10
-requests>=2.28.2
-chardet>=5.1.0
-Pillow
+# Core dependencies for the default local Web/TextBookAgent workspace.
+# Keep this file conservative: it should install cleanly on Python 3.10+,
+# including Python 3.13/3.14, without compiling old packages from source.
+
+requests>=2.31.0
+chardet>=5.2.0
+python-dotenv>=1.0.0
+PyYAML>=6.0.2
+croniter>=2.0.0
+
+# web.py 0.62 imports the removed stdlib cgi module during build on Python 3.13+.
+# web.py-update provides the same "import web" module with Python 3.13/3.14 support.
 legacy-cgi; python_version >= "3.13"
 web.py; python_version < "3.13"
 web.py-update>=0.75.1; python_version >= "3.13"
-python-dotenv>=1.0.0
-PyYAML>=6.0
-croniter>=2.0.0
-click>=8.0
-qrcode
 
-# wechatcom & wechatmp
-wechatpy
-
-# zhipuai
-zai-sdk
-# tongyi qwen sdk
-dashscope
-
-# feishu
-lark-oapi>=1.5.5
-# dingtalk
-dingtalk_stream
-# wecom bot websocket mode
-websocket-client>=1.4.0
-pycryptodome
-
-python-docx>=1.1.0
-PyMuPDF>=1.24.0
-matplotlib>=3.8.0
-plotly>=5.18.0
-networkx>=3.2
-Pillow>=10.0.0
-playwright>=1.44.0
+# Textbook, knowledge-base, document, and visual asset support.
+Pillow>=10.4.0
+pypdf>=5.0.0
+python-docx>=1.1.2
+PyMuPDF>=1.26.0
+matplotlib>=3.10.0
+networkx>=3.4.0
+openpyxl>=3.1.5
+python-pptx>=1.0.2
