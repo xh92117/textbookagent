@@ -34,23 +34,7 @@ class ToolBudget:
 def default_tool_budget(mode: str, task_type: str) -> ToolBudget:
     normalized_mode = mode or "guided"
     normalized_task = task_type or "general"
-    if normalized_task == "textbook" and normalized_mode == "repair":
-        max_calls = 12
-    elif normalized_task == "textbook" and normalized_mode == "strict":
-        max_calls = 8
-    elif normalized_task == "textbook":
-        max_calls = 10
-    elif normalized_mode == "free":
-        max_calls = 1
-    elif normalized_mode == "strict":
-        max_calls = 5
-    else:
-        max_calls = 6
-    if normalized_task == "research":
-        max_calls = max(max_calls, 10)
-    elif normalized_task in {"frontend", "file_edit"}:
-        max_calls = max(max_calls, 8)
-    return ToolBudget(mode=normalized_mode, task_type=normalized_task, max_calls=max_calls)
+    return ToolBudget(mode=normalized_mode, task_type=normalized_task, max_calls=30)
 
 
 def classify_tool_use(tool_name: str, status: str, repeat_count: int = 0) -> str:

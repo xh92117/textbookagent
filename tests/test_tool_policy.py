@@ -91,7 +91,7 @@ def test_record_tool_metric_event_includes_route_and_repeat_count(monkeypatch):
     assert captured[0]["usefulness_label"] == "waste"
 
 
-def test_record_tool_metric_event_updates_soft_budget(monkeypatch):
+def test_record_tool_metric_event_updates_30_call_soft_budget(monkeypatch):
     captured = []
 
     def fake_record(payload):
@@ -107,11 +107,13 @@ def test_record_tool_metric_event_updates_soft_budget(monkeypatch):
     executor.tool_failure_history = []
     executor.tool_budget = None
 
-    executor._record_tool_metric_event("read", {"path": "a.md"}, {"status": "success", "result": "ok"})
+    for idx in range(30):
+        executor._record_tool_metric_event("read", {"path": f"{idx}.md"}, {"status": "success", "result": "ok"})
     executor._record_tool_metric_event("bash", {"command": "echo ok"}, {"status": "success", "result": "ok"})
 
     assert captured[0]["over_budget"] is False
-    assert captured[1]["over_budget"] is True
+    assert captured[29]["over_budget"] is False
+    assert captured[30]["over_budget"] is True
 
 
 def test_execute_tool_blocks_when_budget_is_exhausted(monkeypatch):

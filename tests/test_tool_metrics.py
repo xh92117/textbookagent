@@ -30,11 +30,12 @@ def test_record_tool_metric_writes_jsonl(tmp_path):
     assert payload["usefulness_label"] == "support"
 
 
-def test_default_tool_budget_is_tighter_for_free_than_guided():
+def test_default_tool_budget_uses_30_call_limit():
     free = default_tool_budget("free", "general")
     guided = default_tool_budget("guided", "frontend")
 
-    assert free.max_calls < guided.max_calls
+    assert free.max_calls == 30
+    assert guided.max_calls == 30
     assert free.mode == "free"
     assert guided.task_type == "frontend"
 
@@ -43,8 +44,8 @@ def test_textbook_repair_budget_allows_read_locate_fix_verify_flow():
     repair = default_tool_budget("repair", "textbook")
     strict = default_tool_budget("strict", "textbook")
 
-    assert repair.max_calls >= 12
-    assert strict.max_calls >= 8
+    assert repair.max_calls == 30
+    assert strict.max_calls == 30
 
 
 def test_tool_budget_tracks_counts_and_soft_excess():
