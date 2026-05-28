@@ -27,3 +27,17 @@ def test_short_term_memory_keeps_continuation_in_same_task(tmp_path):
     boundary = pool.maybe_record_task_boundary("continue")
 
     assert boundary is None
+
+
+def test_short_term_memory_skips_injected_textbook_context_block(tmp_path):
+    pool = ShortTermMemoryPool(str(tmp_path / "system"), session_id="s1")
+    injected = (
+        "[Current textbook id: tb_3df776e0] "
+        "[Current textbook: 土木工程智能体开发设计实务] "
+        "[Canonical chapter directory: C:\\Users\\xh\\textbook_workspace\\textbooks\\tb_3df776e0\\chapters] "
+        "[Tool rule: Use textbook_chapter for chapter read/write/append/replace/encoding validation.]"
+    )
+
+    pool.record_user_goal(injected)
+
+    assert not pool.path.exists()

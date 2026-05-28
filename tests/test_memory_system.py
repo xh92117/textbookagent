@@ -8,6 +8,18 @@ from agent.tools.memory.memory_search import MemorySearchTool
 from agent.tools.write.write import Write
 
 
+class _FailingEmbeddingProvider:
+    @property
+    def dimensions(self):
+        return 1536
+
+    def embed(self, text):
+        raise ValueError("OpenAI API rate limit exceeded")
+
+    def embed_batch(self, texts):
+        raise ValueError("OpenAI API rate limit exceeded")
+
+
 def test_memory_get_reads_workspace_root_and_textbook_files(tmp_path):
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir()
@@ -63,6 +75,66 @@ def test_memory_sync_removes_deleted_textbook_truth_file_index(tmp_path):
     first, second = asyncio.run(run())
     assert any(result.path == "textbooks/tb_demo/state/status.json" for result in first)
     assert not any(result.path == "textbooks/tb_demo/state/status.json" for result in second)
+
+
+def test_memory_sync_skips_process_state_mirror_files(tmp_path):
+    process_dir = tmp_path / "memory" / "processes"
+    process_dir.mkdir(parents=True)
+    (process_dir / "p1_state.md").write_text("old process mirror", encoding="utf-8")
+    (process_dir / "p1.json").write_text(json.dumps({"process_id": "p1", "status": "completed"}), encoding="utf-8")
+
+    async def run():
+        manager = MemoryManager(MemoryConfig(workspace_root=str(tmp_path)), embedding_provider=None)
+        await manager.sync(force=True)
+        results = await manager.search("old process mirror", max_results=5, min_score=0.0)
+        manager.close()
+        return results
+
+    results = asyncio.run(run())
+    assert not any(result.path.endswith("p1_state.md") for result in results)
+
+
+def test_memory_sync_removes_stale_runtime_log_indexes(tmp_path):
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+
+    async def run():
+        manager = MemoryManager(MemoryConfig(workspace_root=str(tmp_path)), embedding_provider=None)
+        await manager.add_memory(
+            "old runtime process mirror",
+            source="memory",
+            path="memory/processes/p1_state.md",
+        )
+        before = await manager.search("runtime process mirror", max_results=5, min_score=0.0)
+        await manager.sync(force=True)
+        after = await manager.search("runtime process mirror", max_results=5, min_score=0.0)
+        manager.close()
+        return before, after
+
+    before, after = asyncio.run(run())
+    assert any(result.path == "memory/processes/p1_state.md" for result in before)
+    assert not any(result.path == "memory/processes/p1_state.md" for result in after)
+
+
+def test_memory_sync_degrades_to_keyword_when_embedding_fails(tmp_path):
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    (memory_dir / "MEMORY.md").write_text("durable review progress memory", encoding="utf-8")
+
+    async def run():
+        manager = MemoryManager(
+            MemoryConfig(workspace_root=str(tmp_path)),
+            embedding_provider=_FailingEmbeddingProvider(),
+        )
+        await manager.sync(force=True)
+        results = await manager.search("review progress", max_results=5, min_score=0.0)
+        embedding_disabled = manager.embedding_provider is None
+        manager.close()
+        return results, embedding_disabled
+
+    results, embedding_disabled = asyncio.run(run())
+    assert embedding_disabled is True
+    assert any("durable review progress" in result.snippet for result in results)
 
 
 def test_memory_sync_indexes_project_profile_files(tmp_path):

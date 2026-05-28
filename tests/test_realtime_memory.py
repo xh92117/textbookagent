@@ -154,6 +154,101 @@ def test_process_memory_does_not_update_after_finish(tmp_path):
     assert before == after
 
 
+def test_process_memory_can_skip_markdown_state_file(tmp_path):
+    recorder = RealtimeMemoryRecorder(str(tmp_path), process_state_files_enabled=False)
+    recorder.start_process("s1", "p1", "start work", channel_type="web")
+
+    process_path = tmp_path / "memory" / "processes" / "p1.json"
+    state_path = tmp_path / "memory" / "processes" / "p1_state.md"
+    index_path = tmp_path / "memory" / "process_index.md"
+
+    assert process_path.exists()
+    assert not state_path.exists()
+    assert "memory/processes/p1.json" in index_path.read_text(encoding="utf-8")
+
+
+def test_process_memory_can_be_disabled(tmp_path):
+    recorder = RealtimeMemoryRecorder(str(tmp_path), process_memory_enabled=False)
+    safe_id = recorder.start_process("s1", "p1", "start work", channel_type="web")
+    recorder.update_process("p1", "tool_start", "read")
+    recorder.finish_process("p1", final_response="done")
+
+    assert safe_id == "p1"
+    assert not list((tmp_path / "memory" / "processes").glob("*.json"))
+    assert not (tmp_path / "memory" / "process_index.md").exists()
+
+
+def test_session_memory_can_be_disabled(tmp_path):
+    recorder = RealtimeMemoryRecorder(str(tmp_path), session_memory_enabled=False)
+    recorder.record_messages("s1", [{"role": "user", "content": "hello"}], channel_type="web")
+
+    assert not list((tmp_path / "memory" / "sessions").glob("*"))
+    assert not (tmp_path / "memory" / "user_profile.json").exists()
+
+
+def test_session_memory_dedupes_repeated_events_before_write(tmp_path):
+    recorder = RealtimeMemoryRecorder(str(tmp_path))
+
+    for _ in range(3):
+        recorder.record_messages("s1", [{"role": "user", "content": "请你继续写第一章"}], channel_type="web")
+
+    raw_path = tmp_path / "memory" / "sessions" / "s1.jsonl"
+    rows = raw_path.read_text(encoding="utf-8").splitlines()
+
+    assert len(rows) == 1
+
+
+def test_user_profile_recent_focus_dedupes_and_respects_limit(tmp_path):
+    recorder = RealtimeMemoryRecorder(str(tmp_path), profile_recent_focus_limit=2)
+
+    recorder.record_messages("s1", [{"role": "user", "content": "请你继续写第一章"}], channel_type="web")
+    recorder.record_messages("s1", [{"role": "user", "content": "请你继续写第一章"}], channel_type="web")
+    recorder.record_messages("s1", [{"role": "user", "content": "请你继续写第二章"}], channel_type="web")
+    recorder.record_messages("s1", [{"role": "user", "content": "请你继续写第三章"}], channel_type="web")
+
+    profile = json.loads((tmp_path / "memory" / "user_profile.json").read_text(encoding="utf-8"))
+    focus_texts = [item["text"] for item in profile["recent_focus"]]
+
+    assert focus_texts == ["请你继续写第二章", "请你继续写第三章"]
+
+
+def test_user_profile_dedupes_normalized_long_term_signals(tmp_path):
+    recorder = RealtimeMemoryRecorder(str(tmp_path))
+
+    recorder.record_messages("s1", [{"role": "user", "content": "请你以后回答要简洁。"}], channel_type="web")
+    recorder.record_messages("s1", [{"role": "user", "content": "请你 以后 回答 要 简洁"}], channel_type="web")
+
+    profile = json.loads((tmp_path / "memory" / "user_profile.json").read_text(encoding="utf-8"))
+    matches = [item for item in profile["preferences"] if "回答" in item and "简洁" in item]
+
+    assert len(matches) == 1
+
+
+def test_user_profile_skips_transient_textbook_chapter_commands(tmp_path):
+    recorder = RealtimeMemoryRecorder(str(tmp_path))
+
+    recorder.record_messages("s1", [{"role": "user", "content": "请你继续写第一章"}], channel_type="web")
+    recorder.record_messages("s1", [{"role": "user", "content": "写第二章"}], channel_type="web")
+
+    profile = json.loads((tmp_path / "memory" / "user_profile.json").read_text(encoding="utf-8"))
+
+    assert profile["preferences"] == []
+    assert profile["goals"] == []
+
+
+def test_process_memory_can_skip_auto_promotion_candidates(tmp_path):
+    recorder = RealtimeMemoryRecorder(str(tmp_path), candidate_auto_record_enabled=False)
+    recorder.start_process(
+        "s1",
+        "p1",
+        "请记住：以后回答记忆系统问题时先区分长期记忆和过程记忆。",
+        channel_type="web",
+    )
+    recorder.finish_process("p1", final_response="done")
+
+    assert not (tmp_path / "memory" / "candidates" / "promotion_candidates.jsonl").exists()
+
+
 def test_legacy_session_memory_compacts_long_session(tmp_path):
     recorder = RealtimeMemoryRecorder(str(tmp_path), max_session_events=5, compact_keep_events=2)
     for idx in range(6):
@@ -204,3 +299,16 @@ def test_error_memory_records_temporal_metadata(tmp_path):
 
     assert payload["temporal"]["scope"] == "historical"
     assert payload["temporal"]["authority"] == "error_log"
+
+
+def test_error_memory_dedupes_repeated_error(tmp_path):
+    recorder = ErrorMemoryRecorder(str(tmp_path))
+
+    first = recorder.record_tool_error("memory_search", "failed")
+    second = recorder.record_tool_error("memory_search", "failed")
+
+    payload = json.loads(first.read_text(encoding="utf-8"))
+    assert first == second
+    assert len(list((tmp_path / "memory" / "errors").glob("*.json"))) == 1
+    assert payload["count"] == 2
+    assert payload["last_seen_at"] >= payload["date"]

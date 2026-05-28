@@ -189,6 +189,17 @@ class MemoryService:
                 )
                 return {"action": action, "code": 200, "message": "success", "payload": result_payload}
 
+            elif action == "cleanup_runtime_memory":
+                result_payload = self.cleanup_runtime_memory(payload or {})
+                return {"action": action, "code": 200, "message": "success", "payload": result_payload}
+
+            elif action == "recent_activity":
+                result_payload = self.recent_activity(
+                    query=payload.get("query", ""),
+                    limit=int(payload.get("limit", 5) or 5),
+                )
+                return {"action": action, "code": 200, "message": "success", "payload": result_payload}
+
             elif action == "health":
                 result_payload = self.health_report()
                 return {"action": action, "code": 200, "message": "success", "payload": result_payload}
@@ -431,6 +442,37 @@ class MemoryService:
             min_lookup_to_keep=min_lookup_to_keep,
             archive_after_days=archive_after_days,
         )
+
+    def cleanup_runtime_memory(self, payload: dict) -> dict:
+        from agent.memory.maintenance import MemoryMaintenance
+
+        result = MemoryMaintenance(
+            self.memory_dir,
+            profile_field_limit=int(payload.get("profile_field_limit", 30) or 30),
+            recent_focus_limit=int(payload.get("recent_focus_limit", 10) or 10),
+            drop_process_state_files=bool(payload.get("drop_process_state_files", False)),
+            run_retention=bool(payload.get("run_retention", True)),
+            process_retention_days=int(payload.get("process_retention_days", 7) or 7),
+            process_max_files=int(payload.get("process_max_files", 60) or 60),
+            session_retention_days=int(payload.get("session_retention_days", 14) or 14),
+            session_max_files=int(payload.get("session_max_files", 80) or 80),
+            error_retention_days=int(payload.get("error_retention_days", 30) or 30),
+            error_max_files=int(payload.get("error_max_files", 80) or 80),
+        ).run()
+        self._append_transaction("cleanup_runtime_memory", "completed", result)
+        return result
+
+    def recent_activity(self, query: str = "", limit: int = 5) -> dict:
+        from agent.memory.recent_activity import RecentActivityMemory
+
+        reader = RecentActivityMemory(self.workspace_root)
+        activities = reader.list_recent(limit=limit)
+        return {
+            "query": query,
+            "total": len(activities),
+            "activities": activities,
+            "answer": reader.answer(query, limit=limit),
+        }
 
     def health_report(self) -> dict:
         from agent.memory.promotion import MemoryPromotionCandidatePool

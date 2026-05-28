@@ -56,12 +56,18 @@ class ChatService:
         process_recorder = None
         try:
             from agent.memory import RealtimeMemoryRecorder
+            from agent.memory.runtime_options import realtime_memory_enabled, realtime_recorder_options
             from common.app_paths import active_workspace, system_dir
-            process_recorder = RealtimeMemoryRecorder(
-                system_dir(),
-                project_workspace=getattr(agent, "workspace_dir", None) or active_workspace(),
-            )
-            process_recorder.start_process(session_id, process_id, query, channel_type=channel_type)
+            from config import conf
+
+            cfg = conf()
+            if realtime_memory_enabled(cfg):
+                process_recorder = RealtimeMemoryRecorder(
+                    system_dir(),
+                    project_workspace=getattr(agent, "workspace_dir", None) or active_workspace(),
+                    **realtime_recorder_options(cfg),
+                )
+                process_recorder.start_process(session_id, process_id, query, channel_type=channel_type)
         except Exception as e:
             logger.debug(f"[ChatService] realtime process memory start skipped: {e}")
 
@@ -398,6 +404,8 @@ class ChatService:
                 f"归档 {payload.get('archived_count', 0)} 条，"
                 f"因常被查阅保留 {payload.get('kept_by_lookup_count', 0)} 条。"
             )
+        if action == "recent_activity":
+            return payload.get("answer", "No recent process activity found.")
         if action == "resolve_conflict":
             return f"已处理记忆冲突：保留 {payload.get('kept_id', '')}，拒绝 {payload.get('rejected_id', '')}。"
         if action == "rollback_version":

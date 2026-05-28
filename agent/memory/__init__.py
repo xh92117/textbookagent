@@ -18,6 +18,11 @@ from agent.memory.handoff import HandoffService, update_session_handoff_after_pe
 from agent.memory.short_term import ShortTermMemoryPool
 from agent.memory.promotion import MemoryPromotionCandidatePool
 from agent.memory.error_memory import ErrorMemoryRecorder
+from agent.memory.retention import MemoryRetentionPolicy
+from agent.memory.maintenance import MemoryMaintenance
+from agent.memory.index_policy import MemoryIndexPolicy
+from agent.memory.write_router import MemoryWriteRouter
+from agent.memory.recent_activity import RecentActivityMemory
 from agent.memory.error_capture import (
     build_error_memory_context,
     is_user_correction,
@@ -44,6 +49,11 @@ __all__ = [
     'ShortTermMemoryPool',
     'MemoryPromotionCandidatePool',
     'ErrorMemoryRecorder',
+    'MemoryRetentionPolicy',
+    'MemoryMaintenance',
+    'MemoryIndexPolicy',
+    'MemoryWriteRouter',
+    'RecentActivityMemory',
     'build_error_memory_context',
     'is_user_correction',
     'record_agent_error',

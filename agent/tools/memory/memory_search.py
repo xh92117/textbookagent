@@ -89,6 +89,10 @@ class MemorySearchTool(BaseTool):
             return ToolResult.fail("Error: query parameter is required")
         
         try:
+            activity_answer = self._build_recent_activity_answer(query, max_results)
+            if activity_answer:
+                return ToolResult.success(activity_answer)
+
             graph_plan = self._build_graph_query_plan(query)
             search_query = graph_plan.get("search_query", query) if graph_plan else query
             search_coro = self.memory_manager.search(
@@ -194,6 +198,20 @@ class MemorySearchTool(BaseTool):
             
         except Exception as e:
             return ToolResult.fail(f"Error searching memory: {str(e)}")
+
+    def _build_recent_activity_answer(self, query: str, max_results: int = 5) -> str:
+        if not self.system_root:
+            return ""
+        try:
+            from agent.memory.recent_activity import RecentActivityMemory
+
+            if not RecentActivityMemory.is_activity_query(query):
+                return ""
+            reader = RecentActivityMemory(self.system_root)
+            answer = reader.answer(query, limit=max_results or 5)
+            return answer if "Recent activity" in answer else ""
+        except Exception:
+            return ""
 
     def _build_graph_no_result_fallback(
         self,

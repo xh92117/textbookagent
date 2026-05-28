@@ -334,8 +334,9 @@ class MemoryGraphService:
 
     @staticmethod
     def _should_skip_path(path: Path) -> bool:
-        text = path.as_posix().lower()
-        return any(part in text for part in ("/graph/", "/versions/", "/cache/", "/sessions_archive/"))
+        from agent.memory.index_policy import MemoryIndexPolicy
+
+        return not MemoryIndexPolicy.should_index_path(path)
 
     def _source_record(self, path: Path) -> Dict[str, Any]:
         stat = path.stat()

@@ -53,6 +53,10 @@ class ShortTermMemoryPool:
         self._cleanup_old_files()
 
     def record_user_goal(self, text: str, channel_type: str = "") -> None:
+        from agent.memory.write_router import MemoryWriteRouter
+
+        if MemoryWriteRouter.is_injected_context_block(text):
+            return
         payload = self._load()
         payload["session_id"] = self.session_id
         if channel_type:

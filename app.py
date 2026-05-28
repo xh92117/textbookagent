@@ -292,6 +292,19 @@ def _sync_builtin_skills():
     return
 
 
+def _schedule_startup_memory_cleanup():
+    def _run_cleanup():
+        try:
+            from common.app_paths import ensure_system_dir
+            from agent.memory.startup_cleanup import run_startup_memory_cleanup
+
+            run_startup_memory_cleanup(ensure_system_dir(), conf())
+        except Exception as e:
+            logger.warning(f"[App] Startup memory cleanup skipped: {e}")
+
+    threading.Thread(target=_run_cleanup, daemon=True).start()
+
+
 def run():
     global _channel_mgr
     try:
@@ -329,6 +342,10 @@ def run():
 
         # Sync builtin skills to workspace before channels start
         _sync_builtin_skills()
+
+        # Weekly maintenance runs when the user starts the app, off the
+        # critical path so channel startup stays responsive.
+        _schedule_startup_memory_cleanup()
 
         # Kick off MCP server loading in the background so first-message
         # latency isn't dominated by npx package downloads.

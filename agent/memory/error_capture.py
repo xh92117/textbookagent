@@ -86,8 +86,9 @@ def record_user_correction_if_needed(text: str, metadata: Dict[str, Any] | None 
     try:
         from common.app_paths import system_dir
         from agent.memory import ErrorMemoryRecorder
+        from config import conf
 
-        ErrorMemoryRecorder(system_dir()).record_user_correction(
+        ErrorMemoryRecorder(system_dir(), max_files=int(conf().get("memory_error_max_files", 80) or 80)).record_user_correction(
             _clip(text, 2000),
             metadata or {},
         )
@@ -106,8 +107,9 @@ def record_tool_error(tool_name: str, detail: Any, metadata: Dict[str, Any] | No
     try:
         from common.app_paths import system_dir
         from agent.memory import ErrorMemoryRecorder
+        from config import conf
 
-        ErrorMemoryRecorder(system_dir()).record_tool_error(
+        ErrorMemoryRecorder(system_dir(), max_files=int(conf().get("memory_error_max_files", 80) or 80)).record_tool_error(
             tool_name or "unknown_tool",
             _stringify(detail, 4000),
             metadata,
@@ -124,8 +126,9 @@ def record_agent_error(detail: Any, metadata: Dict[str, Any] | None = None) -> N
     try:
         from common.app_paths import system_dir
         from agent.memory import ErrorMemoryRecorder
+        from config import conf
 
-        ErrorMemoryRecorder(system_dir()).record_agent_error(
+        ErrorMemoryRecorder(system_dir(), max_files=int(conf().get("memory_error_max_files", 80) or 80)).record_agent_error(
             _stringify(detail, 4000),
             metadata,
         )

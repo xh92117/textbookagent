@@ -16,6 +16,14 @@ class MemoryIntentRouter:
             return None
         lower = normalized.lower()
 
+        try:
+            from agent.memory.recent_activity import RecentActivityMemory
+
+            if RecentActivityMemory.is_activity_query(normalized):
+                return {"action": "recent_activity", "payload": {"query": normalized}}
+        except Exception:
+            pass
+
         recent_correction = MemoryIntentRouter._recent_memory_correction(normalized, lower)
         if recent_correction:
             return recent_correction

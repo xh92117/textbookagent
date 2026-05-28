@@ -168,7 +168,8 @@ class MemoryManager:
                 logger.info(f"[MemoryManager] Vector search found {len(vector_results)} results for query: {query}")
             except Exception as e:
                 from common.log import logger
-                logger.warning(f"[MemoryManager] Vector search failed: {e}")
+                logger.warning(f"[MemoryManager] Vector search failed; disabling embedding for this session: {e}")
+                self.embedding_provider = None
         
         # Perform keyword search
         keyword_results = self.storage.search_keyword(
@@ -230,11 +231,7 @@ class MemoryManager:
         
         # Generate embeddings (if provider available)
         texts = [chunk.text for chunk in chunks]
-        if self.embedding_provider:
-            embeddings = self.embedding_provider.embed_batch(texts)
-        else:
-            # No embeddings, just use None
-            embeddings = [None] * len(texts)
+        embeddings = self._embed_batch_or_disable(texts)
         
         # Create memory chunks
         memory_chunks = []
@@ -281,10 +278,10 @@ class MemoryManager:
         self.storage.delete_windows_style_paths()
         seen_paths = set()
         
-        # Scan system MEMORY.md. Project-level MEMORY.md is indexed below as a
+                # Scan system MEMORY.md. Project-level MEMORY.md is indexed below as a
         # workspace profile, not as the agent's durable memory store.
         memory_file = memory_dir / "MEMORY.md"
-        if memory_file.exists():
+        if memory_file.exists() and self._should_index_file(memory_file):
             rel = await self._sync_file(memory_file, "memory", "shared", None)
             if rel:
                 seen_paths.add(rel)
@@ -293,6 +290,8 @@ class MemoryManager:
         if memory_dir.exists():
             for file_path in memory_dir.rglob("*.md"):
                 if file_path == memory_file:
+                    continue
+                if not self._should_index_file(file_path):
                     continue
                 # Skip hidden directories (e.g. .dreams/)
                 if any(part.startswith('.') for part in file_path.relative_to(workspace_dir).parts):
@@ -334,7 +333,7 @@ class MemoryManager:
         # startup memory and remain available later through memory_search/get.
         for root_name in ("AGENT.md", "USER.md", "RULE.md", "MEMORY.md"):
             root_file = Path(project_workspace_dir) / root_name
-            if root_file.exists() and root_file.is_file():
+            if root_file.exists() and root_file.is_file() and self._should_index_file(root_file):
                 rel = await self._sync_file(root_file, "workspace_profile", "shared", None)
                 if rel:
                     seen_paths.add(rel)
@@ -345,6 +344,8 @@ class MemoryManager:
             knowledge_dir = Path(project_workspace_dir) / "knowledge"
             if knowledge_dir.exists():
                 for file_path in knowledge_dir.rglob("*.md"):
+                    if not self._should_index_file(file_path):
+                        continue
                     rel = await self._sync_file(file_path, "knowledge", "shared", None)
                     if rel:
                         seen_paths.add(rel)
@@ -375,6 +376,12 @@ class MemoryManager:
             # Keep machine state, outline, chapter metadata and chapter bodies
             # searchable; binary media and snapshots stay out of the memory DB.
             yield file_path
+
+    @staticmethod
+    def _should_index_file(file_path: Path) -> bool:
+        from agent.memory.index_policy import MemoryIndexPolicy
+
+        return MemoryIndexPolicy.should_index_path(file_path)
     
     async def _sync_file(
         self,
@@ -411,10 +418,7 @@ class MemoryManager:
             return rel_path
         
         texts = [chunk.text for chunk in chunks]
-        if self.embedding_provider:
-            embeddings = self.embedding_provider.embed_batch(texts)
-        else:
-            embeddings = [None] * len(texts)
+        embeddings = self._embed_batch_or_disable(texts)
         
         # Create memory chunks
         memory_chunks = []
@@ -455,6 +459,17 @@ class MemoryManager:
         )
         return rel_path
 
+    def _embed_batch_or_disable(self, texts: List[str]) -> List[Optional[List[float]]]:
+        if not self.embedding_provider:
+            return [None] * len(texts)
+        try:
+            return self.embedding_provider.embed_batch(texts)
+        except Exception as e:
+            from common.log import logger
+            logger.warning(f"[MemoryManager] Embedding batch failed; disabling embedding for this session: {e}")
+            self.embedding_provider = None
+            return [None] * len(texts)
+
     def _cleanup_stale_file_indexes(self, seen_paths: set):
         """Remove stale file-backed memory rows whose source file is no longer present."""
         stale = []
@@ -474,14 +489,22 @@ class MemoryManager:
             return True
         if source != "memory":
             return False
-        lower = (path or "").lower()
-        if lower == "memory/memory.md" or lower == "memory.md":
+        normalized = (path or "").replace("\\", "/").lower().lstrip("/")
+        runtime_prefixes = (
+            "memory/candidates/",
+            "memory/errors/",
+            "memory/processes/",
+            "memory/quarantine/",
+            "memory/sessions/",
+            "memory/short_term/",
+            "memory/transactions/",
+            "memory/usage/",
+        )
+        if normalized.startswith(runtime_prefixes):
             return True
-        if lower.startswith(("memory/processes/", "memory/sessions/", "memory/errors/", "memory/short_term/", "memory/candidates/")):
-            return True
-        if MemoryManager._is_dated_memory_path(lower):
-            return True
-        return False
+        from agent.memory.index_policy import MemoryIndexPolicy
+
+        return MemoryIndexPolicy.should_index_path(path)
     
     def flush_memory(
         self,

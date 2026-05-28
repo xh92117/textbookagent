@@ -39,6 +39,21 @@ class RealtimeMemoryRecorder:
         project_workspace: Optional[str] = None,
         max_session_events: int = 80,
         compact_keep_events: int = 30,
+        process_memory_enabled: bool = True,
+        session_memory_enabled: bool = True,
+        process_state_files_enabled: bool = True,
+        candidate_auto_record_enabled: bool = True,
+        retention_enabled: bool = False,
+        process_retention_days: int = 7,
+        process_max_files: int = 60,
+        session_retention_days: int = 14,
+        session_max_files: int = 80,
+        error_retention_days: int = 30,
+        error_max_files: int = 80,
+        retention_interval_hours: int = 24,
+        session_dedupe_window: int = 20,
+        profile_recent_focus_limit: int = 10,
+        profile_field_limit: int = 30,
     ):
         self.workspace_root = Path(workspace_root)
         self.project_workspace = Path(project_workspace) if project_workspace else None
@@ -47,8 +62,25 @@ class RealtimeMemoryRecorder:
         self.process_dir = self.memory_dir / "processes"
         self.max_session_events = max_session_events
         self.compact_keep_events = compact_keep_events
+        self.process_memory_enabled = bool(process_memory_enabled)
+        self.session_memory_enabled = bool(session_memory_enabled)
+        self.process_state_files_enabled = bool(process_state_files_enabled)
+        self.candidate_auto_record_enabled = bool(candidate_auto_record_enabled)
+        self.session_dedupe_window = max(0, int(session_dedupe_window or 0))
+        self.profile_recent_focus_limit = max(1, int(profile_recent_focus_limit or 10))
+        self.profile_field_limit = max(1, int(profile_field_limit or 30))
         self.session_dir.mkdir(parents=True, exist_ok=True)
         self.process_dir.mkdir(parents=True, exist_ok=True)
+        if retention_enabled:
+            self._run_retention(
+                process_retention_days=process_retention_days,
+                process_max_files=process_max_files,
+                session_retention_days=session_retention_days,
+                session_max_files=session_max_files,
+                error_retention_days=error_retention_days,
+                error_max_files=error_max_files,
+                retention_interval_hours=retention_interval_hours,
+            )
 
     def start_process(
         self,
@@ -58,6 +90,8 @@ class RealtimeMemoryRecorder:
         channel_type: str = "",
     ) -> str:
         safe_id = self._safe_session_id(process_id)
+        if not self.process_memory_enabled:
+            return safe_id
         now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         payload = {
             "version": "process-memory-v1",
@@ -81,6 +115,8 @@ class RealtimeMemoryRecorder:
         return safe_id
 
     def update_process(self, process_id: str, event_type: str, summary: str = "", **extra) -> None:
+        if not self.process_memory_enabled:
+            return
         safe_id = self._safe_session_id(process_id)
         payload = self._read_process(safe_id)
         if not payload or payload.get("status") != "running":
@@ -106,6 +142,8 @@ class RealtimeMemoryRecorder:
         status: str = "completed",
         error: str = "",
     ) -> None:
+        if not self.process_memory_enabled:
+            return
         safe_id = self._safe_session_id(process_id)
         payload = self._read_process(safe_id)
         if not payload:
@@ -182,6 +220,8 @@ class RealtimeMemoryRecorder:
     def _write_process(self, safe_id: str, payload: Dict[str, Any]) -> None:
         json_path = self.process_dir / f"{safe_id}.json"
         json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        if not self.process_state_files_enabled:
+            return
         lines = [
             f"# Process Memory: {payload.get('process_id', safe_id)}",
             "",
@@ -209,8 +249,13 @@ class RealtimeMemoryRecorder:
     def _write_process_index(self, process_id: str, safe_id: str, payload: Dict[str, Any]) -> None:
         index_path = self.memory_dir / "process_index.md"
         index = self._load_process_index(index_path)
+        state_path = (
+            f"memory/processes/{safe_id}_state.md"
+            if self.process_state_files_enabled
+            else f"memory/processes/{safe_id}.json"
+        )
         index[process_id] = {
-            "state_path": f"memory/processes/{safe_id}_state.md",
+            "state_path": state_path,
             "status": payload.get("status", ""),
             "updated_at": payload.get("updated_at", ""),
             "summary": self._first_line(payload.get("user_message", "")),
@@ -254,7 +299,12 @@ class RealtimeMemoryRecorder:
         events: List[Dict[str, Any]],
         channel_type: str = "",
     ) -> None:
+        if not self.session_memory_enabled:
+            return
         safe_id = self._safe_session_id(session_id)
+        events = self._dedupe_session_events(safe_id, events)
+        if not events:
+            return
         path = self.session_dir / f"{safe_id}.jsonl"
         with path.open("a", encoding="utf-8") as f:
             for event in events:
@@ -335,21 +385,27 @@ class RealtimeMemoryRecorder:
             if event.get("role") != "user":
                 continue
             text = event.get("content", "")
-            self._collect_profile_signal(profile, "preferences", text, [
-                r"(?:\u6211\u5e0c\u671b|\u6211\u9700\u8981|\u6211\u60f3\u8981|\u8bf7\u4f60|\u4ee5\u540e)([^\u3002\uff01\uff1f\n]{4,80})",
-                r"(?:\u4e0d\u8981|\u4e0d\u9700\u8981|\u907f\u514d)([^\u3002\uff01\uff1f\n]{4,80})",
-                r"(?:\u504f\u597d|\u559c\u6b22|\u66f4\u503e\u5411\u4e8e)([^\u3002\uff01\uff1f\n]{4,80})",
-            ])
-            self._collect_profile_signal(profile, "goals", text, [
-                r"(?:\u76ee\u6807\u662f|\u76ee\u7684\u662f|\u6211\u60f3\u5b9e\u73b0)([^\u3002\uff01\uff1f\n]{4,100})",
-            ])
+            if not self._is_transient_profile_request(text):
+                self._collect_profile_signal(profile, "preferences", text, [
+                    r"(?:\u6211\u5e0c\u671b|\u6211\u9700\u8981|\u6211\u60f3\u8981|\u8bf7\u4f60|\u4ee5\u540e)([^\u3002\uff01\uff1f\n]{4,80})",
+                    r"(?:\u4e0d\u8981|\u4e0d\u9700\u8981|\u907f\u514d)([^\u3002\uff01\uff1f\n]{4,80})",
+                    r"(?:\u504f\u597d|\u559c\u6b22|\u66f4\u503e\u5411\u4e8e)([^\u3002\uff01\uff1f\n]{4,80})",
+                ], self.profile_field_limit)
+                self._collect_profile_signal(profile, "goals", text, [
+                    r"(?:\u76ee\u6807\u662f|\u76ee\u7684\u662f|\u6211\u60f3\u5b9e\u73b0)([^\u3002\uff01\uff1f\n]{4,100})",
+                ], self.profile_field_limit)
             if "\u6559\u6750" in text or "\u667a\u80fd\u4f53" in text or "\u77e5\u8bc6\u5e93" in text:
-                self._append_unique(profile, "projects", "\u6559\u6750\u667a\u80fd\u4f53\u5f00\u53d1\u4e0e\u77e5\u8bc6\u5e93\u589e\u5f3a")
+                self._append_unique(profile, "projects", "\u6559\u6750\u667a\u80fd\u4f53\u5f00\u53d1\u4e0e\u77e5\u8bc6\u5e93\u589e\u5f3a", self.profile_field_limit)
             focus = self._first_line(text, 120)
             if focus:
                 recent = profile.setdefault("recent_focus", [])
+                normalized_focus = self._normalize_for_dedupe(focus)
+                recent = [
+                    item for item in recent
+                    if self._normalize_for_dedupe(str(item.get("text", ""))) != normalized_focus
+                ]
                 recent.append({"session_id": session_id, "text": focus, "time": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")})
-                profile["recent_focus"] = recent[-20:]
+                profile["recent_focus"] = recent[-self.profile_recent_focus_limit:]
         profile["updated_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         profile_path.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
         self._write_user_profile_md(profile)
@@ -364,9 +420,36 @@ class RealtimeMemoryRecorder:
             return
 
     def _record_promotion_candidate(self, payload: Dict[str, Any]) -> None:
+        if not self.candidate_auto_record_enabled:
+            return
         try:
             from agent.memory.promotion import MemoryPromotionCandidatePool
             MemoryPromotionCandidatePool(self.memory_dir).record_from_process(payload)
+        except Exception:
+            return
+
+    def _run_retention(
+        self,
+        process_retention_days: int,
+        process_max_files: int,
+        session_retention_days: int,
+        session_max_files: int,
+        error_retention_days: int,
+        error_max_files: int,
+        retention_interval_hours: int,
+    ) -> None:
+        try:
+            from agent.memory.retention import MemoryRetentionPolicy
+
+            MemoryRetentionPolicy(
+                self.memory_dir,
+                process_retention_days=process_retention_days,
+                process_max_files=process_max_files,
+                session_retention_days=session_retention_days,
+                session_max_files=session_max_files,
+                error_retention_days=error_retention_days,
+                error_max_files=error_max_files,
+            ).run_if_due(retention_interval_hours)
         except Exception:
             return
 
@@ -419,7 +502,7 @@ class RealtimeMemoryRecorder:
             for value in values:
                 value = self._clip(str(value), 160)
                 if value:
-                    self._append_unique(profile, key, value)
+                    self._append_unique(profile, key, value, self.profile_field_limit)
         profile["updated_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         profile_path.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
         self._write_user_profile_md(profile)
@@ -436,19 +519,32 @@ class RealtimeMemoryRecorder:
         (self.memory_dir / "user_profile.md").write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
 
     @staticmethod
-    def _collect_profile_signal(profile: Dict[str, Any], key: str, text: str, patterns: Iterable[str]) -> None:
+    def _collect_profile_signal(profile: Dict[str, Any], key: str, text: str, patterns: Iterable[str], limit: int = 30) -> None:
         for pattern in patterns:
             for match in re.finditer(pattern, text):
                 value = re.sub(r"\s+", " ", match.group(0)).strip()
                 if 4 <= len(value) <= 120:
-                    RealtimeMemoryRecorder._append_unique(profile, key, value)
+                    RealtimeMemoryRecorder._append_unique(profile, key, value, limit)
 
     @staticmethod
     def _append_unique(profile: Dict[str, Any], key: str, value: str, limit: int = 50) -> None:
         items = profile.setdefault(key, [])
-        if value not in items:
+        normalized = RealtimeMemoryRecorder._normalize_profile_value(value)
+        if normalized and all(RealtimeMemoryRecorder._normalize_profile_value(item) != normalized for item in items):
             items.append(value)
         profile[key] = items[-limit:]
+
+    @staticmethod
+    def _normalize_profile_value(value: str) -> str:
+        from agent.memory.write_router import MemoryWriteRouter
+
+        return MemoryWriteRouter.normalize_profile_value(value)
+
+    @staticmethod
+    def _is_transient_profile_request(text: str) -> bool:
+        from agent.memory.write_router import MemoryWriteRouter
+
+        return not MemoryWriteRouter.route_user_profile_signal(text, source_type="user").should_write
 
     @staticmethod
     def _extract_response_text(response: Any) -> str:
@@ -521,6 +617,39 @@ class RealtimeMemoryRecorder:
             except Exception:
                 continue
         return events
+
+    def _dedupe_session_events(self, safe_id: str, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not self.session_dedupe_window:
+            return events
+        recent_keys = {
+            self._event_dedupe_key(event)
+            for event in self._read_events(safe_id)[-self.session_dedupe_window:]
+        }
+        batch_keys = set()
+        kept = []
+        for event in events:
+            key = self._event_dedupe_key(event)
+            if not key:
+                kept.append(event)
+                continue
+            if key in recent_keys or key in batch_keys:
+                continue
+            batch_keys.add(key)
+            kept.append(event)
+        return kept
+
+    def _event_dedupe_key(self, event: Dict[str, Any]) -> str:
+        role = str(event.get("role", "")).strip().lower()
+        content = self._normalize_for_dedupe(str(event.get("content", "")))
+        if not role or not content:
+            return ""
+        return f"{role}:{content}"
+
+    @staticmethod
+    def _normalize_for_dedupe(text: str) -> str:
+        from agent.memory.write_router import MemoryWriteRouter
+
+        return MemoryWriteRouter.normalize_for_dedupe(text)
 
     @staticmethod
     def _load_json(path: Path, default: Dict[str, Any]) -> Dict[str, Any]:

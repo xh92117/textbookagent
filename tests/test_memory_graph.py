@@ -40,6 +40,21 @@ def test_memory_graph_default_sync_indexes_all_changed_sources(tmp_path):
     assert status["graph_dirty"] is False
 
 
+def test_memory_graph_skips_process_state_mirror_files(tmp_path):
+    process_dir = tmp_path / "system" / "memory" / "processes"
+    process_dir.mkdir(parents=True)
+    (process_dir / "p1_state.md").write_text("old process mirror", encoding="utf-8")
+    (process_dir / "p1.json").write_text(json.dumps({"process_id": "p1", "status": "completed"}), encoding="utf-8")
+
+    service = MemoryGraphService(str(tmp_path / "system"))
+    service.sync_changed()
+    status = service.status()
+
+    assert status["source_count"] == 0
+    context = service.context("old process mirror")
+    assert not any("p1_state.md" in item["source_path"] for item in context["recommended_reads"])
+
+
 def test_memory_graph_updates_modified_source_without_duplicate_nodes(tmp_path):
     memory_dir = tmp_path / "system" / "memory"
     memory_dir.mkdir(parents=True)
