@@ -859,7 +859,10 @@ def compact_current_tool_result_content(
         parts.extend(["head excerpt:", head[:6000]])
         if tail:
             parts.extend(["tail excerpt:", tail[:3000]])
-        return "\n".join(parts)[:max_chars]
+        rendered = "\n".join(parts)[:max_chars]
+        if len(content) <= max_chars and len(rendered) >= len(content):
+            return content
+        return rendered
 
     if tool_name == "web_fetch":
         title = _extract_title_from_tool_result(content)
@@ -873,7 +876,10 @@ def compact_current_tool_result_content(
             f"original_chars: {len(content)}",
             summary,
         ]
-        return "\n".join(part for part in parts if part)[:max_chars]
+        rendered = "\n".join(part for part in parts if part)[:max_chars]
+        if len(content) <= max_chars and len(rendered) >= len(content):
+            return content
+        return rendered
 
     if tool_name == "textbook_chapter":
         return _compact_jsonish_result(
@@ -914,6 +920,94 @@ def compact_current_tool_result_content(
     )[:max_chars]
 
 
+def compact_historical_tool_result_content(
+    content: str,
+    tool_name: str = "",
+    tool_args: dict = None,
+    status: str = "",
+    max_chars: int = 1200,
+) -> str:
+    """Reduce an already-used tool result to durable state, not raw evidence.
+
+    Current-turn tool results may need excerpts so the model can decide the next
+    step. Once they become history, the useful part is usually metadata: what
+    ran, target path/action, status, size, and structural hints. Keeping the raw
+    body around is what turns old tool calls into context noise.
+    """
+    if not isinstance(content, str):
+        content = str(content)
+    if not content:
+        return content
+    tool_args = tool_args or {}
+    max_chars = max(400, int(max_chars or 1200))
+
+    if tool_name in ("read", "file_read"):
+        path = tool_args.get("path") or tool_args.get("file_path") or ""
+        lines = content.splitlines()
+        headings = []
+        for idx, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                headings.append(f"L{idx}: {stripped[:140]}")
+            if len(headings) >= 24:
+                break
+        parts = [
+            "[historical read result summarized]",
+            f"tool: {tool_name}",
+            f"path: {path}",
+            f"status: {status}",
+            f"original_chars: {len(content)}",
+            f"line_count: {len(lines)}",
+        ]
+        if headings:
+            parts.extend(["headings:", *[f"- {heading}" for heading in headings]])
+        return "\n".join(parts)[:max_chars]
+
+    if tool_name == "textbook_chapter":
+        return _compact_jsonish_result(
+            content,
+            keep_keys=(
+                "status", "message", "path", "file_path", "chapter_path",
+                "chapter_num", "book_id", "word_count", "chars", "content_hash",
+                "action", "heading", "completed", "backup_path", "structure",
+                "chapter_index", "chapter_metadata", "fatal_issues", "warnings",
+                "duplicate_headings", "heading_count", "line_count", "ok",
+                "restored_from", "created_backup",
+            ),
+            header="[historical textbook_chapter result summarized]",
+            max_chars=max_chars,
+        )
+
+    if tool_name == "web_fetch":
+        url = tool_args.get("url", "")
+        title = _extract_title_from_tool_result(content)
+        first = next((line.strip() for line in content.splitlines() if line.strip()), "")
+        parts = [
+            "[historical web_fetch result summarized]",
+            f"url: {url}",
+            f"title: {title}",
+            f"status: {status}",
+            f"original_chars: {len(content)}",
+            f"first_line: {_compact_line(first, 220)}",
+        ]
+        return "\n".join(part for part in parts if part)[:max_chars]
+
+    target = (
+        tool_args.get("path") or tool_args.get("file_path") or tool_args.get("url")
+        or tool_args.get("query") or tool_args.get("command") or ""
+    )
+    first = next((line.strip() for line in content.splitlines() if line.strip()), "")
+    parts = [
+        "[historical tool result summarized]",
+        f"tool: {tool_name or 'unknown'}",
+        f"target: {_compact_line(target, 220)}",
+        f"status: {status}",
+        f"original_chars: {len(content)}",
+        f"first_line: {_compact_line(first, 260)}",
+    ]
+    return "\n".join(part for part in parts if part)[:max_chars]
+
+
 def _compact_jsonish_result(content: str, keep_keys: tuple, header: str, max_chars: int) -> str:
     try:
         data = json.loads(content)
@@ -924,7 +1018,13 @@ def _compact_jsonish_result(content: str, keep_keys: tuple, header: str, max_cha
         for key, value in data.items():
             if key not in compact and isinstance(value, (int, float, bool)):
                 compact[key] = value
-        return header + "\n" + json.dumps(compact, ensure_ascii=False, indent=2)
+        rendered = header + "\n" + json.dumps(compact, ensure_ascii=False, indent=2)
+        if len(rendered) <= max_chars:
+            return rendered
+        return (
+            rendered[: max(0, max_chars - 80)].rstrip()
+            + f"\n... [json result compacted: {len(rendered)} -> {max_chars} chars]"
+        )[:max_chars]
     if len(content) <= max_chars:
         return content
     return header + "\n" + content[:max_chars - len(header) - 20]

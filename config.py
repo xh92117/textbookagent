@@ -251,11 +251,11 @@ available_setting = {
     "agent": True,  # 鏄惁寮€鍚疉gent妯″紡
     "agent_workspace": "~/textbook_workspace",  # agent宸ヤ綔绌洪棿璺緞锛岀敤浜庡瓨鍌╯kills銆乵emory绛?
     "agent_max_context_tokens": 0,  # Agent模式下最大上下文tokens；0表示按模型窗口自动计算
-    "agent_max_context_turns": 30,  # Agent模式下最大上下文记忆轮次
+    "agent_max_context_turns": 12,  # Agent模式下最大上下文记忆轮次
     "agent_model_context_window": 0,  # 显式覆盖当前模型上下文窗口；0表示自动识别
     "agent_context_reserve_tokens": 0,  # 显式覆盖输出/工具增长预留tokens；0表示自动计算
-    "agent_context_compress_ratio": 0.92,  # 达到可用上下文比例后才压缩历史工具结果
-    "agent_context_midrun_trim_ratio": 0.97,  # 运行中达到该比例才触发压缩，避免频繁compact
+    "agent_context_compress_ratio": 0.6,  # 达到可用上下文比例后压缩历史工具结果
+    "agent_context_midrun_trim_ratio": 0.75,  # 运行中达到该比例即触发压缩，避免工具结果堆积
     "agent_context_compression_debounce_limit": 3,
     "agent_context_anxiety_guard_enabled": True,
     "agent_context_anxiety_threshold": 0.7,
@@ -286,17 +286,19 @@ available_setting = {
     "short_term_memory_retention_days": 14,
     "short_term_memory_max_files": 30,
     "session_handoff_ttl_hours": 168,
-    "agent_current_tool_result_context_chars": 10000,
+    "agent_current_tool_result_context_chars": 4000,
+    "agent_midrun_tool_result_chars": 60000,
+    "agent_historical_tool_result_context_chars": 1200,
     "agent_prompt_section_budgets": {},
     "agent_tool_result_context_budgets": {
-        "bash": 8000,
-        "shell": 8000,
-        "command": 8000,
-        "read": 10000,
-        "file_read": 10000,
-        "web_fetch": 8000,
-        "knowledge_query": 8000,
-        "textbook_chapter": 6000,
+        "bash": 3500,
+        "shell": 3500,
+        "command": 3500,
+        "read": 3500,
+        "file_read": 3500,
+        "web_fetch": 3000,
+        "knowledge_query": 3000,
+        "textbook_chapter": 2500,
         "ls": 5000,
         "grep": 5000,
         "find": 5000,

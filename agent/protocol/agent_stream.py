@@ -17,6 +17,7 @@ from agent.protocol.message_utils import (
     compress_turn_to_text_only,
     build_context_state_board,
     compact_current_tool_result_content,
+    compact_historical_tool_result_content,
 )
 from agent.tools.base_tool import BaseTool, ToolResult
 from common.log import logger
@@ -116,6 +117,9 @@ class AgentStreamExecutor:
         self.context_compression_history = []
         self.tool_budget = None
         self.tool_metric_events = []
+        self._near_max_turn_handoff_saved = False
+        self.tool_budget_exhausted = False
+        self.chapter_read_cache = {}
 
     def _emit_event(self, event_type: str, data: dict = None):
         """Emit event"""
@@ -355,6 +359,8 @@ class AgentStreamExecutor:
     
     def _record_tool_result(self, tool_name: str, args: dict, success: bool):
         """Record tool execution result for failure tracking"""
+        if not hasattr(self, "tool_failure_history"):
+            self.tool_failure_history = []
         args_hash = self._hash_args(args)
         self.tool_failure_history.append((tool_name, args_hash, success))
         # Keep only last 50 records to avoid memory bloat
@@ -362,6 +368,8 @@ class AgentStreamExecutor:
             self.tool_failure_history = self.tool_failure_history[-50:]
 
     def _record_tool_failure_detail(self, tool_name: str, args: dict, error: Any) -> None:
+        if not hasattr(self, "tool_failure_details"):
+            self.tool_failure_details = []
         args = args or {}
         target = self._failure_target(tool_name, args)
         failure_type = self._failure_type(error)
@@ -699,6 +707,7 @@ class AgentStreamExecutor:
                             "role": "user",
                             "content": tool_result_blocks
                         })
+                        self._compress_current_turn_tool_results_if_needed()
                         
                         # Detect potential infinite loop: same tool called multiple times with success
                         # If detected, add a hint to LLM to stop calling tools and provide response
@@ -748,6 +757,15 @@ class AgentStreamExecutor:
                     "has_tool_calls": True,
                     "tool_count": len(tool_calls)
                 })
+                self._maybe_persist_near_max_turn_handoff(turn, final_response, tool_calls)
+                if self._should_stop_after_tool_results(tool_results):
+                    final_response = self._tool_budget_exhausted_final_response(tool_results)
+                    self._emit_event("tool_budget_exhausted", {
+                        "turn": turn,
+                        "max_calls": getattr(getattr(self, "tool_budget", None), "max_calls", 0),
+                        "total_calls": getattr(getattr(self, "tool_budget", None), "total_calls", 0),
+                    })
+                    break
 
                 # Emergency-only mid-run trim. Normal compression happens once
                 # before a run starts; compacting after every tool round can
@@ -775,6 +793,7 @@ class AgentStreamExecutor:
                     "turn": turn,
                     "max_turns": self.max_turns,
                 })
+                self._maybe_persist_near_max_turn_handoff(turn, final_response, [], force=True)
 
                 # Do not call the LLM again here. In practice the final "summary"
                 # request can itself hang on providers that already returned a partial
@@ -808,6 +827,7 @@ class AgentStreamExecutor:
 
         finally:
             final_response = final_response.strip() if final_response else final_response
+            self._compact_tool_results_after_final_response()
             self._record_short_term_final_response(final_response)
             self._emit_tool_diagnostics()
             logger.info(f"[Agent] 🏁 完成 ({turn}轮)")
@@ -971,6 +991,120 @@ class AgentStreamExecutor:
             return cleaned
         except Exception:
             return {}
+
+    def _midrun_tool_result_chars_limit(self) -> int:
+        try:
+            from config import conf
+            value = int(conf().get("agent_midrun_tool_result_chars", 60000) or 60000)
+            return max(1000, min(500000, value))
+        except Exception:
+            return 60000
+
+    def _historical_tool_result_context_limit(self) -> int:
+        try:
+            from config import conf
+            value = int(conf().get("agent_historical_tool_result_context_chars", 1200) or 1200)
+            return max(400, min(10000, value))
+        except Exception:
+            return 1200
+
+    def _total_tool_result_chars(self) -> int:
+        total = 0
+        for msg in self.messages:
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    value = block.get("content", "")
+                    if isinstance(value, str):
+                        total += len(value)
+        return total
+
+    def _compress_current_turn_tool_results_if_needed(self) -> bool:
+        limit = self._midrun_tool_result_chars_limit()
+        total = self._total_tool_result_chars()
+        if total <= limit:
+            return False
+
+        blocks = []
+        for msg in self.messages:
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    blocks.append(block)
+        if len(blocks) <= 1:
+            return False
+
+        changed = False
+        # Keep the latest result intact for local continuity; compact older
+        # results in the active run once aggregate tool noise exceeds budget.
+        for block in blocks[:-1]:
+            result_str = block.get("content", "")
+            if not isinstance(result_str, str) or len(result_str) <= 300:
+                continue
+            tool_name, tool_args = self._find_tool_info_for_result(block.get("tool_use_id", ""))
+            summary = compact_historical_tool_result_content(
+                result_str,
+                tool_name=tool_name,
+                tool_args=tool_args,
+                status="error" if block.get("is_error") else "success",
+                max_chars=self._historical_tool_result_context_limit(),
+            )
+            if len(summary) >= len(result_str):
+                summary = (
+                    f"[midrun tool result compacted: {tool_name or 'unknown'}, "
+                    f"original_chars={len(result_str)}]\n"
+                    f"{result_str[:240]}"
+                )
+            if len(summary) < len(result_str):
+                block["content"] = summary
+                changed = True
+            if self._total_tool_result_chars() <= limit:
+                break
+
+        if changed:
+            logger.info(
+                f"📦 Mid-run tool-result guard compacted history: "
+                f"{total} -> {self._total_tool_result_chars()} chars"
+            )
+            self._record_context_compression("midrun_tool_results", saved_chars=total - self._total_tool_result_chars())
+        return changed
+
+    def _compact_tool_results_after_final_response(self) -> bool:
+        """After answering the user, keep only durable summaries of tool output."""
+        changed = False
+        saved_chars = 0
+        for msg in self.messages:
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+                result_str = block.get("content", "")
+                if not isinstance(result_str, str) or not result_str:
+                    continue
+                if result_str.startswith("[historical "):
+                    continue
+                tool_name, tool_args = self._find_tool_info_for_result(block.get("tool_use_id", ""))
+                summary = compact_historical_tool_result_content(
+                    result_str,
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    status="error" if block.get("is_error") else "success",
+                    max_chars=self._historical_tool_result_context_limit(),
+                )
+                if len(summary) < len(result_str) or not result_str.startswith("[historical "):
+                    block["content"] = summary
+                    saved_chars += max(0, len(result_str) - len(summary))
+                    changed = True
+        if changed:
+            self._record_context_compression("historical_tool_results", saved_chars=saved_chars)
+            logger.info(f"📦 Historical tool results summarized after final response; saved ~{saved_chars} chars")
+        return changed
 
     def _record_context_compression(self, kind: str, saved_chars: int = 0) -> None:
         self.context_compression_history.append({
@@ -1567,6 +1701,26 @@ class AgentStreamExecutor:
             self._record_tool_metric_event(tool_name, arguments, result)
             return result
 
+        duplicate_read_result = self._preflight_duplicate_chapter_read_check(tool_name, arguments)
+        if duplicate_read_result:
+            logger.info(
+                f"[ToolReadGuard] blocked {tool_name}: {duplicate_read_result.get('result', '')}"
+            )
+            self._record_tool_result(tool_name, arguments, False)
+            self._record_tool_failure_detail(tool_name, arguments, duplicate_read_result.get("result", "blocked"))
+            self._record_tool_metric_event(tool_name, arguments, duplicate_read_result)
+            return duplicate_read_result
+
+        budget_result = self._preflight_tool_budget_check(tool_name)
+        if budget_result:
+            logger.warning(
+                f"[ToolBudget] blocked {tool_name}: {budget_result.get('result', '')}"
+            )
+            self._record_tool_result(tool_name, arguments, False)
+            self._record_tool_failure_detail(tool_name, arguments, budget_result.get("result", "blocked"))
+            self._record_tool_metric_event(tool_name, arguments, budget_result)
+            return budget_result
+
         policy_result = self._preflight_tool_policy_check(tool_name, arguments)
         if policy_result:
             logger.warning(
@@ -1642,6 +1796,8 @@ class AgentStreamExecutor:
             # Record tool result for failure tracking
             success = result.status == "success"
             self._record_tool_result(tool_name, arguments, success)
+            if success:
+                self._record_successful_tool_read(tool_name, arguments, result.result)
             if not success:
                 self._record_tool_failure_detail(tool_name, arguments, result.result)
                 self._capture_tool_error_memory(
@@ -1741,6 +1897,180 @@ class AgentStreamExecutor:
         except Exception as exc:
             logger.debug(f"Tool metric record skipped: {exc}")
 
+    def _ensure_read_cache(self) -> dict:
+        if not hasattr(self, "chapter_read_cache") or self.chapter_read_cache is None:
+            self.chapter_read_cache = {}
+        return self.chapter_read_cache
+
+    def _record_successful_tool_read(self, tool_name: str, arguments: dict, result: Any) -> None:
+        if tool_name not in {"textbook_chapter", "read", "file_read"}:
+            return
+        arguments = arguments or {}
+        result = result if isinstance(result, dict) else {}
+        if tool_name == "textbook_chapter" and str(arguments.get("action") or "") != "read":
+            return
+        content = result.get("content")
+        if not isinstance(content, str) or not content.strip():
+            return
+        path = str(result.get("path") or result.get("file_path") or arguments.get("path") or "")
+        chapter = str(result.get("chapter_num") or arguments.get("chapter_num") or "")
+        book_id = str(result.get("book_id") or arguments.get("book_id") or self._book_id_from_path(path))
+        if not chapter:
+            chapter = self._chapter_num_from_path(path)
+        if not chapter and tool_name in {"read", "file_read"}:
+            return
+        title = self._extract_markdown_title(content)
+        chars = int(result.get("chars") or len(content))
+        record = {
+            "book_id": book_id,
+            "chapter_num": chapter,
+            "path": path,
+            "path_key": self._normalize_read_path(path),
+            "basename": os.path.basename(path.replace("/", os.sep)),
+            "title": title,
+            "chars": chars,
+            "content_hash": result.get("content_hash") or self._hash_args({"content": content}),
+            "read_complete": True,
+        }
+        cache = self._ensure_read_cache()
+        keys = []
+        if book_id and chapter:
+            keys.append(f"book:{book_id}:chapter:{chapter}")
+        if record["path_key"]:
+            keys.append(f"path:{record['path_key']}")
+        if record["basename"]:
+            keys.append(f"basename:{record['basename'].lower()}")
+        for key in keys:
+            cache[key] = record
+
+    def _preflight_duplicate_chapter_read_check(self, tool_name: str, arguments: dict) -> Dict[str, Any] | None:
+        arguments = arguments or {}
+        if not self._is_protected_textbook_route():
+            return None
+        if arguments.get("force") or arguments.get("refresh"):
+            return None
+        record = None
+        if tool_name == "textbook_chapter" and str(arguments.get("action") or "") == "read":
+            book_id = str(arguments.get("book_id") or "")
+            chapter = str(arguments.get("chapter_num") or arguments.get("chapter_number") or "")
+            record = self._find_chapter_read_record(book_id=book_id, chapter=chapter)
+        elif tool_name in {"read", "file_read"}:
+            path = str(arguments.get("path") or arguments.get("file_path") or "")
+            if not self._looks_like_chapter_path(path):
+                return None
+            record = self._find_chapter_read_record(path=path)
+        if not record:
+            return None
+        return {
+            "status": "blocked",
+            "result": (
+                "This chapter has already been fully read in the current turn. "
+                f"chapter={record.get('chapter_num') or '?'} title={record.get('title') or '?'} "
+                f"chars={record.get('chars') or 0} path={record.get('path') or ''}. "
+                "Use the cached chapter facts and continue with review or repair; do not spend tool budget rereading it. "
+                "If the file changed or the user explicitly asked to reread it, call with force=true."
+            ),
+            "execution_time": 0,
+        }
+
+    def _find_chapter_read_record(self, book_id: str = "", chapter: str = "", path: str = "") -> dict:
+        cache = self._ensure_read_cache()
+        candidates = []
+        if book_id and chapter:
+            candidates.append(f"book:{book_id}:chapter:{chapter}")
+        if path:
+            path_key = self._normalize_read_path(path)
+            if path_key:
+                candidates.append(f"path:{path_key}")
+            basename = os.path.basename(path.replace("/", os.sep)).lower()
+            if basename:
+                candidates.append(f"basename:{basename}")
+        for key in candidates:
+            record = cache.get(key)
+            if record and record.get("read_complete"):
+                return record
+        return {}
+
+    @staticmethod
+    def _normalize_read_path(path: str) -> str:
+        value = str(path or "").strip()
+        if not value:
+            return ""
+        return os.path.normcase(os.path.normpath(value.replace("/", os.sep)))
+
+    @staticmethod
+    def _looks_like_chapter_path(path: str) -> bool:
+        value = str(path or "").lower().replace("\\", "/")
+        return "/chapters/" in value and re.search(r"chapter[_-]?\d+\.md$", value) is not None
+
+    @staticmethod
+    def _chapter_num_from_path(path: str) -> str:
+        match = re.search(r"chapter[_-]?0*(\d+)\.md$", str(path or ""), re.I)
+        return match.group(1) if match else ""
+
+    @staticmethod
+    def _book_id_from_path(path: str) -> str:
+        match = re.search(r"[\\/](tb_[A-Za-z0-9_-]+)[\\/]", str(path or ""))
+        return match.group(1) if match else ""
+
+    @staticmethod
+    def _extract_markdown_title(content: str) -> str:
+        for line in str(content or "").splitlines()[:20]:
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                return stripped.lstrip("#").strip()
+        return ""
+
+    def _preflight_tool_budget_check(self, tool_name: str) -> Dict[str, Any] | None:
+        """Hard-stop tool execution once the route budget is exhausted."""
+        try:
+            from agent.tools.metrics import default_tool_budget
+
+            route = getattr(self, "tool_route", None)
+            if getattr(self, "tool_budget", None) is None:
+                self.tool_budget = default_tool_budget(
+                    getattr(route, "mode", ""),
+                    getattr(route, "task_type", ""),
+                )
+            max_calls = int(getattr(self.tool_budget, "max_calls", 0) or 0)
+            total_calls = int(getattr(self.tool_budget, "total_calls", 0) or 0)
+            if max_calls > 0 and total_calls >= max_calls:
+                self.tool_budget_exhausted = True
+                return {
+                    "status": "blocked",
+                    "result": (
+                        f"Tool budget exhausted for this turn ({total_calls}/{max_calls}). "
+                        "Stop calling tools and answer from current evidence, or ask the user for a narrower next step."
+                    ),
+                    "execution_time": 0,
+                }
+        except Exception as exc:
+            logger.debug(f"Tool budget preflight skipped for {tool_name}: {exc}")
+        return None
+
+    def _should_stop_after_tool_results(self, tool_results: list) -> bool:
+        if getattr(self, "tool_budget_exhausted", False):
+            return True
+        for result in tool_results or []:
+            text = str((result or {}).get("result") or "").lower()
+            if (result or {}).get("status") == "blocked" and "tool budget exhausted" in text:
+                self.tool_budget_exhausted = True
+                return True
+        return False
+
+    def _tool_budget_exhausted_final_response(self, tool_results: list) -> str:
+        budget = getattr(self, "tool_budget", None)
+        total_calls = getattr(budget, "total_calls", 0)
+        max_calls = getattr(budget, "max_calls", 0)
+        recent_text = self._latest_assistant_text_excerpt()
+        lines = [
+            f"本轮工具预算已达到上限（{total_calls}/{max_calls}），我已停止继续调用工具，避免继续空转。",
+            "请下一轮继续时，我会先根据已保存的上下文和 handoff 接着处理，不会重新开始整章流程。",
+        ]
+        if recent_text:
+            lines.extend(["", "最近进展：", recent_text])
+        return "\n".join(lines)
+
     def _emit_tool_diagnostics(self) -> None:
         events = list(getattr(self, "tool_metric_events", []) or [])
         if not events:
@@ -1785,7 +2115,7 @@ class AgentStreamExecutor:
                     "status": "blocked",
                     "result": (
                         "Tool policy blocked bash from writing textbook chapter content in protected textbook mode. "
-                        "Use textbook_chapter for normal chapter operations; in repair mode use edit/write only for precise local repairs."
+                        "Use textbook_chapter for normal chapter operations; in repair mode use the canonical chapter actions only."
                     ),
                     "execution_time": 0,
                 }
@@ -1841,9 +2171,11 @@ class AgentStreamExecutor:
         if tool_name in {"write", "edit", "bash", "textbook_chapter"}:
             return (
                 "\n\nRecovery rule for chapter writing: your next tool call must be a smaller "
-                "textbook_chapter call. Use action=append_section or replace_section with one "
-                "section/subsection under 6000 characters. Do not use bash or PowerShell to "
-                "write Chinese Markdown."
+                "textbook_chapter call. Use append_section for new material, replace_section "
+                "only for one clear unique section, rename_heading for title-only fixes, "
+                "delete_section for duplicate sections, replace_exact for one unique snippet, "
+                "or list_backups/restore_backup when the chapter is corrupted. Do not use bash "
+                "or PowerShell to write Chinese Markdown."
             )
         return "\n\nRecovery rule: retry with a smaller, strictly valid JSON argument object."
 
@@ -1918,7 +2250,9 @@ class AgentStreamExecutor:
                 f"Available tools: {available_tools}. Required textbook tool(s): {required}. "
                 "Do not retry hidden tools such as write, edit, bash, or shell. "
                 "Return to the selected SKILL.md workflow and use the visible canonical textbook tool. "
-                "If the visible tool cannot complete the precise operation, stop and explain the limitation to the user."
+                "For repairs, use textbook_chapter actions list_backups, restore_backup, delete_section, "
+                "rename_heading, replace_exact, or replace_section as appropriate. If the visible tool "
+                "still cannot complete the precise operation, stop and explain the limitation to the user."
             )
         if (
             getattr(route, "mode", "") == "repair"
@@ -1929,8 +2263,9 @@ class AgentStreamExecutor:
             return (
                 f"Tool '{tool_name}' is not visible in the current textbook repair route. "
                 f"Available tools: {available_tools}. Start with canonical tool(s): {required}. "
-                "Use edit/write only if they are visible and the repair is a precise local file change. "
-                "Do not retry hidden tools, and never use bash or shell redirection to write Chinese textbook body text. "
+                "Use textbook_chapter list_backups/restore_backup for damaged chapters, delete_section "
+                "for duplicate sections, rename_heading for title-only fixes, and replace_exact for unique snippets. "
+                "Do not retry hidden tools such as edit or write, and never use bash or shell redirection to write Chinese textbook body text. "
                 "If the visible tools cannot complete the operation, stop and explain the limitation to the user."
             )
 
@@ -2091,7 +2426,7 @@ class AgentStreamExecutor:
         """
         from agent.protocol.message_utils import (
             progressive_compress_messages,
-            summarize_tool_result_content,
+            compact_historical_tool_result_content,
         )
 
         if len(self.messages) < 4:
@@ -2110,7 +2445,7 @@ class AgentStreamExecutor:
         for turn_idx, turn in enumerate(turns):
             turn_age = total_turns - turn_idx
 
-            if turn_age <= 2:
+            if turn_age <= 1:
                 continue
 
             for msg in turn.get("messages", []):
@@ -2128,13 +2463,19 @@ class AgentStreamExecutor:
                     if not isinstance(result_str, str):
                         continue
 
-                    threshold = 1500 if turn_age <= 5 else 300
+                    threshold = 800 if turn_age <= 4 else 200
 
                     if len(result_str) > threshold:
                         tool_use_id = block.get("tool_use_id", "")
                         tool_name, tool_args = self._find_tool_info_for_result(tool_use_id)
 
-                        summary = summarize_tool_result_content(result_str, tool_name, tool_args)
+                        summary = compact_historical_tool_result_content(
+                            result_str,
+                            tool_name=tool_name,
+                            tool_args=tool_args,
+                            status="error" if block.get("is_error") else "success",
+                            max_chars=self._historical_tool_result_context_limit(),
+                        )
 
                         if len(summary) < len(result_str):
                             saved_chars += len(result_str) - len(summary)
@@ -2324,6 +2665,172 @@ class AgentStreamExecutor:
 
         return _on_summary_ready
 
+    def _persist_context_handoff(self, discarded_turns: list, kept_turns: list, reason: str = "trim") -> Dict[str, Any]:
+        """Persist a compact handoff document for context compression recovery.
+
+        The handoff is intentionally fielded around current_done/todo so the
+        next model turn can inherit the active task without rereading noisy
+        historical tool results.
+        """
+        try:
+            from common.app_paths import system_dir
+            from agent.memory.handoff import HandoffService
+
+            session_id = str(getattr(self.model, "session_id", "") or getattr(self.agent, "session_id", "") or "default")
+            messages = []
+            for turn in (discarded_turns or []) + (kept_turns or []):
+                messages.extend(turn.get("messages", []) or [])
+            if not messages:
+                return {}
+            service = HandoffService(system_dir())
+            path = service.update_from_messages(session_id, messages)
+            content = path.read_text(encoding="utf-8")
+            payload = {"path": str(path), "content": content, "reason": reason}
+            logger.info(f"[ContextHandoff] wrote {path} for reason={reason}")
+            return payload
+        except Exception as exc:
+            logger.debug(f"[ContextHandoff] persist skipped: {exc}")
+            return {}
+
+    def _near_max_turn_handoff_threshold(self) -> int:
+        if self.max_turns <= 1:
+            return 1
+        return max(1, min(49, self.max_turns - 1))
+
+    def _maybe_persist_near_max_turn_handoff(
+        self,
+        turn: int,
+        final_response: str = "",
+        tool_calls: list | None = None,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        """Persist a resume plan before a long tool loop reaches the hard cap."""
+        if getattr(self, "_near_max_turn_handoff_saved", False):
+            return {}
+        if not force and turn < self._near_max_turn_handoff_threshold():
+            return {}
+        if not force and not tool_calls:
+            return {}
+        try:
+            from common.app_paths import system_dir
+            from agent.memory.handoff import HandoffService
+
+            session_id = str(
+                getattr(self.model, "session_id", "")
+                or getattr(self.agent, "session_id", "")
+                or "default"
+            )
+            tool_names = ", ".join(
+                str(call.get("name", "")) for call in (tool_calls or []) if isinstance(call, dict)
+            ) or "none"
+            recent_text = final_response or self._latest_assistant_text_excerpt()
+            plan_text = (
+                f"最大执行轮数保护：当前已执行到第 {turn} 轮，任务仍可能未完成，已保存继续计划。\n"
+                f"当前已完成：{self._clip_for_handoff(recent_text, 260) or '已完成部分工具执行或阶段性处理。'}\n"
+                f"最近工具：{tool_names}\n"
+                "下一步：用户继续下一轮对话时，先读取本 handoff，确认当前文件/状态，然后从最近未完成的小步骤继续；"
+                "不要重新发起整条管线，不要重复已经成功的工具调用。"
+            )
+            messages = list(getattr(self, "messages", []) or [])
+            messages.append({
+                "role": "assistant",
+                "content": [{"type": "text", "text": plan_text}],
+            })
+            service = HandoffService(system_dir())
+            path = service.update_from_messages(session_id, messages)
+            content = path.read_text(encoding="utf-8")
+            payload = {
+                "path": str(path),
+                "content": content,
+                "reason": "near-max-turn",
+                "turn": turn,
+                "max_turns": self.max_turns,
+            }
+            self._near_max_turn_handoff_saved = True
+            self._emit_event("session_handoff_saved", {
+                "path": str(path),
+                "reason": "near-max-turn",
+                "turn": turn,
+                "max_turns": self.max_turns,
+            })
+            logger.info(f"[ContextHandoff] wrote near-max-turn handoff {path} at turn={turn}")
+            return payload
+        except Exception as exc:
+            logger.debug(f"[ContextHandoff] near-max-turn persist skipped: {exc}")
+            return {}
+
+    @staticmethod
+    def _clip_for_handoff(text: str, max_chars: int) -> str:
+        value = re.sub(r"\s+", " ", str(text or "")).strip()
+        return value if len(value) <= max_chars else value[: max_chars - 3].rstrip() + "..."
+
+    def _inject_context_handoff_summary(self, handoff: Dict[str, Any]) -> None:
+        if not handoff or not handoff.get("content"):
+            return
+        todo = self._extract_handoff_section(handoff.get("content", ""), "Todo")
+        done = self._extract_handoff_section(handoff.get("content", ""), "Current Done")
+        summary = [
+            "[System: Context Compression Handoff]",
+            f"path: {handoff.get('path', '')}",
+            "This handoff was created during context compression. Treat Todo as the next-step authority.",
+            "Current Done:",
+            done or "- No completed work was captured before compaction.",
+            "Todo:",
+            todo or "- Continue from the current user goal after verifying current state.",
+        ]
+        block_text = "\n".join(summary)
+        marker = "[System: Context Compression Handoff]"
+        for msg in self.messages:
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text = block.get("text", "")
+                    if marker in text:
+                        block["text"] = self._strip_context_handoff_summary(text)
+        for msg in reversed(self.messages):
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    original = (block.get("text") or "").strip()
+                    block["text"] = f"{block_text}\n\n---\n\n{original}"
+                    return
+
+    @staticmethod
+    def _extract_handoff_section(content: str, section: str, max_lines: int = 6) -> str:
+        lines = str(content or "").splitlines()
+        start = -1
+        for idx, line in enumerate(lines):
+            if line.strip() == f"## {section}":
+                start = idx + 1
+                break
+        if start < 0:
+            return ""
+        values = []
+        for line in lines[start:]:
+            if line.startswith("## "):
+                break
+            if line.strip():
+                values.append(line.strip())
+            if len(values) >= max_lines:
+                break
+        return "\n".join(values)
+
+    @staticmethod
+    def _strip_context_handoff_summary(text: str) -> str:
+        marker = "[System: Context Compression Handoff]"
+        if marker not in text:
+            return text
+        parts = text.split("\n\n---\n\n", 1)
+        if len(parts) == 2 and marker in parts[0]:
+            return parts[1].strip()
+        return text
+
     @staticmethod
     def _format_compacted_context_summary(summary: str, turn_count: int = 0) -> str:
         return (
@@ -2377,6 +2884,7 @@ class AgentStreamExecutor:
         
         if not turns:
             return
+        handoff: Dict[str, Any] = {}
         
         # Step 2: 轮次限制 - 超出时渐进压缩而非丢弃
         if len(turns) > self.max_context_turns:
@@ -2402,6 +2910,7 @@ class AgentStreamExecutor:
                         reason="trim", max_messages=0,
                         context_summary_callback=cb,
                     )
+            handoff = self._persist_context_handoff(discarded_turns, turns, reason="turn-limit")
 
         # Step 3: Token 限制 - 渐进式压缩
         max_tokens, reserve_tokens = self._effective_context_budget()
@@ -2414,6 +2923,7 @@ class AgentStreamExecutor:
         compress_threshold = max_tokens * self._context_compress_ratio()
         if current_tokens + system_tokens > compress_threshold:
             self._progressive_compress_tool_results()
+            handoff = self._persist_context_handoff([], turns, reason="tool-result-compress")
             turns = self._identify_complete_turns()
             current_tokens = sum(self._estimate_turn_tokens(turn) for turn in turns)
         
@@ -2427,6 +2937,8 @@ class AgentStreamExecutor:
             
             if old_count > len(self.messages):
                 logger.info(f"   重建消息列表: {old_count} -> {len(self.messages)} 条消息")
+            if handoff:
+                self._inject_context_handoff_summary(handoff)
             self._inject_runtime_context_board(turns, reason="rebuild")
             return
 
@@ -2461,6 +2973,7 @@ class AgentStreamExecutor:
 
         if compressed_count > 0:
             self._record_context_compression("turn_summary", saved_chars=0)
+            handoff = self._persist_context_handoff([], turns, reason="turn-summary")
             logger.info(
                 f"📦 渐进式压缩: 压缩了 {compressed_count} 轮为纯文本摘要 "
                 f"(~{current_tokens + system_tokens} tokens)"
@@ -2472,6 +2985,8 @@ class AgentStreamExecutor:
             for turn in turns:
                 new_messages.extend(turn['messages'])
             self.messages = new_messages
+            if handoff:
+                self._inject_context_handoff_summary(handoff)
             self._inject_runtime_context_board(turns, reason="token-compress")
             return
 
@@ -2492,6 +3007,7 @@ class AgentStreamExecutor:
                     messages=discarded_messages, user_id=user_id,
                     reason="trim", max_messages=0,
                 )
+        handoff = self._persist_context_handoff([], turns, reason="token-trim")
 
         new_messages = []
         for turn in turns:
@@ -2499,6 +3015,8 @@ class AgentStreamExecutor:
         
         old_count = len(self.messages)
         self.messages = new_messages
+        if handoff:
+            self._inject_context_handoff_summary(handoff)
         self._inject_runtime_context_board(turns, reason="token-trim")
 
         logger.info(
@@ -2621,6 +3139,7 @@ class AgentStreamExecutor:
             "[System: Short-term working memory]",
             "[System: Current task state board]",
             "[System: Runtime Context Board]",
+            "[System: Context Compression Handoff]",
         ):
             text = text.replace(marker, "").strip()
         return text
@@ -2632,6 +3151,7 @@ class AgentStreamExecutor:
             "[System: Tool routing policy]",
             "[System: Short-term working memory]",
             "[System: Current task state board]",
+            "[System: Context Compression Handoff]",
         )
         if not any(marker in text for marker in markers):
             return text

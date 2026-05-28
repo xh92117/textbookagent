@@ -39,6 +39,14 @@ def test_default_tool_budget_is_tighter_for_free_than_guided():
     assert guided.task_type == "frontend"
 
 
+def test_textbook_repair_budget_allows_read_locate_fix_verify_flow():
+    repair = default_tool_budget("repair", "textbook")
+    strict = default_tool_budget("strict", "textbook")
+
+    assert repair.max_calls >= 12
+    assert strict.max_calls >= 8
+
+
 def test_tool_budget_tracks_counts_and_soft_excess():
     budget = ToolBudget(mode="free", task_type="general", max_calls=1)
 

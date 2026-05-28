@@ -59,7 +59,7 @@ def test_preflight_blocks_bash_chapter_writes_when_textbook_route_is_repair():
 
     assert result["status"] == "blocked"
     assert "repair mode" in result["result"]
-    assert "edit/write" in result["result"]
+    assert "textbook_chapter" in result["result"]
 
 
 def test_record_tool_metric_event_includes_route_and_repeat_count(monkeypatch):
@@ -112,6 +112,93 @@ def test_record_tool_metric_event_updates_soft_budget(monkeypatch):
 
     assert captured[0]["over_budget"] is False
     assert captured[1]["over_budget"] is True
+
+
+def test_execute_tool_blocks_when_budget_is_exhausted(monkeypatch):
+    from agent.tools.metrics import ToolBudget
+
+    class Route:
+        mode = "repair"
+        task_type = "textbook"
+
+    class Tool:
+        name = "read"
+
+        def execute_tool(self, _arguments):
+            raise AssertionError("tool should not execute after budget exhaustion")
+
+    captured = []
+    monkeypatch.setattr("agent.tools.metrics.record_tool_metric", lambda payload: captured.append(payload))
+
+    executor = _executor(Route())
+    executor.tools = {"read": Tool()}
+    executor.tool_budget = ToolBudget(mode="repair", task_type="textbook", max_calls=6, total_calls=6)
+    executor.tool_failure_history = []
+    executor.tool_metric_events = []
+    executor.on_event = lambda event: None
+    executor._record_short_term_tool_start = lambda *args, **kwargs: None
+    executor._record_short_term_tool_end = lambda *args, **kwargs: None
+
+    result = executor._execute_tool({
+        "id": "t1",
+        "name": "read",
+        "arguments": {"path": "chapter.md"},
+    })
+
+    assert result["status"] == "blocked"
+    assert "tool budget" in result["result"].lower()
+    assert captured[-1]["usefulness_label"] == "blocked"
+    assert executor.tool_budget_exhausted is True
+
+
+def test_duplicate_segment_read_is_blocked_after_full_chapter_read(monkeypatch):
+    class Route:
+        mode = "repair"
+        task_type = "textbook"
+
+    executor = _executor(Route())
+    executor.tool_failure_history = []
+    executor.tool_metric_events = []
+    executor.tool_budget = None
+    executor.on_event = lambda event: None
+    executor.tools = {}
+    executor._record_short_term_tool_start = lambda *args, **kwargs: None
+    executor._record_short_term_tool_end = lambda *args, **kwargs: None
+    monkeypatch.setattr("agent.tools.metrics.record_tool_metric", lambda payload: None)
+
+    executor._record_successful_tool_read(
+        "textbook_chapter",
+        {"action": "read", "book_id": "tb_demo", "chapter_num": 14},
+        {
+            "book_id": "tb_demo",
+            "chapter_num": 14,
+            "path": "chapters/chapter_014.md",
+            "chars": 23807,
+            "content": "# 第14章 Agentic-RL\n\n正文",
+        },
+    )
+
+    result = executor._execute_tool({
+        "id": "t2",
+        "name": "read",
+        "arguments": {
+            "path": "C:\\workspace\\textbooks\\tb_demo\\chapters\\chapter_014.md",
+            "offset": 600,
+            "limit": 100,
+        },
+    })
+
+    assert result["status"] == "blocked"
+    assert "already been fully read" in result["result"]
+
+
+def test_budget_block_should_stop_next_llm_turn():
+    executor = _executor()
+    executor.tool_budget_exhausted = True
+
+    assert executor._should_stop_after_tool_results([
+        {"status": "blocked", "result": "Tool budget exhausted for this turn (12/12)."},
+    ]) is True
 
 
 def test_emit_tool_diagnostics_reports_budget_and_labels():

@@ -109,7 +109,7 @@ class ShortTermMemoryPool:
         result: Any,
     ) -> None:
         payload = self._load()
-        result_summary = self._summarize_result(tool_name, result, status)
+        result_summary = self._summarize_result(tool_name, result, status, arguments)
         event_type = "failure" if status != "success" else "tool_end"
         self._append_event(payload, {
             "type": event_type,
@@ -238,7 +238,7 @@ class ShortTermMemoryPool:
             if result_path:
                 self._append_unique(payload, "written_files", result_path, 40)
         if status and status != "success":
-            failure = f"{tool_name}: {self._summarize_result(tool_name, result, status)}"
+            failure = f"{tool_name}: {self._summarize_result(tool_name, result, status, arguments)}"
             self._append_unique(payload, "failures", failure, 30)
 
     @classmethod
@@ -329,8 +329,27 @@ class ShortTermMemoryPool:
         return cls._clip(json.dumps(arguments, ensure_ascii=False), 300)
 
     @classmethod
-    def _summarize_result(cls, tool_name: str, result: Any, status: str = "") -> str:
+    def _summarize_result(
+        cls,
+        tool_name: str,
+        result: Any,
+        status: str = "",
+        arguments: Dict[str, Any] | None = None,
+    ) -> str:
+        arguments = arguments or {}
+        if tool_name in ("read", "file_read"):
+            path = str(arguments.get("path") or arguments.get("file_path") or "")
+            content = result.get("content", "") if isinstance(result, dict) else result
+            content = str(content or "")
+            line_count = len(content.splitlines()) if content else 0
+            target = path or "unknown path"
+            return f"{status}: read {target} ({len(content)} chars, {line_count} lines)"
         if isinstance(result, (dict, list)):
+            if isinstance(result, dict) and any(key in result for key in ("content", "output", "body", "text")):
+                path = cls._extract_path_from_result(result) or str(arguments.get("path") or arguments.get("file_path") or "")
+                keys = ", ".join(sorted(str(key) for key in result.keys())[:8])
+                target = f" path={path}" if path else ""
+                return f"{status}: structured result{target} keys={keys}"
             text = json.dumps(result, ensure_ascii=False)
         else:
             text = str(result or "")

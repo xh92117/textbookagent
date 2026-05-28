@@ -48,7 +48,7 @@ def test_tool_router_marks_textbook_writing_as_strict_with_required_tool():
     assert "Strict required tools" in route.prompt
 
 
-def test_tool_router_allows_edit_write_for_precise_textbook_repair():
+def test_tool_router_keeps_edit_write_hidden_for_textbook_repair():
     tools = {
         "textbook_chapter": object(),
         "knowledge_query": object(),
@@ -66,11 +66,13 @@ def test_tool_router_allows_edit_write_for_precise_textbook_repair():
     assert route.mode == "repair"
     assert route.required_tools == ["textbook_chapter"]
     assert "textbook_chapter" in route.allowed_tools
-    assert "edit" in route.allowed_tools
-    assert "write" in route.allowed_tools
+    assert "edit" in route.blocked_tools
+    assert "write" in route.blocked_tools
     assert "bash" in route.blocked_tools
     assert "Repair mode" in route.prompt
     assert "canonical textbook tool first" in route.prompt
+    assert "restore_backup" in route.prompt
+    assert "delete_section" in route.prompt
 
 
 def test_tool_router_routes_textbook_project_creation_to_create_textbook():

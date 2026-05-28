@@ -35,6 +35,67 @@ def test_session_handoff_writes_compact_refs_and_redacts_secrets(tmp_path):
     assert len(text) < 1600
 
 
+def test_session_handoff_ignores_tool_result_user_messages_for_goal_and_todo(tmp_path):
+    service = HandoffService(str(tmp_path / "system"))
+    path = service.update_from_messages(
+        "session-a",
+        [
+            {"role": "user", "content": [{"type": "text", "text": "请修复第六章审查意见的前两个问题"}]},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "已审查第六章。下一步：恢复备份后修复重复标题。"}],
+            },
+            {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "tool-1",
+                    "content": "工具已成功执行并返回结果。请基于这些信息回复用户，不要重复调用相同工具。"
+                }],
+            },
+        ],
+    )
+
+    text = path.read_text(encoding="utf-8")
+
+    assert "请修复第六章审查意见的前两个问题" in text
+    assert "工具已成功执行并返回结果" not in text.split("## Current Goal", 1)[1].split("## Active Constraints", 1)[0]
+    assert "恢复备份后修复重复标题" in text
+
+
+def test_session_handoff_ignores_injected_runtime_boards_for_goal(tmp_path):
+    service = HandoffService(str(tmp_path / "system"))
+    path = service.update_from_messages(
+        "session-a",
+        [
+            {
+                "role": "user",
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        "[System: Runtime Context Board]\n"
+                        "reason: rebuild\n"
+                        "Current user goal: stale chapter task\n\n"
+                        "---\n\n"
+                        "请继续修复第10章最后一个问题"
+                    ),
+                }],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "已完成导入检查。下一步：验证结构并标记完成。"}],
+            },
+        ],
+    )
+
+    text = path.read_text(encoding="utf-8")
+    current_goal = text.split("## Current Goal", 1)[1].split("## Active Constraints", 1)[0]
+
+    assert "请继续修复第10章最后一个问题" in current_goal
+    assert "Runtime Context Board" not in current_goal
+    assert "stale chapter task" not in current_goal
+
+
 def test_session_handoff_is_indexed_by_memory_graph(tmp_path):
     service = HandoffService(str(tmp_path / "system"))
     service.update_from_messages(

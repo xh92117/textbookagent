@@ -25,13 +25,18 @@ Write textbook chapter content based on the outline, context, and project-level 
 
 Use this existing skill through the current canonical tools only.
 
-- Use `textbook_chapter` for normal chapter read/write/rewrite/append/replace/validate/mark-complete operations.
+- Use `textbook_chapter` for normal chapter read/write/rewrite/append/replace/validate/mark-complete operations and for safe chapter repair.
 - Use `read` only for adjacent context that `textbook_chapter` cannot expose directly.
 - Use `knowledge_query`, `memory_search`, and `memory_get` only when evidence, continuity, or recent activity is needed.
 - Repair mode may use `edit` or `write` only when the canonical chapter tool cannot target a precise local change, or when the user explicitly asks for direct file editing.
 - Do not use `bash` or shell redirection for textbook body files in this skill. If hidden tools are unavailable, do not retry them.
-- If `textbook_chapter` cannot perform a precise edit because headings are duplicated or the target is ambiguous, try one bounded repair-mode edit/write action only if the exact target is clear; otherwise stop, explain the limitation, and ask for a more precise target.
-- Required sequence for edits: read target -> perform one targeted `textbook_chapter` action or one bounded repair-mode `edit`/`write` action -> validate/read back -> answer. Do not do open-ended read-offset probing.
+- If a chapter structure is already corrupted, content is missing, or repeated `replace_section` attempts made it worse: call `textbook_chapter(action=list_backups)` and then `textbook_chapter(action=restore_backup)` before making new edits. Do not read the whole backup into context and rewrite it manually.
+- Use `textbook_chapter(action=rename_heading)` when only a heading line changes. Do not use `replace_section` for title-only edits.
+- Use `textbook_chapter(action=delete_section)` to remove a duplicate or unwanted section. Do not call `replace_section` with empty content to delete text.
+- Use `textbook_chapter(action=replace_exact)` for a single unique phrase/paragraph. If it is not unique, provide a longer snippet instead of guessing.
+- Use `textbook_chapter(action=replace_section)` only for replacing one clear, unique level-2+ section where replacing all child content is intended.
+- If two similar `replace_section` calls fail or create duplicate headings, stop using `replace_section`; validate structure, restore backup if needed, or ask the user.
+- Required sequence for edits: validate/read target -> perform one targeted `textbook_chapter` action -> validate/read back -> answer. Use one bounded repair-mode `edit`/`write` only if visible and the canonical actions cannot target the change. Do not do open-ended read-offset probing.
 
 ## 核心指令
 
@@ -73,7 +78,7 @@ Use this existing skill through the current canonical tools only.
 - `read`: Read outline, previous chapters, terminology, and templates
   - Chapter template: `read("<base_dir>/templates/chapter_template.md")`
   - Anti-AI rules: `read("<base_dir>/templates/anti_ai_rules.md")`
-- `textbook_chapter`: Write, rewrite, append, replace, validate, and mark chapter files through canonical truth files.
+- `textbook_chapter`: Write, rewrite, append, replace, validate, restore backups, delete sections, rename headings, replace unique snippets, and mark chapter files through canonical truth files.
 - `edit` / `write`: Repair-mode fallback for precise local chapter file changes after canonical targeting is insufficient; prefer `edit` for existing files and `write` only for exact replacement/new-file operations.
 - `knowledge_query`: Retrieve relevant local knowledge when available.
 - `memory_search` / `memory_get`: Retrieve recent activity, preferences, or chapter continuity facts when needed.

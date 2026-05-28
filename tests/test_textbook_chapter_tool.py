@@ -401,3 +401,182 @@ def test_textbook_chapter_replace_section_rejects_large_accidental_shrink(tmp_pa
     assert blocked.status == "error"
     assert "large portion" in str(blocked.result)
     assert bridge.get_chapter(book.id, 4) == content
+
+
+def test_textbook_chapter_lists_and_restores_backup_without_full_content_payload(tmp_path, monkeypatch):
+    bridge = _bridge(tmp_path)
+    book = _book(bridge)
+    monkeypatch.setattr("bridge.textbook_bridge.get_bridge", lambda: bridge)
+
+    tool = TextbookChapterTool()
+    clean = "# Chapter 1\n\n## 1.1 Clean\n\n" + ("clean line\n" * 200)
+    assert tool.execute({
+        "action": "write_chapter",
+        "book_id": book.id,
+        "chapter_num": 1,
+        "content": clean,
+    }).status == "success"
+
+    damaged = "# Chapter 1\n\n## 1.1 Damaged\n\n" + ("broken line\n" * 120)
+    assert tool.execute({
+        "action": "write_chapter",
+        "book_id": book.id,
+        "chapter_num": 1,
+        "content": damaged,
+        "allow_overwrite": True,
+    }).status == "success"
+
+    backups = tool.execute({
+        "action": "list_backups",
+        "book_id": book.id,
+        "chapter_num": 1,
+    })
+    assert backups.status == "success"
+    assert backups.result["backups"]
+    backup_id = backups.result["backups"][0]["backup_id"]
+
+    restored = tool.execute({
+        "action": "restore_backup",
+        "book_id": book.id,
+        "chapter_num": 1,
+        "backup_id": backup_id,
+    })
+    assert restored.status == "success"
+    assert restored.result["action"] == "restored_backup"
+    assert bridge.get_chapter(book.id, 1) == clean
+
+
+def test_textbook_chapter_rename_heading_changes_only_heading_line(tmp_path, monkeypatch):
+    bridge = _bridge(tmp_path)
+    book = _book(bridge)
+    monkeypatch.setattr("bridge.textbook_bridge.get_bridge", lambda: bridge)
+
+    tool = TextbookChapterTool()
+    content = "# Chapter 2\n\n## 2.1 Old Title\n\nbody stays\n\n### 2.1.1 Child\n\nchild stays\n"
+    assert tool.execute({
+        "action": "write_chapter",
+        "book_id": book.id,
+        "chapter_num": 2,
+        "content": content,
+    }).status == "success"
+
+    result = tool.execute({
+        "action": "rename_heading",
+        "book_id": book.id,
+        "chapter_num": 2,
+        "heading": "## 2.1 Old Title",
+        "new_heading": "## 2.1 New Title",
+    })
+    assert result.status == "success"
+    saved = bridge.get_chapter(book.id, 2)
+    assert "## 2.1 New Title" in saved
+    assert "## 2.1 Old Title" not in saved
+    assert "body stays" in saved
+    assert "### 2.1.1 Child" in saved
+
+
+def test_textbook_chapter_delete_section_removes_section_instead_of_reinserting_heading(tmp_path, monkeypatch):
+    bridge = _bridge(tmp_path)
+    book = _book(bridge)
+    monkeypatch.setattr("bridge.textbook_bridge.get_bridge", lambda: bridge)
+
+    tool = TextbookChapterTool()
+    content = "# Chapter 3\n\n## 3.1 Keep\n\nkeep\n\n### 3.1.1 Duplicate\n\nremove me\n\n### 3.1.2 Next\n\nnext\n"
+    assert tool.execute({
+        "action": "write_chapter",
+        "book_id": book.id,
+        "chapter_num": 3,
+        "content": content,
+    }).status == "success"
+
+    result = tool.execute({
+        "action": "delete_section",
+        "book_id": book.id,
+        "chapter_num": 3,
+        "heading": "### 3.1.1 Duplicate",
+    })
+    assert result.status == "success"
+    saved = bridge.get_chapter(book.id, 3)
+    assert "### 3.1.1 Duplicate" not in saved
+    assert "remove me" not in saved
+    assert "## 3.1 Keep" in saved
+    assert "### 3.1.2 Next" in saved
+
+
+def test_textbook_chapter_replace_exact_requires_unique_match(tmp_path, monkeypatch):
+    bridge = _bridge(tmp_path)
+    book = _book(bridge)
+    monkeypatch.setattr("bridge.textbook_bridge.get_bridge", lambda: bridge)
+
+    tool = TextbookChapterTool()
+    content = "# Chapter 1\n\n## 1.1 A\n\nold phrase\n\n## 1.2 B\n\nold phrase\n"
+    assert tool.execute({
+        "action": "write_chapter",
+        "book_id": book.id,
+        "chapter_num": 1,
+        "content": content,
+    }).status == "success"
+
+    duplicate = tool.execute({
+        "action": "replace_exact",
+        "book_id": book.id,
+        "chapter_num": 1,
+        "old_text": "old phrase",
+        "new_text": "new phrase",
+    })
+    assert duplicate.status == "error"
+    assert "unique" in str(duplicate.result)
+
+    result = tool.execute({
+        "action": "replace_exact",
+        "book_id": book.id,
+        "chapter_num": 1,
+        "old_text": "## 1.2 B\n\nold phrase",
+        "new_text": "## 1.2 B\n\nnew phrase",
+    })
+    assert result.status == "success"
+    saved = bridge.get_chapter(book.id, 1)
+    assert "## 1.1 A\n\nold phrase" in saved
+    assert "## 1.2 B\n\nnew phrase" in saved
+
+
+def test_textbook_chapter_backups_are_not_overwritten_within_same_second(tmp_path, monkeypatch):
+    bridge = _bridge(tmp_path)
+    book = _book(bridge)
+    monkeypatch.setattr("bridge.textbook_bridge.get_bridge", lambda: bridge)
+
+    tool = TextbookChapterTool()
+    original = "# Chapter 1\n\n## 1.1 A\n\n" + ("first\n" * 100)
+    second = "# Chapter 1\n\n## 1.1 B\n\n" + ("second\n" * 100)
+    third = "# Chapter 1\n\n## 1.1 C\n\n" + ("third\n" * 100)
+
+    assert tool.execute({
+        "action": "write_chapter",
+        "book_id": book.id,
+        "chapter_num": 1,
+        "content": original,
+    }).status == "success"
+    assert tool.execute({
+        "action": "write_chapter",
+        "book_id": book.id,
+        "chapter_num": 1,
+        "content": second,
+        "allow_overwrite": True,
+    }).status == "success"
+    assert tool.execute({
+        "action": "write_chapter",
+        "book_id": book.id,
+        "chapter_num": 1,
+        "content": third,
+        "allow_overwrite": True,
+    }).status == "success"
+
+    backups = tool.execute({
+        "action": "list_backups",
+        "book_id": book.id,
+        "chapter_num": 1,
+    })
+    assert backups.status == "success"
+    assert backups.result["backup_count"] >= 2
+    backup_ids = [item["backup_id"] for item in backups.result["backups"]]
+    assert len(backup_ids) == len(set(backup_ids))

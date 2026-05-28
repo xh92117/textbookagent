@@ -41,3 +41,19 @@ def test_short_term_memory_skips_injected_textbook_context_block(tmp_path):
     pool.record_user_goal(injected)
 
     assert not pool.path.exists()
+
+
+def test_short_term_memory_tool_result_summary_drops_raw_read_body(tmp_path):
+    pool = ShortTermMemoryPool(str(tmp_path / "system"), session_id="s1")
+    pool.record_tool_end(
+        "read",
+        {"path": "chapters/chapter_010.md"},
+        "success",
+        {"content": "# 第10章\n\n" + ("RAW_TOOL_BODY " * 300)},
+    )
+
+    data = json.loads(pool.path.read_text(encoding="utf-8"))
+    summary = data["events"][-1]["summary"]
+
+    assert "chapters/chapter_010.md" in summary
+    assert "RAW_TOOL_BODY" not in summary

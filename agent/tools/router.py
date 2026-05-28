@@ -5,7 +5,7 @@ from typing import Dict, Iterable, List, Mapping, Sequence, Set
 
 
 ALWAYS_TOOLS = {"memory_search", "memory_get"}
-TEXTBOOK_REPAIR_TOOLS = {"edit", "write"}
+TEXTBOOK_REPAIR_TOOLS: Set[str] = set()
 
 TASK_TOOL_PROFILES: Dict[str, Set[str]] = {
     "textbook": {
@@ -43,7 +43,9 @@ ROUTING_HINTS = {
         "Use start_pipeline when the user wants automatic full-book generation.",
         "Use textbook_outline for outline/catalog/terminology Markdown; do not use textbook_chapter for whole-book outlines.",
         "Use textbook_chapter for chapter Markdown in normal writing/rewrite/append flows.",
-        "For local textbook repair, use textbook_chapter first; use edit/write only when the canonical tool cannot target the change or the user explicitly asks for direct file editing.",
+        "For local textbook repair, use textbook_chapter first. Prefer restore_backup for corrupted chapters, delete_section for duplicate sections, rename_heading for title-only fixes, and replace_exact for one unique text snippet.",
+        "Use replace_section only for replacing one clear unique section; do not use it to delete text, rename a heading, repair duplicate headings, or restore a large damaged chapter.",
+        "Do not use edit/write for textbook body repair in this route; if the canonical tool cannot target the change, stop and explain the limitation.",
         "Never use bash or shell redirection to write Chinese textbook body text.",
         "If a hidden tool is unavailable, do not retry it; stop and explain the limitation or ask for a more precise target.",
         "Use knowledge_query before drafting when evidence or textbook continuity matters.",
@@ -253,7 +255,7 @@ def _route_mode(task_type: str, user_message: str, names: Set[str]) -> tuple[str
             "rewrite full", "regenerate full", "start pipeline",
         )
         if any(marker in text for marker in repair_markers) and not any(marker in text for marker in full_rewrite_markers):
-            return "repair", ["textbook_chapter"], "local textbook repair may use edit/write only after the canonical chapter tool is insufficient"
+            return "repair", ["textbook_chapter"], "local textbook repair must use the canonical chapter tool and stop if it is insufficient"
         chapter_markers = (
             "章节", "第", "续写", "编写", "正文", "标记完成", "写第", "写一章",
             "章节", "第", "续写", "编写", "正文", "标记完成",
@@ -292,7 +294,7 @@ def _format_prompt(
     lines.extend(f"- {hint}" for hint in hints)
     lines.extend([
         "- Strict mode: use the required tool for the exact task; use support tools only for context or verification.",
-        "- Repair mode: use the canonical textbook tool first; use edit/write only for precise local repairs when visible; never use bash to write textbook body text.",
+        "- Repair mode: use the canonical textbook tool first; for damaged chapters call list_backups then restore_backup; for local fixes prefer delete_section, rename_heading, or replace_exact before replace_section; do not use hidden edit/write; never use bash to write textbook body text.",
         "- Guided mode: prefer the visible tools, but choose the narrowest tool that directly matches the next action.",
         "- Free mode: answer without tools when sufficient; call tools only when external state, files, or verification matter.",
         "- Do not call the same tool with the same arguments after a success; proceed or answer.",

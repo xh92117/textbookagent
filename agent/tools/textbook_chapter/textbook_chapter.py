@@ -31,7 +31,8 @@ class TextbookChapterTool(BaseTool):
         "writing, appending, replacing, or validating textbook chapter Markdown. It resolves "
         "the canonical book_id/textbooks/<id>/chapters path, preserves chapter metadata, and "
         "updates the textbook status board. Actions: read, write_chapter, rewrite_chapter, append_section, "
-        "replace_section, mark_completed, validate_encoding, validate_structure, status. To mark an existing "
+        "replace_section, delete_section, rename_heading, replace_exact, list_backups, restore_backup, "
+        "mark_completed, validate_encoding, validate_structure, status. To mark an existing "
         "chapter complete, use mark_completed; never call write_chapter with placeholder content."
     )
 
@@ -40,7 +41,7 @@ class TextbookChapterTool(BaseTool):
         "properties": {
             "action": {
                 "type": "string",
-                "description": "One of: read, write_chapter, rewrite_chapter, append_section, replace_section, mark_completed, validate_encoding, validate_structure, status"
+                "description": "One of: read, write_chapter, rewrite_chapter, append_section, replace_section, delete_section, rename_heading, replace_exact, list_backups, restore_backup, mark_completed, validate_encoding, validate_structure, status"
             },
             "book_id": {
                 "type": "string",
@@ -65,6 +66,26 @@ class TextbookChapterTool(BaseTool):
             "allow_overwrite": {
                 "type": "boolean",
                 "description": "Explicitly allow replacing an existing substantial chapter with a full new body. Prefer append_section/replace_section for edits."
+            },
+            "new_heading": {
+                "type": "string",
+                "description": "New Markdown heading for rename_heading, for example ## 2.4 Better Title"
+            },
+            "old_text": {
+                "type": "string",
+                "description": "Exact unique text to replace for replace_exact."
+            },
+            "new_text": {
+                "type": "string",
+                "description": "Replacement text for replace_exact."
+            },
+            "backup_id": {
+                "type": "string",
+                "description": "Backup filename returned by list_backups, for example chapter_003_20260528-130636.md"
+            },
+            "backup_path": {
+                "type": "string",
+                "description": "Optional backup path under the textbook state/chapter_backups directory."
             }
         },
         "required": ["action", "book_id", "chapter_num"]
@@ -112,8 +133,36 @@ class TextbookChapterTool(BaseTool):
                 report = self._validate_structure(content, chapter_num)
                 self._update_chapter_index(mgr, book_id, chapter_num, "validate_structure", report=report)
                 return ToolResult.success(report)
+            if action == "list_backups":
+                return ToolResult.success(self._list_backups(mgr, book_id, chapter_num))
+            if action == "restore_backup":
+                return self._restore_backup(
+                    mgr,
+                    book_id,
+                    chapter_num,
+                    str(args.get("backup_id", "")).strip(),
+                    str(args.get("backup_path", "")).strip(),
+                    bool(args.get("completed", False)),
+                )
             if action == "mark_completed":
                 return self._mark_completed(mgr, book_id, chapter_num)
+            if action == "rename_heading":
+                heading = str(args.get("heading", "")).strip()
+                new_heading = str(args.get("new_heading", "")).strip()
+                if not heading or not new_heading:
+                    return ToolResult.fail("heading and new_heading are required for rename_heading")
+                return self._rename_heading(mgr, book_id, chapter_num, heading, new_heading, bool(args.get("completed", False)))
+            if action == "delete_section":
+                heading = str(args.get("heading", "")).strip()
+                if not heading:
+                    return ToolResult.fail("heading is required for delete_section")
+                return self._delete_section(mgr, book_id, chapter_num, heading, bool(args.get("completed", False)))
+            if action == "replace_exact":
+                old_text = args.get("old_text", "")
+                new_text = args.get("new_text", "")
+                if not isinstance(old_text, str) or not isinstance(new_text, str):
+                    return ToolResult.fail("old_text and new_text must be strings")
+                return self._replace_exact(mgr, book_id, chapter_num, old_text, new_text, bool(args.get("completed", False)))
             if action in ("write_chapter", "rewrite_chapter", "append_section", "replace_section"):
                 content = args.get("content", "")
                 if not isinstance(content, str):
@@ -269,6 +318,86 @@ class TextbookChapterTool(BaseTool):
             payload["backup_path"] = backup_path
         return ToolResult.success(payload)
 
+    def _rename_heading(self, mgr, book_id: str, chapter_num: int, heading: str, new_heading: str, completed: bool) -> ToolResult:
+        existing = mgr.read_chapter(chapter_num)
+        old_level = self._heading_level(heading.strip())
+        new_level = self._heading_level(new_heading.strip())
+        if old_level <= 0 or new_level <= 0:
+            return ToolResult.fail("rename_heading requires valid Markdown headings")
+        if old_level != new_level:
+            return ToolResult.fail("rename_heading requires old and new headings to use the same heading level")
+        start, end = self._find_heading(existing, heading)
+        if start < 0:
+            return ToolResult.fail(f"heading not found: {heading}")
+        if self._find_heading(existing, new_heading)[0] >= 0:
+            return ToolResult.fail(f"new heading already exists: {new_heading}")
+        updated = existing[:start] + new_heading.strip() + existing[end:]
+        return self._save_chapter_update(
+            mgr, book_id, chapter_num, updated, completed, "rename_heading", "renamed_heading", heading=heading
+        )
+
+    def _delete_section(self, mgr, book_id: str, chapter_num: int, heading: str, completed: bool) -> ToolResult:
+        existing = mgr.read_chapter(chapter_num)
+        if self._heading_level(heading.strip()) <= 0:
+            return ToolResult.fail("delete_section requires a Markdown heading")
+        start, end = self._find_section_bounds(existing, heading)
+        if start < 0:
+            return ToolResult.fail(f"section not found: {heading}")
+        updated = (existing[:start].rstrip() + "\n\n" + existing[end:].lstrip()).strip() + "\n"
+        return self._save_chapter_update(
+            mgr, book_id, chapter_num, updated, completed, "delete_section", "deleted_section", heading=heading
+        )
+
+    def _replace_exact(self, mgr, book_id: str, chapter_num: int, old_text: str, new_text: str, completed: bool) -> ToolResult:
+        if not old_text:
+            return ToolResult.fail("old_text is required for replace_exact")
+        existing = mgr.read_chapter(chapter_num)
+        count = existing.count(old_text)
+        if count != 1:
+            return ToolResult.fail(
+                f"replace_exact requires a unique old_text match; found {count}. "
+                "Use a longer surrounding snippet or a structural action."
+            )
+        updated = existing.replace(old_text, new_text, 1)
+        return self._save_chapter_update(
+            mgr, book_id, chapter_num, updated, completed, "replace_exact", "replaced_exact", source_chars=len(new_text)
+        )
+
+    def _restore_backup(
+        self,
+        mgr,
+        book_id: str,
+        chapter_num: int,
+        backup_id: str,
+        backup_path: str,
+        completed: bool,
+    ) -> ToolResult:
+        resolved = self._resolve_backup_path(mgr, chapter_num, backup_id, backup_path)
+        if not resolved:
+            return ToolResult.fail("backup_id or backup_path is required and must point to an existing chapter backup")
+        with open(resolved, "r", encoding="utf-8") as f:
+            content = f.read()
+        report = self._validate_structure(content, chapter_num)
+        if report.get("fatal_issues"):
+            return ToolResult.fail({
+                "message": "Refusing restore_backup because backup structure is invalid.",
+                "fatal_issues": report.get("fatal_issues", []),
+                "warnings": report.get("warnings", []),
+            })
+        existing = mgr.read_chapter(chapter_num)
+        current_backup = self._backup_existing_chapter(mgr, chapter_num, existing, content)
+        mgr.write_chapter(chapter_num, content)
+        saved = mgr.read_chapter(chapter_num)
+        self._write_metadata(mgr, chapter_num, saved, completed)
+        self._update_status(mgr, book_id, chapter_num, "restore_backup")
+        report = self._update_chapter_index(mgr, book_id, chapter_num, "restore_backup", report=report)
+        payload = self._result_payload(mgr, book_id, chapter_num, "restored_backup", saved, completed, source_chars=len(saved))
+        payload["restored_from"] = os.path.relpath(resolved, mgr.book_dir).replace("\\", "/")
+        payload["structure"] = report
+        if current_backup:
+            payload["backup_path"] = current_backup
+        return ToolResult.success(payload)
+
     def _validate(self, mgr, book_id: str, chapter_num: int) -> Dict[str, Any]:
         path = mgr._chapter_path(chapter_num)
         raw = b""
@@ -325,6 +454,31 @@ class TextbookChapterTool(BaseTool):
             )
         return payload
 
+    def _save_chapter_update(
+        self,
+        mgr,
+        book_id: str,
+        chapter_num: int,
+        updated: str,
+        completed: bool,
+        operation: str,
+        action: str,
+        heading: str = "",
+        source_chars: int = 0,
+    ) -> ToolResult:
+        existing = mgr.read_chapter(chapter_num)
+        backup_path = self._backup_existing_chapter(mgr, chapter_num, existing, updated)
+        mgr.write_chapter(chapter_num, updated)
+        saved = mgr.read_chapter(chapter_num)
+        self._write_metadata(mgr, chapter_num, saved, completed)
+        self._update_status(mgr, book_id, chapter_num, "persist_chapter" if completed else "write_chapter")
+        report = self._update_chapter_index(mgr, book_id, chapter_num, operation)
+        payload = self._result_payload(mgr, book_id, chapter_num, action, saved, completed, heading, source_chars=source_chars)
+        payload["structure"] = report
+        if backup_path:
+            payload["backup_path"] = backup_path
+        return ToolResult.success(payload)
+
     def _status_payload(self, mgr, book_id: str, chapter_num: int) -> Dict[str, Any]:
         return {
             "book_id": book_id,
@@ -355,9 +509,63 @@ class TextbookChapterTool(BaseTool):
         os.makedirs(backup_dir, exist_ok=True)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         backup_path = os.path.join(backup_dir, f"chapter_{chapter_num:03d}_{stamp}.md")
+        counter = 1
+        while os.path.exists(backup_path):
+            backup_path = os.path.join(backup_dir, f"chapter_{chapter_num:03d}_{stamp}_{counter}.md")
+            counter += 1
         with open(backup_path, "w", encoding="utf-8") as f:
             f.write(existing)
         return backup_path
+
+    def _list_backups(self, mgr, book_id: str, chapter_num: int) -> Dict[str, Any]:
+        backup_dir = os.path.join(mgr.book_dir, "state", "chapter_backups")
+        backups = []
+        pattern = re.compile(rf"^chapter_{int(chapter_num):03d}_\d{{8}}-\d{{6}}(?:_\d+)?\.md$", re.IGNORECASE)
+        if os.path.isdir(backup_dir):
+            for filename in sorted(os.listdir(backup_dir), reverse=True):
+                if not pattern.match(filename):
+                    continue
+                path = os.path.join(backup_dir, filename)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    stat = os.stat(path)
+                except OSError:
+                    continue
+                backups.append({
+                    "backup_id": filename,
+                    "path": os.path.relpath(path, mgr.book_dir).replace("\\", "/"),
+                    "bytes": stat.st_size,
+                    "chars": len(content),
+                    "content_hash": mgr.content_hash(content),
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                })
+        return {
+            "book_id": book_id,
+            "chapter_num": chapter_num,
+            "backup_count": len(backups),
+            "backups": backups,
+        }
+
+    def _resolve_backup_path(self, mgr, chapter_num: int, backup_id: str, backup_path: str) -> str:
+        backup_dir = os.path.abspath(os.path.join(mgr.book_dir, "state", "chapter_backups"))
+        requested = backup_id or backup_path
+        if not requested:
+            return ""
+        candidate = requested
+        if not os.path.isabs(candidate):
+            candidate = os.path.join(backup_dir, os.path.basename(candidate))
+        candidate = os.path.abspath(candidate)
+        try:
+            common = os.path.commonpath([backup_dir, candidate])
+        except ValueError:
+            return ""
+        if common != backup_dir or not os.path.exists(candidate):
+            return ""
+        expected = re.compile(rf"^chapter_{int(chapter_num):03d}_\d{{8}}-\d{{6}}(?:_\d+)?\.md$", re.IGNORECASE)
+        if not expected.match(os.path.basename(candidate)):
+            return ""
+        return candidate
 
     @staticmethod
     def _looks_like_accidental_truncation(existing: str, updated: str, heading: str) -> bool:

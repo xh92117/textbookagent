@@ -188,6 +188,151 @@ def test_context_summary_callback_is_structured_and_marks_verification(monkeypat
     assert "User asked for chapter 1" in injected
 
 
+def test_context_summary_handoff_file_contains_todo_and_is_injected(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "config", config.Config({
+        "system_workspace": str(tmp_path / "system"),
+        "workspace_split_enabled": True,
+        "agent_model_context_window": 120000,
+        "agent_context_reserve_tokens": 12000,
+    }))
+    agent = Agent(system_prompt="", model=SimpleNamespace(model="demo", session_id="session-a"))
+    executor = AgentStreamExecutor(
+        agent=agent,
+        model=agent.model,
+        system_prompt="system",
+        tools=[],
+        messages=[{
+            "role": "user",
+            "content": [{"type": "text", "text": "修复第3章审查意见的前两个问题"}],
+        }],
+    )
+    discarded_turns = [{
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "审查第三章"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "已给出第三章审查意见：1. 修复代码截断 2. 补全3.5.7 3. 字数偏多"}]},
+        ]
+    }]
+    kept_turns = executor._identify_complete_turns()
+
+    handoff = executor._persist_context_handoff(discarded_turns, kept_turns, reason="trim")
+    executor._inject_context_handoff_summary(handoff)
+
+    handoff_text = handoff["content"]
+    injected = executor.messages[0]["content"][0]["text"]
+
+    assert "## Current Done" in handoff_text
+    assert "## Todo" in handoff_text
+    assert "Todo:" in injected
+    assert str(handoff["path"]) in injected
+
+
+def test_near_max_turn_persists_resume_handoff_plan(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "config", config.Config({
+        "system_workspace": str(tmp_path / "system"),
+        "workspace_split_enabled": True,
+        "agent_model_context_window": 120000,
+        "agent_context_reserve_tokens": 12000,
+    }))
+    events = []
+    agent = Agent(system_prompt="", model=SimpleNamespace(model="demo", session_id="session-a"))
+    executor = AgentStreamExecutor(
+        agent=agent,
+        model=agent.model,
+        system_prompt="system",
+        tools=[],
+        max_turns=50,
+        messages=[
+            {"role": "user", "content": [{"type": "text", "text": "继续修复第六章前两个问题"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "已完成第六章审查，正在修复问题1。下一步：修复问题2并验证章节。"}]},
+        ],
+        on_event=lambda event: events.append(event),
+    )
+
+    handoff = executor._maybe_persist_near_max_turn_handoff(
+        turn=49,
+        final_response="已完成第六章审查，正在修复问题1。",
+        tool_calls=[{"name": "textbook_chapter", "arguments": {"action": "replace_exact"}}],
+    )
+
+    content = handoff["content"]
+
+    assert handoff["reason"] == "near-max-turn"
+    assert "## Todo" in content
+    assert "继续下一轮对话" in content
+    assert "修复问题2并验证章节" in content
+    assert any(event["type"] == "session_handoff_saved" for event in events)
+
+
+def test_default_context_and_tool_noise_thresholds_are_tighter():
+    assert config.available_setting["agent_context_compress_ratio"] <= 0.7
+    assert config.available_setting["agent_context_midrun_trim_ratio"] <= 0.8
+    assert config.available_setting["agent_current_tool_result_context_chars"] <= 5000
+    assert config.available_setting["agent_historical_tool_result_context_chars"] <= 1500
+    assert config.available_setting["agent_tool_result_context_budgets"]["textbook_chapter"] <= 3000
+
+
+def test_midrun_tool_result_guard_compacts_current_turn_when_noise_is_high(monkeypatch):
+    monkeypatch.setattr(config, "config", config.Config({
+        "agent_midrun_tool_result_chars": 1000,
+    }))
+    agent = Agent(system_prompt="", model=SimpleNamespace(model="demo"))
+    executor = AgentStreamExecutor(
+        agent=agent,
+        model=agent.model,
+        system_prompt="system",
+        tools=[],
+        messages=[
+            {"role": "user", "content": [{"type": "text", "text": "修复第六章"}]},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "read", "input": {"path": "a.md"}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "A" * 900}]},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t2", "name": "read", "input": {"path": "b.md"}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t2", "content": "B" * 900}]},
+        ],
+    )
+
+    before = executor._total_tool_result_chars()
+    changed = executor._compress_current_turn_tool_results_if_needed()
+    after = executor._total_tool_result_chars()
+
+    assert before > 1000
+    assert changed is True
+    assert after < before
+    assert executor.messages[-1]["content"][0]["content"] == "B" * 900
+
+
+def test_final_response_compacts_tool_results_for_history(monkeypatch):
+    monkeypatch.setattr(config, "config", config.Config({
+        "agent_historical_tool_result_context_chars": 900,
+    }))
+    agent = Agent(system_prompt="", model=SimpleNamespace(model="demo"))
+    executor = AgentStreamExecutor(
+        agent=agent,
+        model=agent.model,
+        system_prompt="system",
+        tools=[],
+        messages=[
+            {"role": "user", "content": [{"type": "text", "text": "审查第六章"}]},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "read", "input": {"path": "chapter_006.md"}}]},
+            {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "t1",
+                    "content": "# 第六章\n\n" + ("RAW_CHAPTER_BODY " * 2000),
+                }],
+            },
+        ],
+    )
+
+    changed = executor._compact_tool_results_after_final_response()
+    stored = executor.messages[-1]["content"][0]["content"]
+
+    assert changed is True
+    assert "historical read result summarized" in stored
+    assert "chapter_006.md" in stored
+    assert "RAW_CHAPTER_BODY" not in stored
+
+
 def test_prompt_metrics_expose_quantifiable_acceptance(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "config", config.Config({"knowledge": False}))
     (tmp_path / "AGENT.md").write_text("agent", encoding="utf-8")

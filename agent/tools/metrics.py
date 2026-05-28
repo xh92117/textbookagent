@@ -34,7 +34,13 @@ class ToolBudget:
 def default_tool_budget(mode: str, task_type: str) -> ToolBudget:
     normalized_mode = mode or "guided"
     normalized_task = task_type or "general"
-    if normalized_mode == "free":
+    if normalized_task == "textbook" and normalized_mode == "repair":
+        max_calls = 12
+    elif normalized_task == "textbook" and normalized_mode == "strict":
+        max_calls = 8
+    elif normalized_task == "textbook":
+        max_calls = 10
+    elif normalized_mode == "free":
         max_calls = 1
     elif normalized_mode == "strict":
         max_calls = 5

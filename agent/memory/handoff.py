@@ -76,18 +76,21 @@ class HandoffService:
         texts = [self._redact(text) for text in texts if text.strip()]
         all_text = "\n".join(texts)
         user_texts = [
-            self._redact(self._message_text(msg))
+            self._redact(self._message_text(msg, include_tools=False))
             for msg in messages or []
-            if msg.get("role") == "user" and self._message_text(msg).strip()
+            if msg.get("role") == "user" and self._message_text(msg, include_tools=False).strip()
         ]
         assistant_texts = [
-            self._redact(self._message_text(msg))
+            self._redact(self._message_text(msg, include_tools=False))
             for msg in messages or []
-            if msg.get("role") == "assistant" and self._message_text(msg).strip()
+            if msg.get("role") == "assistant" and self._message_text(msg, include_tools=False).strip()
         ]
+        task_text = "\n".join(user_texts + assistant_texts)
         goal = self._clip(user_texts[-1] if user_texts else (texts[-1] if texts else ""), 220)
         completed = self._bulletize(assistant_texts[-2:], max_items=3, max_chars=180)
-        next_actions = self._next_actions(all_text)
+        next_actions = self._next_actions(task_text)
+        if not next_actions and goal:
+            next_actions = [f"Continue current user goal: {self._clip(goal, 140)}"]
         refs = self._evidence_refs(all_text)
         retrieval = self._suggested_retrieval(goal, refs)
         updated_at = self._normalize_iso(now) or self._now_iso()
@@ -97,6 +100,8 @@ class HandoffService:
             "updated_at": updated_at,
             "current_goal": goal,
             "active_constraints": self._constraints(all_text),
+            "current_done": completed or ["No completed work was captured before compaction."],
+            "todo": next_actions or ["Continue from the current goal after verifying current state."],
             "completed_work": completed,
             "open_threads": self._open_threads(all_text),
             "next_actions": next_actions,
@@ -118,6 +123,12 @@ class HandoffService:
             "",
             "## Active Constraints",
             *self._format_list(payload.get("active_constraints") or ["Keep this handoff compact and reference artifacts instead of copying full content."]),
+            "",
+            "## Current Done",
+            *self._format_list(payload.get("current_done") or ["No completed work was captured before compaction."]),
+            "",
+            "## Todo",
+            *self._format_list(payload.get("todo") or ["Continue from the current goal after verifying current state."]),
             "",
             "## Completed Work",
             *self._format_list(payload.get("completed_work") or ["-"]),
@@ -151,23 +162,57 @@ class HandoffService:
         return result or ["- -"]
 
     @classmethod
-    def _message_text(cls, msg: Dict[str, Any]) -> str:
+    def _message_text(cls, msg: Dict[str, Any], include_tools: bool = True) -> str:
         content = msg.get("content", "")
         if isinstance(content, str):
-            return content.strip()
+            return cls._strip_injected_boards(content).strip()
         if isinstance(content, list):
             parts = []
             for block in content:
                 if not isinstance(block, dict):
                     continue
                 if block.get("type") == "text":
-                    parts.append(str(block.get("text", "")))
-                elif block.get("type") == "tool_result":
-                    parts.append(str(block.get("content", "")))
-                elif block.get("type") == "tool_use":
-                    parts.append(f"tool:{block.get('name', '')} {block.get('input', {})}")
+                    parts.append(cls._strip_injected_boards(str(block.get("text", ""))))
+                elif include_tools and block.get("type") == "tool_result":
+                    raw = str(block.get("content", ""))
+                    first = re.sub(r"\s+", " ", raw).strip()[:240]
+                    parts.append(f"tool_result:{block.get('tool_use_id', '')} {first}")
+                elif include_tools and block.get("type") == "tool_use":
+                    parts.append(cls._clip(f"tool:{block.get('name', '')} {block.get('input', {})}", 320))
             return "\n".join(part for part in parts if part).strip()
         return ""
+
+    @staticmethod
+    def _strip_injected_boards(text: str) -> str:
+        """Remove injected system boards before handoff goal/todo extraction."""
+        value = str(text or "").strip()
+        if not value:
+            return ""
+        board_markers = (
+            "[System: Runtime Context Board]",
+            "[System: Tool routing policy]",
+            "[System: Short-term working memory]",
+            "[System: Current task state board]",
+            "[System: Context Compression Handoff]",
+            "[System: Context Compression Summary]",
+            "[Compacted Context Summary]",
+        )
+        changed = True
+        while changed:
+            changed = False
+            stripped = value.lstrip()
+            for marker in board_markers:
+                if not stripped.startswith(marker):
+                    continue
+                separator = re.search(r"\n\s*---\s*\n", stripped)
+                if separator:
+                    value = stripped[separator.end():].strip()
+                else:
+                    lines = stripped.splitlines()
+                    value = "\n".join(lines[1:]).strip()
+                changed = True
+                break
+        return value
 
     @staticmethod
     def _safe_session_id(session_id: str) -> str:
@@ -185,12 +230,11 @@ class HandoffService:
 
     @classmethod
     def _next_actions(cls, text: str) -> List[str]:
+        pattern = r"下一步|接下来|待办|继续|开始|todo|next action|next step"
         actions = []
         for line in str(text or "").splitlines():
             stripped = line.strip(" -\t")
-            if not stripped:
-                continue
-            if re.search(r"下一步|接下来|todo|next action|next step|继续|开始", stripped, re.IGNORECASE):
+            if stripped and re.search(pattern, stripped, re.IGNORECASE):
                 actions.append(cls._clip(stripped, 180))
         return actions[:5]
 
@@ -199,7 +243,7 @@ class HandoffService:
         constraints = []
         for line in str(text or "").splitlines():
             stripped = line.strip(" -\t")
-            if re.search(r"不要|必须|只能|不能|约束|constraint|must|never|only", stripped, re.IGNORECASE):
+            if re.search(r"不要|必须|只能|不能|约束|忽略|跳过|constraint|must|never|only", stripped, re.IGNORECASE):
                 constraints.append(cls._clip(stripped, 180))
         return constraints[:4]
 
@@ -208,7 +252,7 @@ class HandoffService:
         threads = []
         for line in str(text or "").splitlines():
             stripped = line.strip(" -\t")
-            if re.search(r"待|未完成|问题|风险|blocker|risk|open", stripped, re.IGNORECASE):
+            if re.search(r"待办|未完成|问题|风险|阻塞|blocker|risk|open", stripped, re.IGNORECASE):
                 threads.append(cls._clip(stripped, 180))
         return threads[:4]
 
