@@ -173,7 +173,10 @@ def route_tools(
     else:
         allowed_set = (profile | ALWAYS_TOOLS | set(required_tools)) & names
     if mode == "strict" and required_tools:
-        strict_support = {"knowledge_query", "memory_search", "memory_get", "read", "ls"}
+        if task_type == "textbook" and set(required_tools) == {"textbook_chapter", "textbook_outline"}:
+            strict_support = {"memory_search", "memory_get", "read", "ls"}
+        else:
+            strict_support = {"knowledge_query", "memory_search", "memory_get", "read", "ls"}
         allowed_set = (set(required_tools) | strict_support) & names
     if not allowed_set:
         allowed_set = names
@@ -238,6 +241,18 @@ def _route_mode(task_type: str, user_message: str, names: Set[str]) -> tuple[str
         if any(marker in text for marker in create_markers) and not any(marker in text for marker in pipeline_markers):
             return "strict", ["create_textbook"], "textbook project creation must use canonical metadata creation"
     if task_type == "textbook" and "textbook_outline" in names:
+        review_markers = ("审查", "检查", "评估", "review", "check")
+        chapter_review_markers = ("第", "章", "chapter")
+        if (
+            "textbook_chapter" in names
+            and any(marker in text for marker in review_markers)
+            and any(marker in text for marker in chapter_review_markers)
+        ):
+            return (
+                "strict",
+                ["textbook_chapter", "textbook_outline"],
+                "chapter review needs chapter evidence and outline reference, but no exploratory knowledge search",
+            )
         outline_markers = (
             "大纲", "目录", "术语表", "术语", "outline", "catalog", "terminology", "glossary",
         )

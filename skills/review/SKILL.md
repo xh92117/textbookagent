@@ -21,8 +21,9 @@ allowed-tools:
 ## Current Tool Contract
 
 - Use `textbook_outline` to read outline and terminology artifacts.
-- Use `textbook_chapter` to read or validate chapter artifacts.
+- Use `textbook_chapter` to read or validate chapter artifacts. For chapter review, read the target chapter once with `textbook_chapter(action="read")`, then work from that evidence.
 - Use `read` only for review checklist templates or adjacent context.
+- Do not call `knowledge_query` or `memory_search` for a normal chapter review after the target chapter and checklist are available. Move directly to the review report.
 - Do not modify reviewed content in this skill. Do not use `write`, `edit`, or `bash`.
 - If the user asks to apply review suggestions, switch to the chapter or outline skill after reporting the review result.
 
@@ -62,10 +63,13 @@ Perform multi-dimensional quality review on textbook outlines or chapter content
 
 ## Tool Usage Specification
 
-- `read`: Read outline/chapter files and review checklist templates
+- `read`: Read review checklist templates and adjacent context only
   - Syntax: `read("<file_path>")`
   - Outline checklist: `read("<base_dir>/templates/review_checklist_outline.md")`
   - Chapter checklist: `read("<base_dir>/templates/review_checklist_chapter.md")`
+- `textbook_chapter`: Read the target chapter for chapter review
+  - Chapter read: `textbook_chapter({"action":"read","chapter_num":3})`
+- `textbook_outline`: Read outline or terminology artifacts when the review requires outline comparison
 - Review reports should be returned to the user unless a visible canonical review/status tool is provided by the current route.
 
 ## Output Specification

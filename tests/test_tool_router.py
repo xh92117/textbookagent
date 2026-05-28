@@ -139,6 +139,28 @@ def test_tool_router_routes_single_chapter_writing_away_from_pipeline():
     assert "textbook_chapter" in route.allowed_tools
 
 
+def test_tool_router_routes_chapter_review_with_outline_but_without_knowledge_query():
+    tools = {
+        "textbook_chapter": object(),
+        "textbook_outline": object(),
+        "knowledge_query": object(),
+        "memory_search": object(),
+        "memory_get": object(),
+        "read": object(),
+        "ls": object(),
+        "bash": object(),
+    }
+
+    route = route_tools("请重新审查第15章，并对照大纲给出审查意见", tools)
+
+    assert route.mode == "strict"
+    assert route.required_tools == ["textbook_chapter", "textbook_outline"]
+    assert "textbook_chapter" in route.allowed_tools
+    assert "textbook_outline" in route.allowed_tools
+    assert "knowledge_query" not in route.allowed_tools
+    assert "bash" in route.blocked_tools
+
+
 def test_tool_router_routes_explicit_pipeline_start_to_start_pipeline():
     tools = {
         "start_pipeline": object(),

@@ -882,6 +882,43 @@ def compact_current_tool_result_content(
         return rendered
 
     if tool_name == "textbook_chapter":
+        action = str((tool_args or {}).get("action") or "").lower()
+        if action == "read":
+            try:
+                payload = json.loads(content)
+            except Exception:
+                payload = {}
+            chapter_content = payload.get("content") if isinstance(payload, dict) else ""
+            if isinstance(chapter_content, str) and chapter_content.strip():
+                evidence_budget = max(max_chars, 16000)
+                lines = chapter_content.splitlines()
+                headings = [
+                    f"L{idx}: {line.strip()[:180]}"
+                    for idx, line in enumerate(lines, start=1)
+                    if line.strip().startswith("#")
+                ][:80]
+                head_budget = min(11000, max(3000, evidence_budget - 5000))
+                tail_budget = max(1500, evidence_budget - head_budget - 1200)
+                parts = [
+                    "[current textbook_chapter read evidence]",
+                    f"book_id: {payload.get('book_id') or (tool_args or {}).get('book_id') or ''}",
+                    f"chapter_num: {payload.get('chapter_num') or (tool_args or {}).get('chapter_num') or ''}",
+                    f"path: {payload.get('path') or payload.get('chapter_path') or ''}",
+                    f"status: {status}",
+                    f"original_chars: {len(chapter_content)}",
+                    f"line_count: {len(lines)}",
+                ]
+                if headings:
+                    parts.extend(["headings:", *[f"- {item}" for item in headings]])
+                parts.extend(["chapter head evidence:", chapter_content[:head_budget].rstrip()])
+                if len(chapter_content) > head_budget:
+                    parts.extend([
+                        "[middle omitted from tool context; use the retained head/tail plus headings for review]",
+                        "chapter tail evidence:",
+                        chapter_content[-tail_budget:].lstrip(),
+                    ])
+                return "\n".join(parts)[:evidence_budget]
+
         return _compact_jsonish_result(
             content,
             keep_keys=(

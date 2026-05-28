@@ -190,6 +190,50 @@ def test_duplicate_segment_read_is_blocked_after_full_chapter_read(monkeypatch):
 
     assert result["status"] == "blocked"
     assert "already been fully read" in result["result"]
+    assert result["count_budget"] is False
+
+
+def test_duplicate_segment_read_does_not_consume_tool_budget(monkeypatch):
+    from agent.tools.metrics import ToolBudget
+
+    class Route:
+        mode = "repair"
+        task_type = "textbook"
+
+    captured = []
+    monkeypatch.setattr("agent.tools.metrics.record_tool_metric", lambda payload: captured.append(payload))
+
+    executor = _executor(Route())
+    executor.tool_failure_history = []
+    executor.tool_metric_events = []
+    executor.tool_budget = ToolBudget(mode="repair", task_type="textbook", max_calls=12, total_calls=4)
+    executor.on_event = lambda event: None
+    executor.tools = {}
+    executor._record_short_term_tool_start = lambda *args, **kwargs: None
+    executor._record_short_term_tool_end = lambda *args, **kwargs: None
+
+    executor._record_successful_tool_read(
+        "textbook_chapter",
+        {"action": "read", "book_id": "tb_demo", "chapter_num": 15},
+        {
+            "book_id": "tb_demo",
+            "chapter_num": 15,
+            "path": "chapters/chapter_015.md",
+            "chars": 1200,
+            "content": "# Chapter 15\n\ncontent",
+        },
+    )
+
+    result = executor._execute_tool({
+        "id": "t3",
+        "name": "read",
+        "arguments": {"path": "C:\\workspace\\textbooks\\tb_demo\\chapters\\chapter_015.md"},
+    })
+
+    assert result["status"] == "blocked"
+    assert executor.tool_budget.total_calls == 4
+    assert captured[-1]["budget_total_calls"] == 4
+    assert captured[-1]["over_budget"] is False
 
 
 def test_budget_block_should_stop_next_llm_turn():
@@ -199,6 +243,39 @@ def test_budget_block_should_stop_next_llm_turn():
     assert executor._should_stop_after_tool_results([
         {"status": "blocked", "result": "Tool budget exhausted for this turn (12/12)."},
     ]) is True
+
+
+def test_review_stage_closes_tool_phase_after_chapter_and_checklist_evidence():
+    executor = _executor()
+    executor.tool_budget_exhausted = False
+    executor.tool_phase_state = {
+        "intent": "chapter_review",
+        "chapter_read": True,
+        "review_checklist_read": True,
+    }
+
+    assert executor._should_close_tool_phase_after_results([
+        {"status": "success", "result": "review checklist loaded"},
+    ]) is True
+    assert executor.tool_phase_stop_reason == "review_evidence_ready"
+
+
+def test_budget_exhaustion_feedback_is_visible_assistant_message():
+    events = []
+    executor = _executor()
+    executor.on_event = lambda event: events.append(event)
+    executor.tool_budget = type("Budget", (), {"total_calls": 8, "max_calls": 8})()
+    executor.messages = []
+
+    message = executor._tool_budget_exhausted_final_response([])
+    executor._emit_visible_assistant_message(message, stop_reason="tool_budget_exhausted")
+
+    assert [event["type"] for event in events] == ["message_start", "message_update", "message_end"]
+    assert events[1]["data"]["delta"] == message
+    assert events[2]["data"]["content"] == message
+    assert events[2]["data"]["tool_calls"] == []
+    assert events[2]["data"]["stop_reason"] == "tool_budget_exhausted"
+    assert executor._deterministic_feedback_emitted is True
 
 
 def test_emit_tool_diagnostics_reports_budget_and_labels():

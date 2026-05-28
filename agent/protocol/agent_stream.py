@@ -120,6 +120,9 @@ class AgentStreamExecutor:
         self._near_max_turn_handoff_saved = False
         self.tool_budget_exhausted = False
         self.chapter_read_cache = {}
+        self._deterministic_feedback_emitted = False
+        self.tool_phase_state = {}
+        self.tool_phase_stop_reason = ""
 
     def _emit_event(self, event_type: str, data: dict = None):
         """Emit event"""
@@ -132,6 +135,21 @@ class AgentStreamExecutor:
                 })
             except Exception as e:
                 logger.error(f"Event callback error: {e}")
+
+    def _emit_visible_assistant_message(self, content: str, stop_reason: str = "deterministic_stop") -> None:
+        """Emit a normal assistant message so SSE/frontends can show deterministic stops."""
+        content = (content or "").strip()
+        if not content:
+            return
+        self._emit_event("message_start", {"role": "assistant", "synthetic": True})
+        self._emit_event("message_update", {"delta": content})
+        self._emit_event("message_end", {
+            "content": content,
+            "tool_calls": [],
+            "stop_reason": stop_reason,
+            "synthetic": True,
+        })
+        self._deterministic_feedback_emitted = True
     
     def _is_thinking_enabled(self) -> bool:
         """Whether deep-thinking mode is on at the model layer.
@@ -735,6 +753,8 @@ class AgentStreamExecutor:
                                         "text": "工具已成功执行并返回结果。请基于这些信息向用户做出回复，不要重复调用相同的工具。"
                                     }]
                                 })
+                        if self._should_close_tool_phase_after_results(tool_results):
+                            self._close_tool_phase_for_answer()
                     elif tool_calls:
                         # If we have tool_calls but no tool_result_blocks (unexpected error),
                         # create error results for all tool calls to maintain message integrity
@@ -760,6 +780,10 @@ class AgentStreamExecutor:
                 self._maybe_persist_near_max_turn_handoff(turn, final_response, tool_calls)
                 if self._should_stop_after_tool_results(tool_results):
                     final_response = self._tool_budget_exhausted_final_response(tool_results)
+                    self._emit_visible_assistant_message(
+                        final_response,
+                        stop_reason="tool_budget_exhausted",
+                    )
                     self._emit_event("tool_budget_exhausted", {
                         "turn": turn,
                         "max_calls": getattr(getattr(self, "tool_budget", None), "max_calls", 0),
@@ -1142,6 +1166,8 @@ class AgentStreamExecutor:
             route = route_tools(user_message, self.tools, enabled=True)
             self.tool_route = route
             self._tool_route_user_message = user_message
+            self.tool_phase_state = self._initial_tool_phase_state(user_message, route)
+            self.tool_phase_stop_reason = ""
             self.tools = filter_tool_mapping(self.tools, route.allowed_tools)
             logger.info(
                 f"[ToolRouter] task_type={route.task_type}, "
@@ -1149,6 +1175,29 @@ class AgentStreamExecutor:
             )
         except Exception as exc:
             logger.debug(f"[ToolRouter] routing skipped: {exc}")
+
+    @staticmethod
+    def _initial_tool_phase_state(user_message: str, route) -> dict:
+        text = (user_message or "").lower()
+        reason = str(getattr(route, "reason", "") or "").lower()
+        required = set(getattr(route, "required_tools", []) or [])
+        is_chapter_review = (
+            getattr(route, "task_type", "") == "textbook"
+            and (
+                {"textbook_chapter", "textbook_outline"} <= required
+                or "chapter review" in reason
+                or (any(word in text for word in ("审查", "检查", "评估", "review", "check"))
+                    and any(word in text for word in ("第", "章", "chapter")))
+            )
+        )
+        if is_chapter_review:
+            return {
+                "intent": "chapter_review",
+                "chapter_read": False,
+                "outline_read": False,
+                "review_checklist_read": False,
+            }
+        return {}
 
     def _inject_tool_routing_board(self) -> None:
         route = self.tool_route
@@ -1798,6 +1847,7 @@ class AgentStreamExecutor:
             self._record_tool_result(tool_name, arguments, success)
             if success:
                 self._record_successful_tool_read(tool_name, arguments, result.result)
+                self._record_tool_phase_observation(tool_name, arguments, result.result)
             if not success:
                 self._record_tool_failure_detail(tool_name, arguments, result.result)
                 self._capture_tool_error_memory(
@@ -1877,7 +1927,14 @@ class AgentStreamExecutor:
                     getattr(route, "mode", ""),
                     getattr(route, "task_type", ""),
                 )
-            budget_payload = self.tool_budget.record(tool_name, usefulness_label)
+            if (result or {}).get("count_budget") is False:
+                budget_payload = {
+                    "budget_max_calls": getattr(self.tool_budget, "max_calls", 0),
+                    "budget_total_calls": getattr(self.tool_budget, "total_calls", 0),
+                    "over_budget": False,
+                }
+            else:
+                budget_payload = self.tool_budget.record(tool_name, usefulness_label)
             payload = {
                 "tool_name": tool_name,
                 "task_type": getattr(route, "task_type", ""),
@@ -1943,6 +2000,28 @@ class AgentStreamExecutor:
         for key in keys:
             cache[key] = record
 
+    def _record_tool_phase_observation(self, tool_name: str, arguments: dict, result: Any) -> None:
+        state = getattr(self, "tool_phase_state", None)
+        if not isinstance(state, dict) or state.get("intent") != "chapter_review":
+            return
+        arguments = arguments or {}
+        if tool_name == "textbook_chapter" and str(arguments.get("action") or "") == "read":
+            state["chapter_read"] = True
+            return
+        if tool_name in {"read", "file_read"}:
+            path = str(arguments.get("path") or arguments.get("file_path") or "").replace("\\", "/").lower()
+            if "review_checklist_chapter" in path or "review_checklist" in path:
+                state["review_checklist_read"] = True
+                return
+            if "/chapters/" in path and "chapter_" in path:
+                state["chapter_read"] = True
+                return
+            if "/outline/" in path or path.endswith("outline.md"):
+                state["outline_read"] = True
+                return
+        if tool_name == "textbook_outline":
+            state["outline_read"] = True
+
     def _preflight_duplicate_chapter_read_check(self, tool_name: str, arguments: dict) -> Dict[str, Any] | None:
         arguments = arguments or {}
         if not self._is_protected_textbook_route():
@@ -1971,6 +2050,7 @@ class AgentStreamExecutor:
                 "If the file changed or the user explicitly asked to reread it, call with force=true."
             ),
             "execution_time": 0,
+            "count_budget": False,
         }
 
     def _find_chapter_read_record(self, book_id: str = "", chapter: str = "", path: str = "") -> dict:
@@ -2057,6 +2137,37 @@ class AgentStreamExecutor:
                 self.tool_budget_exhausted = True
                 return True
         return False
+
+    def _should_close_tool_phase_after_results(self, tool_results: list) -> bool:
+        state = getattr(self, "tool_phase_state", None) or {}
+        if state.get("closed"):
+            return False
+        if state.get("intent") == "chapter_review":
+            if state.get("chapter_read") and (state.get("review_checklist_read") or state.get("outline_read")):
+                self.tool_phase_stop_reason = "review_evidence_ready"
+                state["closed"] = True
+                return True
+        return False
+
+    def _close_tool_phase_for_answer(self) -> None:
+        reason = getattr(self, "tool_phase_stop_reason", "") or "evidence_ready"
+        self.tools = {}
+        self.messages.append({
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": (
+                    "Evidence is ready for the current task. Stop calling tools now. "
+                    "Use only the chapter/outline/checklist evidence already present in this turn, "
+                    "and provide the requested review or answer directly to the user. "
+                    "Do not search memory, do not query knowledge, and do not reread the same chapter."
+                ),
+            }],
+        })
+        self._emit_event("tool_phase_closed", {
+            "reason": reason,
+            "intent": (getattr(self, "tool_phase_state", None) or {}).get("intent", ""),
+        })
 
     def _tool_budget_exhausted_final_response(self, tool_results: list) -> str:
         budget = getattr(self, "tool_budget", None)

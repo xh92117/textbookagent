@@ -53,6 +53,33 @@ def test_compact_current_textbook_chapter_result_keeps_metadata():
     assert "正文" not in compacted
 
 
+def test_textbook_chapter_read_result_keeps_review_evidence():
+    import json
+
+    body = "# Chapter 15\n\n" + "\n".join(f"important evidence line {idx}" for idx in range(500))
+    content = json.dumps({
+        "book_id": "tb_demo",
+        "chapter_num": 15,
+        "path": "chapters/chapter_015.md",
+        "chars": len(body),
+        "content": body,
+    }, ensure_ascii=False)
+
+    compacted = compact_current_tool_result_content(
+        content,
+        tool_name="textbook_chapter",
+        tool_args={"action": "read", "book_id": "tb_demo", "chapter_num": 15},
+        status="success",
+        max_chars=2500,
+        tool_budget_chars={"textbook_chapter": 2500},
+    )
+
+    assert "current textbook_chapter read evidence" in compacted
+    assert "important evidence line 0" in compacted
+    assert len(compacted) > 2500
+    assert len(compacted) <= 16000
+
+
 def test_tool_result_compaction_uses_type_specific_budgets():
     long_output = "\n".join(f"row {idx}: value" for idx in range(1000))
 
