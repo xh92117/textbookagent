@@ -40,6 +40,28 @@ def test_preflight_blocks_bash_chapter_writes_when_textbook_route_is_strict():
     assert "textbook_chapter" in result["result"]
 
 
+def test_preflight_blocks_bash_chapter_writes_when_textbook_route_is_repair():
+    class Route:
+        mode = "repair"
+        task_type = "textbook"
+
+    executor = _executor(Route())
+
+    result = executor._preflight_tool_policy_check(
+        "bash",
+        {
+            "command": (
+                "powershell -Command \"Get-Content tmp.md | "
+                "Add-Content -Path textbooks/tb_demo/chapters/chapter_001.md\""
+            )
+        },
+    )
+
+    assert result["status"] == "blocked"
+    assert "repair mode" in result["result"]
+    assert "edit/write" in result["result"]
+
+
 def test_record_tool_metric_event_includes_route_and_repeat_count(monkeypatch):
     captured = []
 
@@ -108,3 +130,43 @@ def test_emit_tool_diagnostics_reports_budget_and_labels():
     assert data["total_calls"] == 2
     assert data["label_counts"]["blocked"] == 1
     assert data["over_budget_calls"] == 1
+
+
+def test_strict_textbook_route_reports_hidden_tool_as_stop_condition():
+    class Route:
+        mode = "strict"
+        task_type = "textbook"
+        required_tools = ["textbook_chapter"]
+
+    class Agent:
+        skill_manager = None
+
+    executor = _executor(Route())
+    executor.tools = {"read": object(), "textbook_chapter": object(), "memory_search": object()}
+    executor.agent = Agent()
+
+    message = executor._build_tool_not_found_message("write")
+
+    assert "not visible in the current strict textbook route" in message
+    assert "textbook_chapter" in message
+    assert "stop and explain the limitation" in message
+
+
+def test_repair_textbook_route_reports_hidden_tool_as_stop_condition():
+    class Route:
+        mode = "repair"
+        task_type = "textbook"
+        required_tools = ["textbook_chapter"]
+
+    class Agent:
+        skill_manager = None
+
+    executor = _executor(Route())
+    executor.tools = {"read": object(), "textbook_chapter": object(), "edit": object(), "write": object()}
+    executor.agent = Agent()
+
+    message = executor._build_tool_not_found_message("bash")
+
+    assert "current textbook repair route" in message
+    assert "textbook_chapter" in message
+    assert "never use bash" in message

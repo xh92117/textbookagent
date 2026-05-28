@@ -8,20 +8,28 @@ triggers:
   - 教材结构
   - 调整大纲
 allowed-tools:
+  - textbook_outline
   - read
-  - write
-  - bash
-  - web_fetch
+  - knowledge_query
+  - memory_search
+  - memory_get
 ---
 
 # Textbook Outline Generation
+
+## Current Tool Contract
+
+- Use `textbook_outline` for outline and terminology read/write operations.
+- Use `knowledge_query`, `memory_search`, and `memory_get` for existing evidence and continuity when needed.
+- Do not use `write`, `edit`, or `bash` for outline or terminology files in this skill.
+- If external search tools are not selected and visible in the current turn, do not try hidden web tools.
 
 Generate structured textbook outlines using OKR recursive decomposition, from book-level objectives down to section-level key points, with Bloom's cognitive level annotations.
 
 ## 核心指令
 
 1. **需求分析**: 从用户输入中提取教材主题、目标读者、难度等级、课标依据、总章数等关键信息，并生成或更新教材级 WritingSpec。信息不足时主动追问。
-2. **课标搜索**: 使用 `multi-search-engine` skill，通过 `web_fetch` 搜索相关课程标准或教学大纲，确保大纲符合课标要求。
+2. **课标搜索**: 优先使用本地知识；仅当 `multi-search-engine` skill 被本轮选中且搜索工具可见时，才检索相关课程标准或教学大纲。
 3. **OKR递归分解**:
    - 教材级目标(O) → 关键结果(KR)
    - 篇级目标(O) → 关键结果(KR)
@@ -41,11 +49,11 @@ Generate structured textbook outlines using OKR recursive decomposition, from bo
 - **用户输入**: "帮我编制一本《数据结构与算法》教材大纲，面向计算机专业大二学生，共12章"
 - **模型思考**: 需要提取学科=数据结构与算法、受众=计算机大二、章数=12。搜索ACM/IEEE课标。
 - **模型行动**:
-  1. `web_fetch({"url":"https://www.bing.com/search?q=数据结构%20课程标准%20ACM%20IEEE"})` 搜索课标
+  1. 使用本地知识或本轮已选中的搜索 skill 整理课标证据包
   2. 读取 `<base_dir>/templates/outline_template.md` 和 `<base_dir>/templates/okr_decomposition.md` 作为参考
   3. 按OKR递归分解生成大纲
-  4. `write("outline.md", outline_content)` 保存大纲
-  5. `write("terminology.md", terms)` 保存术语表
+  4. `textbook_outline({"action":"write_outline","content":outline_content})` 保存大纲
+  5. `textbook_outline({"action":"write_terminology","content":terms})` 保存术语表
 
 ### 示例2：调整现有大纲
 - **用户输入**: "大纲第5章和第6章内容太少了，合并一下，然后在后面加一章图论"
@@ -55,7 +63,7 @@ Generate structured textbook outlines using OKR recursive decomposition, from bo
   2. 合并第5、6章，重新编号后续章节
   3. 新增图论章节
   4. 更新前置依赖关系
-  5. `write("outline.md", updated_outline)` 保存更新
+  5. `textbook_outline({"action":"write_outline","content":updated_outline})` 保存更新
 
 ## Tool Usage Specification
 
@@ -63,13 +71,8 @@ Generate structured textbook outlines using OKR recursive decomposition, from bo
   - Syntax: `read("<file_path>")`
   - Outline template: `read("<base_dir>/templates/outline_template.md")`
   - OKR template: `read("<base_dir>/templates/okr_decomposition.md")`
-- `write`: Write outline and terminology files
-  - Syntax: `write("<file_path>", "<content>")`
-- `web_fetch`: Search curriculum standards and reference materials through the `multi-search-engine` skill. Do not use Bocha `web_search`.
-  - Syntax: `web_fetch({"url":"https://www.bing.com/search?q=<url-encoded-query>"})`
-- `bash`: Execute outline generation script (optional)
-  - Syntax: `python <base_dir>/scripts/generate_outline.py '<json_args>'`
-  - Parameters: `{"title":"...", "subject":"...", "target_audience":"...", "level":"...", "total_chapters":10}`
+- `textbook_outline`: Read and write outline and terminology files through canonical truth files.
+- External search: use the `multi-search-engine` skill only when it is selected and its tools are visible in the current turn. Do not call hidden search/fetch tools from this outline skill.
 
 ## Output Specification
 
@@ -91,7 +94,7 @@ Report the following upon completion:
 
 ## Required Search Pass
 
-Before finalizing an outline, use the `multi-search-engine` skill with `web_fetch` to gather curriculum standards, comparable course syllabi, textbook tables of contents, and authoritative reference structures. Keep the evidence compact:
+Before finalizing an outline, use local knowledge first. Use the `multi-search-engine` skill for curriculum standards, comparable course syllabi, textbook tables of contents, and authoritative reference structures only when that skill is selected and its tools are visible. Keep the evidence compact:
 
 - Source title and URL
 - Useful structural insight

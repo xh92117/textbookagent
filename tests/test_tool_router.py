@@ -48,6 +48,31 @@ def test_tool_router_marks_textbook_writing_as_strict_with_required_tool():
     assert "Strict required tools" in route.prompt
 
 
+def test_tool_router_allows_edit_write_for_precise_textbook_repair():
+    tools = {
+        "textbook_chapter": object(),
+        "knowledge_query": object(),
+        "read": object(),
+        "write": object(),
+        "edit": object(),
+        "bash": object(),
+        "memory_search": object(),
+        "memory_get": object(),
+    }
+
+    route = route_tools("修复第1章重复标题，不要重写整本教材", tools)
+
+    assert route.task_type == "textbook"
+    assert route.mode == "repair"
+    assert route.required_tools == ["textbook_chapter"]
+    assert "textbook_chapter" in route.allowed_tools
+    assert "edit" in route.allowed_tools
+    assert "write" in route.allowed_tools
+    assert "bash" in route.blocked_tools
+    assert "Repair mode" in route.prompt
+    assert "canonical textbook tool first" in route.prompt
+
+
 def test_tool_router_routes_textbook_project_creation_to_create_textbook():
     tools = {
         "create_textbook": object(),

@@ -12,12 +12,19 @@ triggers:
 allowed-tools:
   - start_pipeline
   - read
-  - write
-  - web_fetch
-  - knowledge_capture
+  - memory_search
+  - memory_get
 ---
 
 # Full Textbook Generation
+
+## Current Tool Contract
+
+- Use this existing skill only for explicit full-book / one-click / automatic compilation requests.
+- Before calling `start_pipeline`, explain that automatic compilation quality is not fully controllable and can be affected by context, then wait for explicit user confirmation.
+- Use `start_pipeline` only after confirmation.
+- Do not use `bash`, `write`, or manual scripts to start or simulate the pipeline.
+- If the user asks for a single chapter, a local chapter repair, outline review, or status query, do not use this skill.
 
 One-click end-to-end textbook creation through a 7-phase pipeline: outline → outline review → context assembly → chapter writing → chapter review → revision & polish → Word document generation. Supports pause/resume/cancel.
 
@@ -95,8 +102,8 @@ The pipeline must produce rich textbook chapters, not only dry generated prose.
 
 Before starting or while composing chapters:
 
-1. Use `multi-search-engine` with `web_fetch` for curriculum/reference search. Do not use Bocha `web_search`.
-   - Save credible reusable original source pages with `knowledge_capture`; do not save search-result pages.
+1. Use local knowledge first. Use `multi-search-engine` for curriculum/reference search only when that skill is selected and its tools are visible. Do not call hidden web/capture tools from this fullbook skill.
+   - Do not save search-result pages or low-signal pages.
 2. Use the LLM-WIKI knowledge routing structure (`knowledge/_llm_wiki/index.json`) to select relevant chunks by `summary`, `use_when`, and `keywords`.
 3. Ensure each chapter context package includes:
    - local outline and previous chapter summary

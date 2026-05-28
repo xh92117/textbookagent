@@ -1778,14 +1778,14 @@ class AgentStreamExecutor:
                 "execution_time": 0,
             }
 
-        if tool_name == "bash" and self._is_strict_textbook_route():
+        if tool_name == "bash" and self._is_protected_textbook_route():
             command = str(arguments.get("command") or "")
             if self._looks_like_chapter_write_command(command):
                 return {
                     "status": "blocked",
                     "result": (
-                        "Tool policy blocked bash from writing textbook chapter content in strict textbook mode. "
-                        "Use textbook_chapter for chapter append/replace/mark_completed operations."
+                        "Tool policy blocked bash from writing textbook chapter content in protected textbook mode. "
+                        "Use textbook_chapter for normal chapter operations; in repair mode use edit/write only for precise local repairs."
                     ),
                     "execution_time": 0,
                 }
@@ -1812,6 +1812,13 @@ class AgentStreamExecutor:
         except Exception:
             return False
         return False
+
+    def _is_protected_textbook_route(self) -> bool:
+        route = getattr(self, "tool_route", None)
+        return (
+            getattr(route, "mode", "") in {"strict", "repair"}
+            and getattr(route, "task_type", "") == "textbook"
+        )
 
     def _is_strict_textbook_route(self) -> bool:
         route = getattr(self, "tool_route", None)
@@ -1899,6 +1906,33 @@ class AgentStreamExecutor:
         """
         available_tools = list(self.tools.keys())
         base_msg = f"Tool '{tool_name}' not found. Available tools: {available_tools}"
+        route = getattr(self, "tool_route", None)
+        if (
+            getattr(route, "mode", "") == "strict"
+            and getattr(route, "task_type", "") == "textbook"
+            and tool_name not in available_tools
+        ):
+            required = ", ".join(getattr(route, "required_tools", []) or ["textbook_chapter"])
+            return (
+                f"Tool '{tool_name}' is not visible in the current strict textbook route. "
+                f"Available tools: {available_tools}. Required textbook tool(s): {required}. "
+                "Do not retry hidden tools such as write, edit, bash, or shell. "
+                "Return to the selected SKILL.md workflow and use the visible canonical textbook tool. "
+                "If the visible tool cannot complete the precise operation, stop and explain the limitation to the user."
+            )
+        if (
+            getattr(route, "mode", "") == "repair"
+            and getattr(route, "task_type", "") == "textbook"
+            and tool_name not in available_tools
+        ):
+            required = ", ".join(getattr(route, "required_tools", []) or ["textbook_chapter"])
+            return (
+                f"Tool '{tool_name}' is not visible in the current textbook repair route. "
+                f"Available tools: {available_tools}. Start with canonical tool(s): {required}. "
+                "Use edit/write only if they are visible and the repair is a precise local file change. "
+                "Do not retry hidden tools, and never use bash or shell redirection to write Chinese textbook body text. "
+                "If the visible tools cannot complete the operation, stop and explain the limitation to the user."
+            )
 
         skill_manager = getattr(self.agent, 'skill_manager', None)
         if not skill_manager:

@@ -5,6 +5,7 @@ from typing import Dict, Iterable, List, Mapping, Sequence, Set
 
 
 ALWAYS_TOOLS = {"memory_search", "memory_get"}
+TEXTBOOK_REPAIR_TOOLS = {"edit", "write"}
 
 TASK_TOOL_PROFILES: Dict[str, Set[str]] = {
     "textbook": {
@@ -41,7 +42,10 @@ ROUTING_HINTS = {
         "Use create_textbook when the user wants to create/register a textbook project without starting the full pipeline.",
         "Use start_pipeline when the user wants automatic full-book generation.",
         "Use textbook_outline for outline/catalog/terminology Markdown; do not use textbook_chapter for whole-book outlines.",
-        "Use textbook_chapter for chapter Markdown; do not use bash/write/edit for textbook body text.",
+        "Use textbook_chapter for chapter Markdown in normal writing/rewrite/append flows.",
+        "For local textbook repair, use textbook_chapter first; use edit/write only when the canonical tool cannot target the change or the user explicitly asks for direct file editing.",
+        "Never use bash or shell redirection to write Chinese textbook body text.",
+        "If a hidden tool is unavailable, do not retry it; stop and explain the limitation or ask for a more precise target.",
         "Use knowledge_query before drafting when evidence or textbook continuity matters.",
         "Use textbook_image only for real diagrams/charts/assets, not prompt text inside images.",
     ],
@@ -74,6 +78,8 @@ ROUTING_HINTS = {
 
 KEYWORDS = {
     "textbook": (
+        "教材", "章节", "章", "大纲", "目录", "术语", "一键编写", "启动编制", "启动管线", "自动编制",
+        "编写", "续写", "重写", "改写", "修复第", "重复标题", "标题重复", "正文", "教材项目",
         "教材", "章节", "章", "大纲", "一键编写", "导出", "课程", "续写", "编写", "标记完成",
         "WritingSpec", "harness",
         "鏁欐潗", "绔犺妭", "澶х翰", "涓€閿紪鍐?", "瀵煎嚭", "璇剧▼", "鍥捐〃", "鎻掑浘",
@@ -99,6 +105,7 @@ KEYWORDS = {
         "鍥剧墖", "鎴浘", "璇嗗埆", "鐓х墖",
     ),
     "file_edit": (
+        "修改文件", "更新文件", "修复", "实现", "代码", "测试", "直接改", "直接修改", "手动修复",
         "修改文件", "更新文件", "README", "readme", "修复", "实现", "代码", "测试",
         "淇敼鏂囦欢", "鏇存柊鏂囦欢", "淇", "瀹炵幇", "浠ｇ爜", "娴嬭瘯",
     ),
@@ -158,6 +165,9 @@ def route_tools(
     profile = set(TASK_TOOL_PROFILES.get(task_type, TASK_TOOL_PROFILES["general"]))
     if mode == "free":
         allowed_set = set(names)
+    elif mode == "repair":
+        repair_support = {"knowledge_query", "memory_search", "memory_get", "read", "ls"}
+        allowed_set = (set(required_tools) | repair_support | TEXTBOOK_REPAIR_TOOLS) & names
     else:
         allowed_set = (profile | ALWAYS_TOOLS | set(required_tools)) & names
     if mode == "strict" and required_tools:
@@ -167,7 +177,7 @@ def route_tools(
         allowed_set = names
     omitted = sorted(names - allowed_set)
     allowed = sorted(allowed_set)
-    blocked = omitted if mode == "strict" else []
+    blocked = omitted if mode in {"strict", "repair"} else []
     hints = ROUTING_HINTS.get(task_type, ROUTING_HINTS["general"])
     prompt = _format_prompt(
         task_type,
@@ -233,7 +243,19 @@ def _route_mode(task_type: str, user_message: str, names: Set[str]) -> tuple[str
         if any(marker in text for marker in outline_markers) and not any(marker in text for marker in chapter_write_markers):
             return "strict", ["textbook_outline"], "textbook outline artifacts have a dedicated canonical tool"
     if task_type == "textbook" and "textbook_chapter" in names:
+        repair_markers = (
+            "修复", "修改", "改一下", "删除", "去掉", "重复标题", "标题重复", "重复段落", "局部",
+            "手动修复", "直接修文件", "直接改文件", "直接修改文件", "文件编辑", "按行",
+            "repair", "fix", "delete duplicate", "duplicate heading", "direct edit",
+        )
+        full_rewrite_markers = (
+            "自动编制", "启动编制", "启动管线",
+            "rewrite full", "regenerate full", "start pipeline",
+        )
+        if any(marker in text for marker in repair_markers) and not any(marker in text for marker in full_rewrite_markers):
+            return "repair", ["textbook_chapter"], "local textbook repair may use edit/write only after the canonical chapter tool is insufficient"
         chapter_markers = (
+            "章节", "第", "续写", "编写", "正文", "标记完成", "写第", "写一章",
             "章节", "第", "续写", "编写", "正文", "标记完成",
             "教材", "章节", "章", "续写", "编写", "正文", "标记完成",
             "chapter", "write", "continue", "complete",
@@ -270,6 +292,7 @@ def _format_prompt(
     lines.extend(f"- {hint}" for hint in hints)
     lines.extend([
         "- Strict mode: use the required tool for the exact task; use support tools only for context or verification.",
+        "- Repair mode: use the canonical textbook tool first; use edit/write only for precise local repairs when visible; never use bash to write textbook body text.",
         "- Guided mode: prefer the visible tools, but choose the narrowest tool that directly matches the next action.",
         "- Free mode: answer without tools when sufficient; call tools only when external state, files, or verification matter.",
         "- Do not call the same tool with the same arguments after a success; proceed or answer.",

@@ -32,6 +32,32 @@ def test_skill_router_selects_chapter_skill_for_chapter_work():
     assert "Skill routing policy" in route.prompt
 
 
+def test_skill_router_selects_existing_chapter_skill_for_chinese_fix_request():
+    entries = [
+        _entry("textbook-chapter", "Write, continue, rewrite, or repair textbook chapters"),
+        _entry("textbook-outline", "Create or adjust textbook outlines"),
+        _entry("textbook-fullbook", "Run the full textbook pipeline"),
+    ]
+
+    route = route_skills("修复第1章重复标题，不要重写整本教材", entries)
+
+    assert route.task_type == "chapter"
+    assert route.selected_skills == ["textbook-chapter"]
+    assert "read the selected SKILL.md" in route.prompt
+
+
+def test_skill_router_selects_existing_fullbook_skill_for_pipeline_request():
+    entries = [
+        _entry("textbook-chapter", "Write a single chapter"),
+        _entry("textbook-fullbook", "Run the full textbook pipeline"),
+    ]
+
+    route = route_skills("启动教材自动编制管线", entries)
+
+    assert route.task_type == "fullbook"
+    assert route.selected_skills == ["textbook-fullbook"]
+
+
 def test_skill_router_selects_at_most_two_specific_skills():
     entries = [
         _entry("textbook-imagegen", "Generate textbook figures and diagrams"),

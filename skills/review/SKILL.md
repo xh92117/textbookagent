@@ -8,11 +8,23 @@ triggers:
   - 检查质量
   - 教材审查
 allowed-tools:
+  - textbook_chapter
+  - textbook_outline
   - read
-  - write
+  - knowledge_query
+  - memory_search
+  - memory_get
 ---
 
 # Textbook Quality Review
+
+## Current Tool Contract
+
+- Use `textbook_outline` to read outline and terminology artifacts.
+- Use `textbook_chapter` to read or validate chapter artifacts.
+- Use `read` only for review checklist templates or adjacent context.
+- Do not modify reviewed content in this skill. Do not use `write`, `edit`, or `bash`.
+- If the user asks to apply review suggestions, switch to the chapter or outline skill after reporting the review result.
 
 Perform multi-dimensional quality review on textbook outlines or chapter content, generating structured review reports with issues classified as critical/warning/info.
 
@@ -54,8 +66,7 @@ Perform multi-dimensional quality review on textbook outlines or chapter content
   - Syntax: `read("<file_path>")`
   - Outline checklist: `read("<base_dir>/templates/review_checklist_outline.md")`
   - Chapter checklist: `read("<base_dir>/templates/review_checklist_chapter.md")`
-- `write`: Save review report
-  - Syntax: `write("<file_path>", "<json_content>")`
+- Review reports should be returned to the user unless a visible canonical review/status tool is provided by the current route.
 
 ## Output Specification
 

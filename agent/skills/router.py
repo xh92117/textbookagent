@@ -19,18 +19,22 @@ class SkillRoute:
 SKILL_KEYWORDS = {
     "textbook-chapter": (
         "chapter", "section", "draft", "write", "rewrite", "continue",
+        "第", "章", "章节", "编写", "续写", "继续写", "写第", "重写", "改写", "修复", "正文", "小节", "重复标题", "标题重复",
         "章节", "编写", "续写", "接着写", "继续写", "改写", "正文", "小节", "后半部分",
     ),
     "textbook-fullbook": (
         "full book", "one click", "all chapters", "batch write",
+        "整本", "全书", "全教材", "全部章节", "所有章节", "一键", "一键编写", "启动编制", "启动管线", "自动编制", "自动生成整本", "批量编写",
         "一键", "全书", "整本", "全部章节", "所有章", "全套", "自动编写", "自动成稿", "批量编写",
     ),
     "textbook-outline": (
         "outline", "toc", "structure", "catalog",
+        "大纲", "目录", "结构", "章目", "术语表", "优化大纲", "审查大纲",
         "大纲", "目录", "结构", "章目录", "优化大纲", "审查大纲",
     ),
     "textbook-review": (
         "review", "audit", "check", "quality", "evaluate",
+        "审查", "评审", "检查", "质量", "审核", "评价", "修改建议",
         "审查", "评审", "检查", "质量", "审阅", "评价", "修改建议",
     ),
     "textbook-imagegen": (
@@ -165,6 +169,11 @@ def _score_entries(user_message: str, entries: Sequence[SkillEntry]) -> dict[str
         for word in NEGATIVE_KEYWORDS.get(name, ()):
             if word.lower() in text:
                 score -= 4.0
+        if name == "textbook-fullbook" and any(
+            word in text
+            for word in ("不要整本", "不是整本", "别整本", "无需整本", "不要全书", "不是全书", "不要重写整本", "单章", "只修复", "只修改")
+        ):
+            score -= 4.0
         for token in _tokens(text):
             if len(token) >= 3 and token in haystack:
                 score += 0.25
@@ -228,6 +237,7 @@ def _format_prompt(
     lines.append("Routing rules:")
     lines.extend(f"- {hint}" for hint in hints)
     lines.extend([
+        "- Before calling task tools, read the selected SKILL.md and follow its allowed-tool and stop rules.",
         "- At most one selected SKILL.md should be read unless the user asks for a multi-skill workflow.",
         "- Do not read unselected SKILL.md files in this turn.",
         "- Tool routing and textbook status rules take priority over skill suggestions.",

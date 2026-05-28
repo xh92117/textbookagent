@@ -8,16 +8,30 @@ triggers:
   - 重写章节
   - 编写章节
 allowed-tools:
-  - read
+  - textbook_chapter
+  - edit
   - write
-  - bash
-  - web_fetch
-  - knowledge_capture
+  - read
+  - knowledge_query
+  - memory_search
+  - memory_get
 ---
 
 # Chapter Writing
 
 Write textbook chapter content based on the outline, context, and project-level WritingSpec. The WritingSpec defines audience, learning orientation, content ratio, chapter structure, visual policy, language policy, and word-count policy. Follows anti-AI-tone rules strictly.
+
+## Current Tool Contract
+
+Use this existing skill through the current canonical tools only.
+
+- Use `textbook_chapter` for normal chapter read/write/rewrite/append/replace/validate/mark-complete operations.
+- Use `read` only for adjacent context that `textbook_chapter` cannot expose directly.
+- Use `knowledge_query`, `memory_search`, and `memory_get` only when evidence, continuity, or recent activity is needed.
+- Repair mode may use `edit` or `write` only when the canonical chapter tool cannot target a precise local change, or when the user explicitly asks for direct file editing.
+- Do not use `bash` or shell redirection for textbook body files in this skill. If hidden tools are unavailable, do not retry them.
+- If `textbook_chapter` cannot perform a precise edit because headings are duplicated or the target is ambiguous, try one bounded repair-mode edit/write action only if the exact target is clear; otherwise stop, explain the limitation, and ask for a more precise target.
+- Required sequence for edits: read target -> perform one targeted `textbook_chapter` action or one bounded repair-mode `edit`/`write` action -> validate/read back -> answer. Do not do open-ended read-offset probing.
 
 ## 核心指令
 
@@ -44,7 +58,7 @@ Write textbook chapter content based on the outline, context, and project-level 
   3. `read("<base_dir>/templates/chapter_template.md")` 读取章节模板
   4. `read("<base_dir>/templates/anti_ai_rules.md")` 读取去AI味规则
   5. 按模板结构编写章节
-  6. `write("chapters/chapter_003.md", content)` 保存
+  6. `textbook_chapter({"action":"write_chapter","chapter_num":3,"content":content})` 保存
 
 ### 示例2：重写章节
 - **用户输入**: "第5章写得太浅了，重写一下，加深难度"
@@ -52,18 +66,17 @@ Write textbook chapter content based on the outline, context, and project-level 
 - **模型行动**:
   1. `read("chapters/chapter_005.md")` 读取现有内容
   2. 调整认知层次分布，增加分析和评价层次内容
-  3. `write("chapters/chapter_005.md", new_content)` 覆盖保存
+  3. `textbook_chapter({"action":"rewrite_chapter","chapter_num":5,"content":new_content})` 覆盖保存
 
 ## Tool Usage Specification
 
 - `read`: Read outline, previous chapters, terminology, and templates
   - Chapter template: `read("<base_dir>/templates/chapter_template.md")`
   - Anti-AI rules: `read("<base_dir>/templates/anti_ai_rules.md")`
-- `write`: Write chapter file
-  - Syntax: `write("<file_path>", "<content>")`
-- `bash`: Execute sandbox for chart generation (used with sandbox skill)
-- `web_fetch`: Fetch search result pages and source pages through the multi-search-engine skill
-- `knowledge_capture`: Save useful, reusable web source pages into the knowledge source directory
+- `textbook_chapter`: Write, rewrite, append, replace, validate, and mark chapter files through canonical truth files.
+- `edit` / `write`: Repair-mode fallback for precise local chapter file changes after canonical targeting is insufficient; prefer `edit` for existing files and `write` only for exact replacement/new-file operations.
+- `knowledge_query`: Retrieve relevant local knowledge when available.
+- `memory_search` / `memory_get`: Retrieve recent activity, preferences, or chapter continuity facts when needed.
 
 ## Output Specification
 
@@ -93,10 +106,10 @@ Hard stop rules:
 - If the context already contains 3+ relevant knowledge chunks, 2+ credible web sources, or a previous Web Evidence Pack, stop searching and write the chapter.
 - If any search engine returns HTTP 429/block/challenge, mark that engine unavailable and do not retry it in this chapter request.
 - Do not reread this skill, the multi-search skill, or chapter templates after they have already been read in the current request; continue from the compact state board.
-- After reading enough source material, the next action must be `write` for the chapter draft, not another search/list/read cycle.
+- After reading enough source material, the next chapter-writing action must be `textbook_chapter`, not another search/list/read cycle. Use repair-mode `edit`/`write` only for precise local fixes.
 
-1. Use the `multi-search-engine` skill with `web_fetch` to build a small Web Evidence Pack for the chapter topic. Do not use Bocha `web_search`.
-   - When a fetched original source is credible and reusable for future chapters, save it with `knowledge_capture` and include why it is useful.
+1. Use `knowledge_query` for available local evidence. Use the `multi-search-engine` skill only when it is selected and its tools are visible in the current turn.
+   - Do not call hidden web or capture tools from this skill.
    - Do not save search-result pages or low-signal pages.
 2. Read the LLM-WIKI knowledge base under `knowledge/_llm_wiki/` when present:
    - `index.json` contains `chunks` with `summary`, `use_when`, `keywords`, and `content_type`.
