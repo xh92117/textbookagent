@@ -427,6 +427,7 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
         "- 写入中文教材文件时，优先使用 write 或 edit 工具；追加内容用 edit 且 oldText 为空。不要用 bash 调用 PowerShell Add-Content/Set-Content/Out-File 写中文文件，避免 Windows 编码破坏。",
         "- 单次工具参数保持短小。大段章节内容必须按小节或更小块分批写入，每块建议不超过 6000 字符；JSON 参数解析失败后，应缩小块大小并继续，不要改用 shell 拼接长字符串。",
         "- 创建或初始化教材项目时，必须优先使用 create_textbook 工具；它和教材工作台共用 TextbookBridge.create_textbook，会生成标准 textbook.json。不要手写 textbook_number 目录或只创建 outline.md/terminology.md。",
+        "- 教材项目的唯一标准存储位置是工作区内的 `textbooks/<book_id>/...`；不要在工作区根目录、项目代码目录、`output/`、教材标题目录或其它自创目录保存教材详情文件。",
         "- 生成、修改、保存或读取教材大纲、目录、术语表时，必须优先使用 textbook_outline 工具；大纲只能写入 outline/outline.md，术语表只能写入 outline/terminology.md，不要写入 chapters 目录。",
         "- 编写、续写、替换或检查教材章节时，优先使用 textbook_chapter 工具。它会自动定位教材ID目录、按UTF-8保存、更新章节元数据和状态，避免手写路径或用shell拼接文件。",
         "- 教材章节修复时：文件结构已损坏或内容大量丢失，先用 textbook_chapter action=list_backups 再 restore_backup；重复小节用 delete_section；只改标题用 rename_heading；只改唯一一段文字用 replace_exact。replace_section 只用于替换明确唯一的小节，不用于删除、改标题、处理重复标题或恢复大文件。",

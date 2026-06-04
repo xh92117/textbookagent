@@ -139,6 +139,28 @@ def test_list_textbooks_recovers_orphan_textbook_directory_without_config():
         assert bridge.get_textbook(folder_id) is not None
 
 
+def test_list_textbooks_migrates_orphan_textbook_from_workspace_root():
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = os.path.join(tmp, "workspace")
+        textbooks_dir = os.path.join(workspace, "textbooks")
+        folder_id = "tb_agent_drift"
+        outline_dir = os.path.join(workspace, folder_id, "outline")
+        os.makedirs(outline_dir)
+        with open(os.path.join(outline_dir, "outline.md"), "w", encoding="utf-8") as f:
+            f.write("# Agent Drift Book\n\n## Chapter 1\n\n")
+
+        bridge = TextbookBridge(data_dir=textbooks_dir)
+        books = bridge.list_textbooks()
+
+        canonical_dir = os.path.join(textbooks_dir, folder_id)
+        assert len(books) == 1
+        assert books[0].id == folder_id
+        assert os.path.exists(os.path.join(canonical_dir, "outline", "outline.md"))
+        assert os.path.exists(os.path.join(canonical_dir, "textbook.json"))
+        assert not os.path.exists(os.path.join(workspace, folder_id))
+        assert bridge.get_textbook(folder_id) is not None
+
+
 def test_update_textbook():
     with tempfile.TemporaryDirectory() as tmp:
         bridge = _make_bridge(tmp)

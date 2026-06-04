@@ -565,6 +565,7 @@ class TextbookBridge:
 
     def list_textbooks(self):
         textbooks = []
+        self._migrate_workspace_root_textbook_dirs()
         if not os.path.exists(self.data_dir):
             return textbooks
         for name in os.listdir(self.data_dir):
@@ -580,6 +581,56 @@ class TextbookBridge:
                     textbooks.append(config)
                     self.textbooks[config.id] = config
         return textbooks
+
+    def _migrate_workspace_root_textbook_dirs(self):
+        workspace_root = getattr(self._memory_manager, "workspace_root", "")
+        if not workspace_root:
+            return
+        data_dir = os.path.abspath(self.data_dir)
+        root = os.path.abspath(workspace_root)
+        if os.path.basename(os.path.normpath(data_dir)).lower() != "textbooks":
+            return
+        if os.path.abspath(os.path.dirname(data_dir)) != root:
+            return
+        if not os.path.isdir(root):
+            return
+        os.makedirs(data_dir, exist_ok=True)
+        reserved = {
+            "textbooks",
+            "knowledge",
+            "exports",
+            "assets",
+            "tmp",
+            "system",
+            "skills",
+            "websites",
+            "memory",
+        }
+        for name in os.listdir(root):
+            if name.lower() in reserved or name.startswith("."):
+                continue
+            source = os.path.join(root, name)
+            if not os.path.isdir(source) or not self._looks_like_textbook_dir(source):
+                continue
+            target = os.path.join(data_dir, name)
+            if os.path.exists(target):
+                logger.warning(
+                    f"[TextbookBridge] Found textbook-like directory outside canonical storage "
+                    f"but target already exists, leaving in place: {source}"
+                )
+                continue
+            try:
+                import shutil
+                shutil.move(source, target)
+                self._memory_manager._book_managers.pop(name, None)
+                logger.info(
+                    f"[TextbookBridge] Migrated textbook directory into canonical storage: "
+                    f"{source} -> {target}"
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"[TextbookBridge] Failed to migrate textbook directory {source}: {exc}"
+                )
 
     def list_textbook_cards(self):
         cards = []
